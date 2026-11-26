@@ -136,7 +136,23 @@ VERUS_MUTANTS = [
    "        match check_initials(m, &cert.states) {\n            Some(r) => Ok(CertCheck { model, cond: c, cert, next: 0 }),",
    "区切って進める証明書の検査で初期状態の欠けを見逃す"],
   ["gate.rs", "        Verdict { kind: VerdictKind::Inconclusive, reject: None, invalid: None, limit: Some(limit) }",
-   "        Verdict { kind: VerdictKind::Verified, reject: None, invalid: None, limit: Some(limit) }", "打ち切った検査で Verified を返す"]
+   "        Verdict { kind: VerdictKind::Verified, reject: None, invalid: None, limit: Some(limit) }", "打ち切った検査で Verified を返す"],
+  ["mbt.rs", "            Seen::Value(x) => if x != s[var] {\n                return false;\n            },", "            Seen::Value(x) => {},", "観測した値を照合しない"],
+  ["mbt.rs", "        (SeenOutput::Returned(Seen::Value(y)), Some(x)) => x == y,", "        (SeenOutput::Returned(Seen::Value(y)), Some(x)) => true,", "戻り値を照合しない"],
+  ["mbt.rs", "                r.push(args[ks_exec[k]]);", "", "注入する選択の値を入力に含めない"],
+  ["mbt.rs", "        if c == 0 {\n            assert(v0[mid as int]@ == t@);", "        if c <= 0 {\n            assert(v0[mid as int]@ == t@);", "等しくない状態を候補の列にあるとみなす"],
+  ["mbt.rs", "                Enumerated::Fail(args, site, kind) => {\n                    return Err(ModelError { state: copy_vec(s), action: a, args, site, kind });\n                },\n                Enumerated::Ok(ts) => {\n                    if a == want {", "                Enumerated::Fail(args, site, kind) => {},\n                Enumerated::Ok(ts) => {\n                    if a == want {", "候補の更新で評価エラーを無視する"],
+  ["mbt.rs", "                            l.push((a, x));", "", "状態で有効な入力を落とす"],
+  ["mbt.rs", "                if has_input(&l, a, &common[k].1) {", "                if true {", "全候補で有効でない入力を残す"],
+  ["mbt.rs", "            any = any || l.len() > 0;", "            any = false;", "有効な入力を持つ候補を見落とす"],
+  ["mbt.rs", "            let ok = agrees_exec(&observed, &inits[i], seen);", "            let ok = true;", "初期観測を照合しない"],
+  ["mbt.rs", "        if vec_eq(&xin, input) {", "        if true {", "入力の違う遷移で候補を更新する"],
+  ["mbt.rs", "            if output_matches_exec(output, tr.output) && agrees_exec(obs, &tr.state, seen) {", "            if output_matches_exec(output, tr.output) {", "遷移先の観測を照合しない"],
+  ["mbt.rs", "                insert_state(next, copy_vec(&tr.state));", "", "応答と一致する遷移先を候補に加えない"],
+  ["mbt.rs", "                                *violation = Some((true, k, copy_vec(&tr.state)));", "                                *violation = Some((true, k, copy_vec(s)));", "不変条件の違反に遷移前の状態を記録する"],
+  ["mbt.rs", "        while i < self.cands.states.len()\n", "        while i < self.cands.states.len() && i < 1\n", "2番目以降の候補を更新に使わない"],
+  ["mbt.rs", "                Absorbed::TooMany => {\n                    return Update::TooMany;", "                Absorbed::TooMany => {\n                    return Update::Failure;", "候補数の上限超過を不適合とする"],
+  ["mbt.rs", "                Absorbed::Disabled => {\n                    assert(s0.possible(s@));\n                    return Update::InvalidInput;\n                },", "                Absorbed::Disabled => {},", "入力が無効な候補を無視する"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -167,7 +183,13 @@ VERUS_CANARIES = [
   ["gate.rs", "    decide_wf(model.raw(), c, ev)\n}", "decide"],
   ["gate.rs", "    match validate_raw(m) {\n        Err(e) => Verdict {", "decide_raw"],
   ["gate.rs", "            k = k + 1;\n            left = left - 1;", "CertCheck::advance のループの末尾"],
-  ["gate.rs", "        Some(Verdict::of(VerdictKind::Verified))\n    }", "CertCheck::advance の受理"]
+  ["gate.rs", "        Some(Verdict::of(VerdictKind::Verified))\n    }", "CertCheck::advance の受理"],
+  ["mbt.rs", "        Begun::Started(Session {", "Session::start の受理"],
+  ["mbt.rs", "    Absorbed::Enabled\n}", "absorb の受理"],
+  ["mbt.rs", "        Ok((common, any))\n", "common_inputs の受理"],
+  ["mbt.rs", "            return Update::Failure;", "observe の不適合"],
+  ["mbt.rs", "        self.cands = Candidates { states: next, hist: Ghost(h1) };", "observe の更新"],
+  ["mbt.rs", "            assert(consistent(m, c, obs, inj, first, h1, t));", "lemma_next_exact の構成"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

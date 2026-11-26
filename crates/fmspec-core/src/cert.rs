@@ -95,7 +95,7 @@ pub proof fn lemma_inductive_safe(m: RawModel, c: Conditions, cert: Seq<Vec<i64>
 // ---- 状態集合の所属判定 ----
 
 /// 符号化列の辞書順の比較。`0` を返すのは、2つの列が等しいときだけである。
-fn cmp_state(a: &Vec<i64>, b: &Vec<i64>) -> (r: i8)
+pub(crate) fn cmp_state(a: &Vec<i64>, b: &Vec<i64>) -> (r: i8)
     ensures
         r == 0 ==> a@ == b@,
 {

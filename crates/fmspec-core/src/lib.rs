@@ -12,12 +12,14 @@
 //! - [`cert`]：安全性証明書の検査器
 //! - [`trace`]：トレースの検査器
 //! - [`gate`]：判定ゲートと、未検証コード向けの公開API
+//! - [`mbt`]：Model-Based Testing の候補集合
 
 pub mod cert;
 pub mod eval;
 pub mod evidence;
 pub mod gate;
 mod impls;
+pub mod mbt;
 pub mod model;
 pub mod semantics;
 pub mod step;

@@ -247,7 +247,7 @@ impl Session {
     pub fn start(&mut self, observation: &Value) -> Result<Value, String> {
         let seen = self.observation(observation)?;
         self.started = true;
-        let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.checked(), &seen) {
+        let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.shared(), &seen) {
             Observed::Continue => {
                 return Ok(json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0}));
             }
@@ -275,7 +275,7 @@ impl Session {
         if !self.started {
             return Err("初期観測を渡す前に、次の入力は選べません".to_string());
         }
-        Ok(match self.inner.next_input(self.model.checked()) {
+        Ok(match self.inner.next_input() {
             NextInput::Input { action, params } => {
                 let mut body = self.input_json(action, &params);
                 body["status"] = json!("input");
@@ -295,7 +295,7 @@ impl Session {
     /// 入力（`{"action", "args"}`）が全候補で有効かを確かめる。
     pub fn check_input(&self, input: &Value) -> Result<Value, String> {
         let (action, params) = self.input(input)?;
-        Ok(match self.inner.check_input(self.model.checked(), action, &params) {
+        Ok(match self.inner.check_input(action, &params) {
             InputCheck::Valid => json!({"status": "valid"}),
             InputCheck::Invalid => json!({"status": "invalid"}),
             InputCheck::ModelError(e) => self.model_error(&e),
@@ -322,58 +322,56 @@ impl Session {
         };
         let step = self.inner.matched() + 1;
         let before = self.inner.candidates();
-        Ok(
-            match self.inner.observe(self.model.checked(), action, &params, output, &seen) {
-                Observed::Continue => {
-                    json!({"status": "continue", "candidates": self.inner.candidates(), "matched": self.inner.matched()})
-                }
-                Observed::Failure { possible } => {
-                    let mut expected: Vec<Value> = Vec::new();
-                    for p in &possible {
-                        let mut entry = json!({"state": self.projected(&p.state)});
-                        if output != SeenOutput::Unchecked {
-                            entry["output"] = output_to_json(&self.model, action, p.output);
-                        }
-                        if !expected.contains(&entry) {
-                            expected.push(entry);
-                        }
-                    }
-                    let mut observed = json!({"state": observation});
+        Ok(match self.inner.observe(action, &params, output, &seen) {
+            Observed::Continue => {
+                json!({"status": "continue", "candidates": self.inner.candidates(), "matched": self.inner.matched()})
+            }
+            Observed::Failure { possible } => {
+                let mut expected: Vec<Value> = Vec::new();
+                for p in &possible {
+                    let mut entry = json!({"state": self.projected(&p.state)});
                     if output != SeenOutput::Unchecked {
-                        observed["output"] = raw_output.cloned().unwrap_or(Value::Null);
+                        entry["output"] = output_to_json(&self.model, action, p.output);
                     }
-                    let mut body = self.input_json(action, &params);
-                    body["status"] = json!("conformance_failure");
-                    body["step"] = json!(step);
-                    body["candidates"] = json!(before);
-                    body["expected"] = json!(expected);
-                    body["observed"] = observed;
-                    body["mismatch"] = json!(self.mismatch(&possible, output, &seen));
-                    body
+                    if !expected.contains(&entry) {
+                        expected.push(entry);
+                    }
                 }
-                Observed::InvalidInput => json!({"status": "invalid_input"}),
-                Observed::TooManyCandidates => {
-                    json!({"status": "inconclusive", "reason": "max_candidates", "matched": self.inner.matched()})
+                let mut observed = json!({"state": observation});
+                if output != SeenOutput::Unchecked {
+                    observed["output"] = raw_output.cloned().unwrap_or(Value::Null);
                 }
-                Observed::ModelError(e) => self.model_error(&e),
-                Observed::ModelViolation {
-                    invariant,
-                    index,
-                    state,
-                } => {
-                    let claim = if invariant {
-                        Claim::Invariant(index)
-                    } else {
-                        Claim::Contract(index)
-                    };
-                    json!({
-                        "status": "model_violation",
-                        "property": claim_to_json(&self.model, &claim),
-                        "state": state_to_json(&self.model, &state),
-                    })
-                }
-            },
-        )
+                let mut body = self.input_json(action, &params);
+                body["status"] = json!("conformance_failure");
+                body["step"] = json!(step);
+                body["candidates"] = json!(before);
+                body["expected"] = json!(expected);
+                body["observed"] = observed;
+                body["mismatch"] = json!(self.mismatch(&possible, output, &seen));
+                body
+            }
+            Observed::InvalidInput => json!({"status": "invalid_input"}),
+            Observed::TooManyCandidates => {
+                json!({"status": "inconclusive", "reason": "max_candidates", "matched": self.inner.matched()})
+            }
+            Observed::ModelError(e) => self.model_error(&e),
+            Observed::ModelViolation {
+                invariant,
+                index,
+                state,
+            } => {
+                let claim = if invariant {
+                    Claim::Invariant(index)
+                } else {
+                    Claim::Contract(index)
+                };
+                json!({
+                    "status": "model_violation",
+                    "property": claim_to_json(&self.model, &claim),
+                    "state": state_to_json(&self.model, &state),
+                })
+            }
+        })
     }
 
     /// 現在の候補の状態。診断とテストに使う。

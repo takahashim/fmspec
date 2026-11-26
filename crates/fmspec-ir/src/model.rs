@@ -11,6 +11,7 @@ use fmspec_core::typing::InvalidModel;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::Arc;
 
 /// 定義のソース位置。診断に使うだけで、モデルの意味には関わらない。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,12 +116,17 @@ impl Names {
 pub struct Model {
     pub names: Names,
     pub digest: String,
-    checked: CheckedModel,
+    checked: Arc<CheckedModel>,
 }
 
 impl Model {
     pub fn checked(&self) -> &CheckedModel {
         &self.checked
+    }
+
+    /// 検証済みのモデルを共有する。Model-Based Testing のセッションが保持する。
+    pub fn shared(&self) -> Arc<CheckedModel> {
+        Arc::clone(&self.checked)
     }
 
     pub fn raw(&self) -> &RawModel {
@@ -859,7 +865,11 @@ fn describe(reason: &InvalidModel, names: &Names) -> String {
 pub fn load(json: &str) -> Result<Model, LoadError> {
     let (raw, names, digest) = parse(json)?;
     match validate(raw) {
-        Ok(checked) => Ok(Model { names, digest, checked }),
+        Ok(checked) => Ok(Model {
+            names,
+            digest,
+            checked: Arc::new(checked),
+        }),
         Err(reason) => {
             let reason = user_reason(reason, &names);
             Err(LoadError::Invalid {
