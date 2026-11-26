@@ -11,6 +11,7 @@ mod evidence;
 mod json;
 mod lower;
 mod model;
+mod resolve;
 pub mod types;
 mod value;
 

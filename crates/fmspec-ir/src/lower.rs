@@ -14,6 +14,7 @@
 
 use crate::json::{array, int, object, operands, required, schema, single, string};
 use crate::model::{EnumNames, LoadError};
+use crate::resolve::{agree, Resolver};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
 use fmspec_core::bindings::wrap_bindings;
 use fmspec_core::map_lookup::{put_map_rows_exec, select_flat_map_lookup, MISSING_KEY};
@@ -45,7 +46,7 @@ impl From<LoadError> for Error {
 
 pub(crate) type Res<T> = Result<T, Error>;
 
-fn type_error<T>(path: &str, message: impl Into<String>) -> Res<T> {
+pub(crate) fn type_error<T>(path: &str, message: impl Into<String>) -> Res<T> {
     Err(Error::Type(format!("{path}: {}", message.into())))
 }
 
@@ -370,7 +371,7 @@ fn parse_type_inner(v: &Value, path: &str, enums: &[EnumNames]) -> Res<SType> {
     }
 }
 
-fn type_name(enums: &[EnumNames], t: &XType) -> String {
+pub(crate) fn type_name(enums: &[EnumNames], t: &XType) -> String {
     match t {
         XType::Bool => "bool".to_string(),
         XType::Int => "int".to_string(),
@@ -693,7 +694,7 @@ fn quant_ranges(enums: &[EnumNames], st: &SType) -> Vec<(Type, i64, i64)> {
 // ---- 下ろし ----
 
 impl<'a> Ctx<'a> {
-    fn expect(&self, path: &str, t: &XType, want: &XType) -> Res<()> {
+    pub(crate) fn expect(&self, path: &str, t: &XType, want: &XType) -> Res<()> {
         if t != want {
             return type_error(
                 path,
@@ -707,7 +708,7 @@ impl<'a> Ctx<'a> {
         Ok(())
     }
 
-    fn expect_fits(&self, path: &str, t: &XType, st: &SType) -> Res<()> {
+    pub(crate) fn expect_fits(&self, path: &str, t: &XType, st: &SType) -> Res<()> {
         if !t.fits(st) {
             return type_error(
                 path,
@@ -742,7 +743,9 @@ impl<'a> Ctx<'a> {
 
     /// 述語（guard、不変条件、遷移契約、終端条件）として下ろす。
     pub(crate) fn prop(&self, v: &Value, path: &str) -> Res<C> {
-        self.bool_in(v, path, &[], 0)
+        let r = Resolver::new(self);
+        let resolved = r.prop(v, path).map(|e| (XType::Bool, e));
+        agree(self.bool_in(v, path, &[], 0), resolved, &r, path)
     }
 
     fn bool_in(&self, v: &Value, path: &str, sc: &[Bound], depth: usize) -> Res<C> {
@@ -753,6 +756,12 @@ impl<'a> Ctx<'a> {
 
     /// 値を型 `st` の場所に置くスロット（正規形）。整数の範囲は検査しない（中核の範囲外更新で検出する）。
     pub(crate) fn stored(&self, v: &Value, path: &str, st: &SType, depth: usize) -> Res<Vec<C>> {
+        let r = Resolver::new(self);
+        let resolved = r.stored(v, path, st);
+        agree(self.stored_slots(v, path, st, depth), resolved, &r, path)
+    }
+
+    fn stored_slots(&self, v: &Value, path: &str, st: &SType, depth: usize) -> Res<Vec<C>> {
         let mut blk = Block::new(depth);
         let (t, slots) = self.expr(v, path, &[], &mut blk)?;
         self.expect_fits(path, &t, st)?;
@@ -797,21 +806,21 @@ impl<'a> Ctx<'a> {
         Ok(blk.atom(r))
     }
 
-    fn set_elem(&self, t: &XType, path: &str) -> Res<SType> {
+    pub(crate) fn set_elem(&self, t: &XType, path: &str) -> Res<SType> {
         match t {
             XType::Set(e) => Ok((**e).clone()),
             _ => type_error(path, format!("set が必要ですが、{} です", type_name(self.enums, t))),
         }
     }
 
-    fn map_types(&self, t: &XType, path: &str) -> Res<(SType, SType)> {
+    pub(crate) fn map_types(&self, t: &XType, path: &str) -> Res<(SType, SType)> {
         match t {
             XType::Map(k, v) => Ok(((**k).clone(), (**v).clone())),
             _ => type_error(path, format!("map が必要ですが、{} です", type_name(self.enums, t))),
         }
     }
 
-    fn list_type(&self, t: &XType, path: &str) -> Res<(SType, usize)> {
+    pub(crate) fn list_type(&self, t: &XType, path: &str) -> Res<(SType, usize)> {
         match t {
             XType::List(e, n) => Ok(((**e).clone(), *n)),
             _ => type_error(path, format!("list が必要ですが、{} です", type_name(self.enums, t))),
