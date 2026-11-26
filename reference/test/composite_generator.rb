@@ -245,6 +245,14 @@ class CompositeGenerator
   def action(name)
     params = Array.new(@rng.rand(3)) { |i| { "name" => "p#{i}", "type" => param_type } }
     choices = Array.new(chance(0.2) ? 1 : 0) { |i| { "name" => "c#{i}", "type" => scalar_type } }
+    # 動的ドメイン。状態の Set か List の要素から選ぶ。
+    (params + choices).each do |b|
+      sources = @state_types.each_index.select do |i|
+        t = @state_types[i]
+        (t.key?("set") && t["set"] == b["type"]) || (t.key?("list") && t["list"]["of"] == b["type"])
+      end
+      b["in"] = { "var" => pick(sources) } if !sources.empty? && chance(0.5)
+    end
     scope = { vars: @state_types, params: params.map { |p| p["type"] }, choices: choices.map { |c| c["type"] } }
     act = { "name" => name, "params" => params, "choices" => choices }
     act["guard"] = expr(bool, scope, 2) if chance(0.25)

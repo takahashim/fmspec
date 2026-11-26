@@ -199,8 +199,13 @@ module Fmspec
       @model = model
       @name = name
       @source = source
-      @params = params.map { |param, domain| [param.to_sym, Types.coerce(domain, "操作 #{name} の引数 #{param}")] }
+      # 型、または動的ドメイン（記号的な状態と前の引数を受け取って Set か List の式を返す Proc）。
+      @params = params.map do |param, domain|
+        [param.to_sym, domain.is_a?(Proc) ? domain : Types.coerce(domain, "操作 #{name} の引数 #{param}")]
+      end
       @choices = []
+      # 引数と内部選択の、動的ドメインの式。
+      @domains = {}
       @guards = []
       @always = Branch.new({}, nil)
       @accept = nil
@@ -218,13 +223,18 @@ module Fmspec
       end
 
       state = StateRef.new(@model, "var")
-      args = @params.each_with_index.map { |(_, type), i| Expr.new({ "param" => i }, type.kind) }
+      args = []
+      @params = @params.each_with_index.map do |(param, spec), i|
+        type = spec.is_a?(Proc) ? dynamic_domain([:param, i], "引数 #{param}", spec, [state, *args]) : spec
+        args << Expr.new({ "param" => i }, type.kind)
+        [param, type]
+      end
       instance_exec(state, *args, &block)
       updates, output = merge
       action = {
         "name" => @name.to_s,
-        "params" => bindings(@params),
-        "choices" => bindings(@choices),
+        "params" => bindings(@params, :param),
+        "choices" => bindings(@choices, :choice),
         "guard" => guard_node,
         "updates" => updates.map { |target, expr| { "target" => target, "expr" => expr.node } },
         "source" => @source
@@ -261,12 +271,17 @@ module Fmspec
     end
 
     # 内部選択を宣言し、その値を表す式を返す。`allowed = choose(:allowed, bool)`。
+    # ドメインに Set か List の式を渡すと、その要素から選ぶ（`victim = choose(:victim, s.users)`）。
     def choose(name, domain)
       top_level!("choose")
       taken = (@params + @choices).any? { |n, _| n == name.to_sym }
       raise BuildError, "操作 #{@name}: 引数 #{name} は定義済みです" if taken
 
-      type = Types.coerce(domain, "操作 #{@name} の内部選択 #{name}")
+      type = if domain.is_a?(Expr)
+               domain_type(domain, "内部選択 #{name}").tap { @domains[[:choice, @choices.length]] = domain.node }
+             else
+               Types.coerce(domain, "操作 #{@name} の内部選択 #{name}")
+             end
       @choices << [name.to_sym, type]
       Expr.new({ "choice" => @choices.length - 1 }, type.kind)
     end
@@ -369,8 +384,28 @@ module Fmspec
       end
     end
 
-    def bindings(list)
-      list.map { |name, type| { "name" => name.to_s, "type" => type.to_ir } }
+    def bindings(list, kind)
+      list.each_with_index.map do |(name, type), i|
+        binding = { "name" => name.to_s, "type" => type.to_ir }
+        binding["in"] = @domains[[kind, i]] if @domains.key?([kind, i])
+        binding
+      end
+    end
+
+    # 動的ドメインの Proc を、記号的な状態と前の引数で呼び、ドメインの式から引数の型を決める。
+    def dynamic_domain(key, what, spec, inputs)
+      Lint.check!(spec, "操作 #{@name} の#{what}のドメイン")
+      inputs = inputs.first(spec.arity) unless spec.arity.negative?
+      domain = lift(instance_exec(*inputs, &spec))
+      domain_type(domain, what).tap { @domains[key] = domain.node }
+    end
+
+    def domain_type(domain, what)
+      case domain.kind
+      when Types::SetOf, Types::ListOf then domain.kind.elem
+      else
+        raise BuildError, "操作 #{@name} の#{what}: ドメインは set_of か list_of の式です（#{Types.kind_name(domain.kind)} の式です）"
+      end
     end
 
     def guard_node

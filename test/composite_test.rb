@@ -181,6 +181,52 @@ class CompositeTest < Minitest::Test
     end)
   end
 
+  def seats_model(full_swap:)
+    least = full_swap ? 2 : 0
+    Fmspec.define(:seats) do
+      user = enum(:user, :ann, :bob, :cy)
+      seats = list_of(user, max: 2)
+      state :waiting, set_of(user), initial: Set[:ann, :bob, :cy]
+      state :seated, seats, initial: []
+
+      action :seat, u: ->(s) { s.waiting } do |s, u|
+        guard s.seated.size < 2
+        update waiting: s.waiting.delete(u), seated: s.seated.push(u)
+      end
+
+      action :swap, out: ->(s) { s.seated }, inn: ->(s, out) { s.waiting.delete(out) } do |s, out, inn|
+        guard s.seated.size >= least
+        update waiting: s.waiting.add(out).delete(inn),
+               seated: ite(s.seated[0].eq(out), seats.value([inn, s.seated[1]]), [s.seated[0], inn])
+      end
+
+      action :leave do |s|
+        victim = choose(:victim, s.seated)
+        update waiting: s.waiting.add(victim), seated: ite(s.seated.first.eq(victim), s.seated.shift, s.seated.pop)
+      end
+
+      invariant(:everyone) { |s| forall(user) { |x| s.waiting.include?(x) | s.seated.include?(x) } }
+    end
+  end
+
+  def test_dynamic_domains
+    model = seats_model(full_swap: false)
+    seat, swap, leave = model.to_ir["actions"]
+    assert_equal({ "name" => "u", "type" => { "enum" => "user" }, "in" => { "var" => 0 } }, seat["params"][0])
+    assert_equal({ "remove" => [{ "var" => 0 }, { "param" => 0 }] }, swap["params"][1]["in"])
+    assert_equal({ "var" => 1 }, leave["choices"][0]["in"])
+
+    # 1人だけ座っているときの swap は、2番目の席を読んで評価エラーになる。
+    result = model.check
+    assert_predicate result, :error?
+    assert_equal ["swap", "update", { "kind" => "index_out_of_range" }], result.property.values_at("action", "site", "error")
+    assert_equal [:seat], result.trace.steps.map(&:action)
+
+    # leave は、座っている人がいなければ選択肢がなく、無効になる。
+    result = seats_model(full_swap: true).check(deadlock: true)
+    assert_predicate result, :verified?
+  end
+
   # ---- 実装との適合性検査 ----
 
   class Cart

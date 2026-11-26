@@ -70,8 +70,14 @@ update pos: { x: s.pos[:x] + 1, y: s.pos[:y] }
 guard s.holder.eq(nil)
 ```
 
-型が決まらない位置では、列挙型の値を `result[:success]`、Optionの値を `some(x)`、`none(user)` と書く。
+型が決まらない位置では、列挙型の値を `result[:success]`、Optionの値を `some(x)`、`none(user)`、そのほかの複合型の値を `型.value(値)` と書く。
+`ite` の両方の枝がRubyの値の場合がこれにあたる。
 複合型のリテラルを型の決まらない位置に書くと、`Fmspec::BuildError` になる。
+
+```ruby
+seats = list_of(user, max: 2)
+update seated: ite(s.seated[0].eq(out), seats.value([inn, s.seated[1]]), [s.seated[0], inn])
+```
 
 ## 状態変数と定数
 
@@ -99,6 +105,18 @@ end
 ```
 
 キーワード引数は**公開引数**で、値はそのドメイン（型、または整数の範囲）である。
+ドメインに、記号的な状態（と、それより前の引数）を受け取ってSetかListの式を返すlambdaを書くと、引数はその要素から選ばれる（**動的ドメイン**）。
+引数の型は、要素の型になる。
+
+```ruby
+action :seat, u: ->(s) { s.waiting } do |s, u|
+  update waiting: s.waiting.delete(u), seated: s.seated.push(u)
+end
+
+action :swap, out: ->(s) { s.seated }, inn: ->(s, out) { s.waiting.delete(out) } do |s, out, inn|
+  # ...
+end
+```
 ブロックは、記号的な状態と、各引数の記号式を受け取る。
 
 | 語彙 | 意味 |
@@ -106,7 +124,7 @@ end
 | `guard 式` | 遷移の有効性。複数書くと、すべてが真のときに有効になる。省略すれば常に有効 |
 | `update 名前: 式, ...` | 状態更新。同時代入で、式は遷移前の状態で評価する。書かなかった変数は維持する |
 | `unchanged` | 状態を変えないことの明示 |
-| `choose(:名前, 型)` | 内部選択を宣言し、その値の記号式を返す |
+| `choose(:名前, 型)` | 内部選択を宣言し、その値の記号式を返す。型の代わりにSetかListの式を渡すと、その要素から選ぶ |
 | `returns 式` | 出力。型は式から決まる。整数の出力に範囲を付けるときは `returns 式, int(0..3)` と書く。出力の型は bool、整数、列挙型に限る |
 | `ensures(:名前) { \|after, result\| 式 }` | 遷移契約。この操作のすべての有効な遷移で成り立つべき事後条件 |
 | `preserves :名前, ...` | 指定した状態変数がこの操作で変わらない、という遷移契約 |

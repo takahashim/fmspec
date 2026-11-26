@@ -48,7 +48,7 @@ module Fmspec
       when true, false then new({ "bool" => value }, :bool)
       when Symbol then lift_label(value, kind, enums)
       when nil, Array, Hash, ::Set
-        raise BuildError, "#{value.inspect} の型が決まりません。型の決まる位置に書くか、型.literal の代わりに some、none などで書いてください"
+        raise BuildError, "#{value.inspect} の型が決まりません。型の決まる位置に書くか、型.value(値)、some(値)、none(型) で書いてください"
       else raise BuildError, "記号式にできない値です: #{value.inspect}"
       end
     end

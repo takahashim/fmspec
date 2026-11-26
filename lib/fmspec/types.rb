@@ -37,6 +37,10 @@ module Fmspec
 
       # Set の要素と Map のキーに使える（値の数が有限で少なく、Set、Map、List を含まない）。
       def keyable? = false
+
+      # Ruby の値を、この型の値の式にする。型の決まらない位置に複合型のリテラルを書くときに使う。
+      # `seats.value([a, b])`。
+      def value(value) = Expr.lift(value, kind)
     end
 
     # 閉区間の整数。

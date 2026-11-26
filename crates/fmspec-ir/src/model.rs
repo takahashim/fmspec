@@ -185,27 +185,38 @@ fn constant_codes(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<Vec<i6
     Ok(codes)
 }
 
-fn parse_bindings(
-    items: &[Value],
+/// 引数の宣言。`domain` は動的ドメイン（`in`）の式。
+struct Bindings<'v> {
+    names: Vec<String>,
+    types: Vec<SType>,
+    domains: Vec<Option<&'v Value>>,
+}
+
+fn parse_bindings<'v>(
+    items: &'v [Value],
     path: &str,
     enums: &[EnumNames],
     seen: &mut HashSet<String>,
-) -> Res<(Vec<String>, Vec<SType>)> {
-    let mut names = Vec::new();
-    let mut types = Vec::new();
+) -> Res<Bindings<'v>> {
+    let mut out = Bindings {
+        names: Vec::new(),
+        types: Vec::new(),
+        domains: Vec::new(),
+    };
     for (i, item) in items.iter().enumerate() {
         let path = format!("{path}[{i}]");
-        let map = object(item, &path, &["name", "type"])?;
+        let map = object(item, &path, &["name", "type", "in"])?;
         let name = string(required(map, &path, "name")?, &format!("{path}.name"))?;
         unique(seen, &name, &path, "引数")?;
-        types.push(parse_stype(
+        out.types.push(parse_stype(
             required(map, &path, "type")?,
             &format!("{path}.type"),
             enums,
         )?);
-        names.push(name);
+        out.names.push(name);
+        out.domains.push(map.get("in"));
     }
-    Ok((names, types))
+    Ok(out)
 }
 
 fn layouts(enums: &[EnumNames], types: &[SType]) -> Vec<Layout> {
@@ -228,6 +239,10 @@ fn slot_types(enums: &[EnumNames], types: &[SType]) -> Vec<Type> {
     out
 }
 
+fn arg_names_at<'n>(params: &'n [String], choices: &'n [String], i: usize) -> &'n str {
+    params.iter().chain(choices).nth(i).map(String::as_str).unwrap_or("?")
+}
+
 struct Parsed<'a> {
     enums: &'a [EnumNames],
     states: &'a [Layout],
@@ -244,13 +259,21 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
     )?;
     let name = string(required(map, path, "name")?, &format!("{path}.name"))?;
     let mut seen = HashSet::new();
-    let (params, mut arg_types) = parse_bindings(
+    let Bindings {
+        names: params,
+        types: mut arg_types,
+        mut domains,
+    } = parse_bindings(
         optional_array(map, path, "params")?,
         &format!("{path}.params"),
         enums,
         &mut seen,
     )?;
-    let (choices, choice_types) = parse_bindings(
+    let Bindings {
+        names: choices,
+        types: choice_types,
+        domains: choice_domains,
+    } = parse_bindings(
         optional_array(map, path, "choices")?,
         &format!("{path}.choices"),
         enums,
@@ -258,6 +281,7 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
     )?;
     let n_user_params = arg_types.len();
     arg_types.extend(choice_types);
+    domains.extend(choice_domains);
     let args = layouts(enums, &arg_types);
     let n_params = args
         .get(n_user_params)
@@ -291,10 +315,44 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
             canon.push(c);
         }
     }
-    let guard = canon
+    // 動的ドメイン。引数がドメインの式の値に含まれなければ、その組は無効にする。
+    // ドメインの式は、状態と、それより前の引数だけを参照できる。
+    let mut members = Vec::new();
+    for (i, domain) in domains.iter().enumerate() {
+        let Some(domain) = domain else { continue };
+        let (kind, j) = if i < n_user_params {
+            ("params", i)
+        } else {
+            ("choices", i - n_user_params)
+        };
+        let dpath = format!("{path}.{kind}[{j}].in");
+        let fail = |d: String| {
+            invalid(
+                InvalidModel::Guard(a),
+                format!("{}の引数 {:?} のドメインが不正です（{d}）", what(""), arg_names_at(&params, &choices, i)),
+            )
+        };
+        let before = Ctx {
+            args: &args[..i],
+            n_params: n_user_params.min(i),
+            ..ctx
+        };
+        lowered(before.prop(&serde_json::json!({"is_empty": [domain]}), &dpath), fail)?;
+        let me = if i < n_user_params {
+            serde_json::json!({"param": i})
+        } else {
+            serde_json::json!({"choice": i - n_user_params})
+        };
+        members.push(lowered(ctx.prop(&serde_json::json!({"contains": [domain, me]}), &dpath), fail)?);
+    }
+    let guard = members
         .into_iter()
         .rev()
         .fold(user_guard, |acc, c| Expr::And(Box::new(c), Box::new(acc)));
+    let guard = canon
+        .into_iter()
+        .rev()
+        .fold(guard, |acc, c| Expr::And(Box::new(c), Box::new(acc)));
     let mut updates = Vec::new();
     let mut owners = Vec::new();
     for (u, item) in optional_array(map, path, "updates")?.iter().enumerate() {

@@ -511,7 +511,7 @@ module FmspecReference
     def step(action, params, choices, state)
       env = Env.new(state, params, choices, nil, nil)
       enabled = failing(action, params, choices, "guard") do
-        action["guard"] ? bool(ev(action["guard"], env)) : true
+        in_domain?(action, params, choices, env) && (action["guard"] ? bool(ev(action["guard"], env)) : true)
       end
       return nil unless enabled
 
@@ -529,6 +529,17 @@ module FmspecReference
         end
       end
       [nxt, output]
+    end
+
+    # 動的ドメイン（`in`）。引数を宣言順に調べ、ドメインの式の値に含まれなければ偽。
+    def in_domain?(action, params, choices, env)
+      bindings = (action["params"] || []).zip(params) + (action["choices"] || []).zip(choices)
+      bindings.all? do |b, value|
+        next true unless b["in"]
+
+        domain = ev(b["in"], env)
+        domain.items.include?(value)
+      end
     end
 
     def tuples(bindings)
