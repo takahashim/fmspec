@@ -35,6 +35,7 @@ module Fmspec
       @invariants = []
       @contracts = []
       @terminal = nil
+      @initially = nil
       @names = {}
     end
 
@@ -53,21 +54,25 @@ module Fmspec
 
     # 状態変数。`state :sold, int(0..4), initial: 0`。
     # 複合型の初期値は Ruby の値で書く（`initial: Set[]`、`initial: { x: 0, y: 0 }`、`initial: nil`）。
-    def state(name, type, initial:)
+    # 初期値の候補を `initial_in:` に並べると（`initial_in: 0..2`、`initial_in: [Set[], Set[:apple]]`）、
+    # 状態変数ごとの候補の組み合わせがすべて初期状態になる。bool、int、enum の型を書くと、その型の値すべてが候補になる。
+    def state(name, type, initial: NONE, initial_in: NONE)
       claim(name, "状態変数")
       type = Types.coerce(type, "状態変数 #{name}")
-      initial_node = if Types.scalar?(type.kind)
-                       value = type.literal(initial)
-                       if type.is_a?(Types::Int) && !value.between?(type.min, type.max)
-                         raise BuildError, "状態変数 #{name} の初期値 #{value} が #{type} の範囲外です"
-                       end
+      entry = { name: name.to_sym, type: type, source: source_of(caller_locations(1, 1)) }
+      if initial_in.equal?(NONE) == initial.equal?(NONE)
+        raise BuildError, "状態変数 #{name} には initial と initial_in のどちらか一方を書きます"
+      end
 
-                       Expr.lift(value, type.kind).node
-                     else
-                       type.check!(initial, "状態変数 #{name} の初期値")
-                       Expr.lift(initial, type.kind, enums: declared_enums).node
-                     end
-      @states << { name: name.to_sym, type: type, initial: initial_node, source: source_of(caller_locations(1, 1)) }
+      if initial_in.equal?(NONE)
+        entry[:initial] = initial_node(name, type, initial)
+      else
+        candidates = initial_candidates(name, type, initial_in)
+        raise BuildError, "状態変数 #{name} の initial_in が空です" if candidates.empty?
+
+        entry[:initial_in] = candidates.map { |v| initial_node(name, type, v) }
+      end
+      @states << entry
       nil
     end
 
@@ -76,6 +81,17 @@ module Fmspec
     def ghost(name, type, initial:)
       state(name, type, initial: initial)
       @states.last[:ghost] = true
+      nil
+    end
+
+    # 初期条件。ブロックは記号的な状態を受け取り、Bool の式を返す。
+    # 初期値の候補の組み合わせのうち、真になるものだけが初期状態になる。
+    def initially(&block)
+      raise BuildError, "initially にはブロックが必要です" unless block
+      raise BuildError, "initially は1つだけ書けます" if @initially
+
+      Lint.check!(block, "initially")
+      @initially = lift(instance_exec(StateRef.new(self, "var"), &block)).expect(:bool, "initially").node
       nil
     end
 
@@ -156,20 +172,50 @@ module Fmspec
 
     private
 
+    # 省略されたキーワード引数の印。
+    NONE = Object.new.freeze
+
+    def initial_node(name, type, initial)
+      if Types.scalar?(type.kind)
+        value = type.literal(initial)
+        if type.is_a?(Types::Int) && !value.between?(type.min, type.max)
+          raise BuildError, "状態変数 #{name} の初期値 #{value} が #{type} の範囲外です"
+        end
+
+        Expr.lift(value, type.kind).node
+      else
+        type.check!(initial, "状態変数 #{name} の初期値")
+        Expr.lift(initial, type.kind, enums: declared_enums).node
+      end
+    end
+
+    def initial_candidates(name, type, initial_in)
+      case initial_in
+      when Types::Int then initial_in.min.upto(initial_in.max).to_a
+      when Types::Bool, :bool then [false, true]
+      when Types::Enum then initial_in.labels
+      when Types::Common
+        raise BuildError, "状態変数 #{name} の initial_in に型を書けるのは bool、int、enum だけです"
+      when Enumerable then initial_in.to_a
+      else raise BuildError, "状態変数 #{name} の initial_in は、値の配列、範囲、または型です"
+      end
+    end
+
     def to_ir
       ir = {
         "ir_version" => 1,
         "name" => @name.to_s,
         "enums" => @enums.values.map { |e| { "name" => e.name.to_s, "variants" => e.labels.map(&:to_s) } },
         "states" => @states.each_with_index.map do |s, i|
-          { "id" => i, "name" => s[:name].to_s, "type" => s[:type].to_ir,
-            "initial" => s[:initial], "source" => s[:source] }
+          initial = s.key?(:initial_in) ? { "initial_in" => s[:initial_in] } : { "initial" => s[:initial] }
+          { "id" => i, "name" => s[:name].to_s, "type" => s[:type].to_ir, **initial, "source" => s[:source] }
         end,
         "actions" => @actions,
         "invariants" => @invariants,
         "contracts" => @contracts
       }
       ir["terminal"] = @terminal if @terminal
+      ir["initial_constraint"] = @initially if @initially
       ir
     end
 
