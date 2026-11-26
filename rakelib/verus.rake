@@ -39,6 +39,19 @@ end
 
 # 変異。[ファイル, 元の文字列, 置き換え, 説明]。元の文字列はファイルにちょうど1回現れなければならない。
 VERUS_MUTANTS = [
+  ["map_encoding.rs", "let tag: i64 = if present { 1 } else { 0 };",
+   "let tag: i64 = if present { 0 } else { 1 };", "Mapの符号化でキーの有無を反転する"],
+  ["ranking.rs", "prefix.checked_mul(radix)?.checked_add(digit)",
+   "prefix.checked_mul(radix)?.checked_add(0)", "キー値を符号化する順位計算で末尾の成分を落とす"],
+  ["bindings.rs", "out = Expr::Let(Box::new(binding), Box::new(out));",
+   "out = Expr::Let(Box::new(out), Box::new(binding));", "束縛より先に本体を評価する"],
+  ["map_lookup.rs", "let offset = base + column;", "let offset = base;", "Mapの値列でも有無フラグを読む"],
+  ["ranking.rs", "let base = Expr::Bin(BinOp::Mul,", "let base = Expr::Bin(BinOp::Add,",
+   "複合キーの順位で基数を掛けずに足す"],
+  ["map_lookup.rs", "            BinOp::Lt,", "            BinOp::Ge,",
+   "Mapの値を選ぶときに二分木の枝を逆にする"],
+  ["map_lookup.rs", "Box::new(Expr::Fail(Type::Bool, MISSING_KEY)),", "Box::new(Expr::Const(Value::Bool(true))),",
+   "Mapの欠損キーで失敗しない"],
   ["eval.rs", "BinOp::Add => checked(a.checked_add(*b)),", "BinOp::Add => checked(a.checked_sub(*b)),",
    "加算を減算として実行する"],
   ["eval.rs", "BinOp::Mul => checked(a.checked_mul(*b)),", "BinOp::Mul => Ok(Value::Int(a.wrapping_mul(*b))),",

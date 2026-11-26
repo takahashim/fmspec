@@ -400,3 +400,26 @@ fn type_errors_name_the_definition() {
     ir["states"][0]["type"] = json!({"set": {"set": {"bool": {}}}});
     assert!(load_err(ir).contains("set、map、list を含まない"));
 }
+
+#[test]
+fn map_get_reports_missing_key_before_using_the_payload() {
+    let key = json!({"enum": "item"});
+    let value = json!({"option": {"bool": {}}});
+    let map = json!({"map": {"key": key, "value": value}});
+    let ir = base(
+        json!([
+            {"name": "items", "type": map,
+             "initial": {"map": {"key": key, "value": value, "items": [[item("bread"), {"some": [{"bool": true}]}]]}}},
+            {"name": "last", "type": value, "initial": {"none": {"bool": {}}}}
+        ]),
+        json!([{"name": "read", "updates": [{"target": 1, "expr": {"get": [{"var": 0}, item("apple")]}}]}]),
+        json!([]),
+    );
+
+    let result = run(&ir);
+    assert_eq!(result["status"], "error", "{result}");
+    assert_eq!(result["property"]["site"], "update");
+    assert_eq!(result["property"]["target"], "last");
+    assert_eq!(result["property"]["error"], json!({"kind": "missing_key"}));
+    recheck(&ir, &result);
+}

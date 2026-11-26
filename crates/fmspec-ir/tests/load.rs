@@ -4,11 +4,11 @@
 
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, TraceStep};
-use fmspec_core::step::Site;
+use fmspec_core::step::{Enumerated, Site};
 use fmspec_core::typing::InvalidModel;
 use fmspec_ir::{
-    certificate_from_json, certificate_to_json, default_conditions, load, trace_from_json, trace_to_json, LoadError,
-    Trace, TraceError,
+    args_to_json, certificate_from_json, certificate_to_json, default_conditions, load, output_to_json, state_to_json,
+    trace_from_json, trace_to_json, value_from_json, LoadError, Trace, TraceError,
 };
 use serde_json::{json, Value};
 
@@ -329,4 +329,134 @@ fn initial_states_are_the_filtered_product_of_candidates() {
         invalid(|ir| set_initial(ir, 0, json!([{"int": 0}, {"int": 4}]))),
         InvalidModel::Initial(1)
     );
+}
+
+#[test]
+fn map_transitions_preserve_public_arguments_internal_choices_and_pre_state_output() {
+    let bit = json!({"int": {"min": 0, "max": 1}});
+    let key_type = json!({"enum": "key"});
+    let map_type = json!({"map": {"key": key_type, "value": bit}});
+    let map = json!({"var": 0});
+    let param = json!({"param": 0});
+    let key = json!({"unwrap": [param]});
+    let old = json!({"get": [map, key]});
+    let ir = json!({
+        "ir_version": 1,
+        "name": "map_changes",
+        "enums": [{"name": "key", "variants": ["right", "left"]}],
+        "states": [{"name": "items", "type": map_type,
+                    "initial": {"map": {"key": key_type, "value": bit, "items": []}}}],
+        "actions": [{
+            "name": "change",
+            "params": [{"name": "key", "type": {"option": key_type}}],
+            "choices": [{"name": "remove", "type": {"bool": {}}}],
+            "guard": {"all": [{"is_some": [param]}, {"has_key": [map, key]}]},
+            "updates": [{"target": 0, "expr": {"ite": [
+                {"choice": 0}, {"delete": [map, key]}, {"put": [map, key, {"sub": [{"int": 1}, old]}]}
+            ]}}],
+            "output": {"type": bit, "expr": old}
+        }]
+    });
+    let model = load(&ir.to_string()).unwrap();
+    let keys = ["right", "left"];
+    let entries = [None, Some(0), Some(1)];
+    let map_json = |values: [Option<i64>; 2]| {
+        Value::Array(
+            keys.iter()
+                .zip(values)
+                .filter_map(|(name, value)| value.map(|v| json!([name, v])))
+                .collect(),
+        )
+    };
+
+    // 全9状態について、探索の訪問順や初期状態からの到達可否に依存せずに照合する。
+    for right in entries {
+        for left in entries {
+            let values = [right, left];
+            let before = map_json(values);
+            let state = value_from_json(&model.names.enums, &model.names.state_types[0], &before).unwrap();
+            let Some(Enumerated::Ok(transitions)) = model.checked().successors(0, &state) else {
+                panic!("有効な遷移の列挙に失敗: {before}");
+            };
+            let mut actual = Vec::new();
+            for transition in transitions {
+                let (params, choices) = args_to_json(&model, 0, &transition.args);
+                actual.push((
+                    params,
+                    choices,
+                    output_to_json(&model, 0, transition.output),
+                    state_to_json(&model, &transition.state),
+                ));
+            }
+
+            let mut expected = Vec::new();
+            for (i, value) in values.iter().enumerate() {
+                if let Some(previous) = value {
+                    for remove in [false, true] {
+                        let mut after = values;
+                        after[i] = if remove { None } else { Some(1 - previous) };
+                        expected.push((
+                            json!({"key": {"some": keys[i]}}),
+                            json!({"remove": remove}),
+                            json!({"value": previous}),
+                            json!({"items": map_json(after)}),
+                        ));
+                    }
+                }
+            }
+
+            assert_eq!(actual.len(), expected.len(), "before={before}: {actual:?}");
+            assert!(
+                expected.iter().all(|edge| actual.contains(edge)),
+                "before={before}: expected={expected:?}, actual={actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn map_encoding_and_get_agree_on_composite_key_rows() {
+    let bit = json!({"int": {"min": -1, "max": 0}});
+    let key = json!({"option": {"record": [
+        {"name": "n", "type": bit}, {"name": "flag", "type": {"bool": {}}}
+    ]}});
+    let value = json!({"int": {"min": 0, "max": 9}});
+    let some = |n, flag| {
+        json!({"some": [{"record": [
+            {"name": "n", "expr": {"int": n}}, {"name": "flag", "expr": {"bool": flag}}
+        ]}]})
+    };
+    let ir = json!({
+        "ir_version": 1, "name": "map_read",
+        "states": [{"name": "map", "type": {"map": {"key": key, "value": value}},
+            "initial": {"map": {"key": key, "value": value, "items": []}}}],
+        "actions": [
+            {"name": "first", "output": {"type": value, "expr": {"get": [{"var": 0}, some(-1, false)]}}},
+            {"name": "last", "output": {"type": value, "expr": {"get": [{"var": 0}, some(0, true)]}}},
+            {"name": "missing", "output": {"type": value, "expr": {"get": [{"var": 0}, {"none": key["option"]}]}}}
+        ]
+    });
+    let model = load(&ir.to_string()).unwrap();
+    let ty = &model.names.state_types[0];
+    let last = json!({"some": {"n": 0, "flag": true}});
+    let first = json!({"some": {"n": -1, "flag": false}});
+    let entries = json!([[last, 9], [first, 4]]);
+    let slots = value_from_json(&model.names.enums, ty, &entries).unwrap();
+    // None, Some(-1,false), Some(-1,true), Some(0,false), Some(0,true).
+    assert_eq!(slots, vec![0, 0, 1, 4, 0, 0, 0, 0, 1, 9]);
+    for (action, expected) in [(0, 4), (1, 9)] {
+        let Some(Enumerated::Ok(transitions)) = model.checked().successors(action, &slots) else {
+            panic!("Mapの存在するキーを読み取れません");
+        };
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].output, Some(expected));
+    }
+    assert!(matches!(
+        model.checked().successors(2, &slots),
+        Some(Enumerated::Fail(
+            _,
+            Site::Output,
+            ErrKind::Failed(fmspec_core::map_lookup::MISSING_KEY)
+        ))
+    ));
 }

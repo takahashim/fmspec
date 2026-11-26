@@ -14,13 +14,18 @@
 //! - [`gate`]：判定ゲートと、未検証コード向けの公開API
 //! - [`mbt`]：Model-Based Testing の候補集合
 
+pub mod bindings;
 pub mod cert;
 pub mod eval;
 pub mod evidence;
+pub mod expr_copy;
 pub mod gate;
 mod impls;
+pub mod map_encoding;
+pub mod map_lookup;
 pub mod mbt;
 pub mod model;
+pub mod ranking;
 pub mod semantics;
 pub mod step;
 pub mod trace;

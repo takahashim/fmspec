@@ -15,13 +15,16 @@
 use crate::json::{array, int, object, operands, required, schema, single, string};
 use crate::model::{EnumNames, LoadError};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
+use fmspec_core::bindings::wrap_bindings;
+use fmspec_core::map_lookup::{put_map_rows_exec, select_flat_map_lookup, MISSING_KEY};
 use fmspec_core::model::{BinOp, Expr as C, Type, Value as CV};
+use fmspec_core::ranking::{mixed_rank_expr, offset_rank, option_rank};
 use serde_json::Value;
 use std::collections::HashSet;
 
 /// `Expr::Fail` の番号。
 pub const FAIL_NONE: i64 = 1;
-pub const FAIL_MISSING_KEY: i64 = 2;
+pub const FAIL_MISSING_KEY: i64 = MISSING_KEY;
 pub const FAIL_INDEX: i64 = 3;
 pub const FAIL_FULL: i64 = 4;
 pub const FAIL_EMPTY: i64 = 5;
@@ -243,7 +246,7 @@ impl Block {
     }
 
     fn wrap(binds: &[C], e: C) -> C {
-        binds.iter().rev().fold(e, |acc, x| C::Let(b(x.clone()), b(acc)))
+        wrap_bindings(binds.to_vec(), e)
     }
 }
 
@@ -534,41 +537,28 @@ fn store(enums: &[EnumNames], t: &XType, slots: &[C], st: &SType) -> (C, Vec<C>)
 /// 要素の型 `st` での番号。値が型に属するときに限って評価する。
 fn rank_expr(enums: &[EnumNames], t: &XType, slots: &[C], st: &SType) -> C {
     match (t, st) {
-        (XType::Int, SType::Int(lo, _)) => {
-            if *lo == 0 {
-                slots[0].clone()
-            } else {
-                bin(BinOp::Sub, slots[0].clone(), ci(*lo))
-            }
-        }
+        (XType::Int, SType::Int(lo, _)) => offset_rank(slots[0].clone(), *lo),
         (XType::Bool, _) | (XType::Enum(_), _) => C::Code(b(slots[0].clone())),
         (XType::Tuple(xs), SType::Tuple(ts)) => mixed(enums, xs.iter().zip(ts), slots),
         (XType::Record(xs), SType::Record(ts)) => {
             mixed(enums, xs.iter().map(|(_, x)| x).zip(ts.iter().map(|(_, t)| t)), slots)
         }
-        (XType::Option(x), SType::Option(t)) => ite(
-            slots[0].clone(),
-            bin(BinOp::Add, ci(1), rank_expr(enums, x, &slots[1..], t)),
-            ci(0),
-        ),
+        (XType::Option(x), SType::Option(t)) => option_rank(slots[0].clone(), rank_expr(enums, x, &slots[1..], t)),
         _ => ci(0),
     }
 }
 
 fn mixed<'s>(enums: &[EnumNames], parts: impl Iterator<Item = (&'s XType, &'s SType)>, slots: &[C]) -> C {
-    let mut r: Option<C> = None;
+    let mut ranks: Vec<(C, i64)> = Vec::new();
     let mut at = 0;
     for (x, t) in parts {
         let w = x.width(enums);
         let k = rank_expr(enums, x, &slots[at..at + w], t);
         at += w;
         let n = t.keys(enums).unwrap_or(1) as i64;
-        r = Some(match r {
-            None => k,
-            Some(prev) => bin(BinOp::Add, bin(BinOp::Mul, prev, ci(n)), k),
-        });
+        ranks.push((k, n));
     }
-    r.unwrap_or_else(|| ci(0))
+    mixed_rank_expr(&ranks)
 }
 
 /// 値が要素の型に属すれば、その番号。属さなければ -1。
@@ -1268,17 +1258,31 @@ impl<'a> Ctx<'a> {
                 let (tm, ms) = self.sub(&items[0], &at(0), sc, blk)?;
                 let (k, v) = self.map_types(&tm, &at(0))?;
                 let r = self.lookup_rank(&items[1], &at(1), sc, blk, &k)?;
-                let (present, values) = map_parts(enums, &k, &v, &ms);
-                let rows: Vec<Vec<C>> = present.iter().map(|p| vec![p.clone()]).collect();
-                let hit = and(
-                    bin(BinOp::Ge, r.clone(), ci(0)),
-                    select(&rows, &r, &[cb(false)]).pop().unwrap_or_else(|| cb(false)),
-                );
                 if key == "has_key" {
+                    let (present, _) = map_parts(enums, &k, &v, &ms);
+                    let rows: Vec<Vec<C>> = present.into_iter().map(|p| vec![p]).collect();
+                    let hit = and(
+                        bin(BinOp::Ge, r.clone(), ci(0)),
+                        select(&rows, &r, &[cb(false)]).pop().unwrap_or_else(|| cb(false)),
+                    );
                     return Ok((XType::Bool, vec![hit]));
                 }
-                blk.check(hit, FAIL_MISSING_KEY);
-                Ok((v.xtype(), select(&values, &r, &defaults(enums, &v))))
+                let rank_local = match r {
+                    C::Local(index) => index,
+                    _ => {
+                        let index = blk.depth();
+                        blk.bind(r);
+                        index
+                    }
+                };
+                let rows = k.keys(enums).unwrap_or(0) as usize;
+                let width = v.width(enums);
+                let fallback = defaults(enums, &v);
+                let Some((check, slots)) = select_flat_map_lookup(&ms, rows, width, rank_local, &fallback) else {
+                    return type_error(path, "Mapのスロット配置が型と一致しません");
+                };
+                blk.bind(check);
+                Ok((v.xtype(), slots))
             }
             "put" => {
                 let items = ops(3)?;
@@ -1409,24 +1413,17 @@ impl<'a> Ctx<'a> {
     ) -> Res<Vec<C>> {
         let r = self.element_rank(key, &format!("{path}[1]"), sc, blk, k)?;
         let x = self.element(value, &format!("{path}[2]"), sc, blk, v)?;
-        let (present, values) = map_parts(self.enums, k, v, ms);
-        let present = present
-            .into_iter()
-            .enumerate()
-            .map(|(i, p)| or(p, eq(r.clone(), ci(i as i64))))
-            .collect();
-        let values = values
-            .into_iter()
-            .enumerate()
-            .map(|(i, vs)| {
-                let hit = eq(r.clone(), ci(i as i64));
-                vs.into_iter()
-                    .zip(&x)
-                    .map(|(old, new)| ite(hit.clone(), new.clone(), old))
-                    .collect()
-            })
-            .collect();
-        Ok(map_join(present, values))
+        let rank_local = match blk.bind(r) {
+            C::Local(index) => index,
+            _ => return type_error(path, "Mapのrankを束縛できません"),
+        };
+        let rows = k.keys(self.enums).unwrap_or(0) as usize;
+        let width = v.width(self.enums);
+        let map_slots = ms.to_vec();
+        let Some(updated) = put_map_rows_exec(&map_slots, rows, width, rank_local, &x) else {
+            return type_error(path, "Mapのスロット配置が型と一致しません");
+        };
+        Ok(updated)
     }
 
     /// `forall` と `exists`。集合（Set の要素、Map のキー、List の要素）か、型の全体をたどる。

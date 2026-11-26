@@ -17,6 +17,7 @@
 
 use crate::model::{EnumNames, Model, Names};
 use crate::types::SType;
+use fmspec_core::map_encoding::encode_map_rows;
 use fmspec_core::model::Type;
 use serde_json::{json, Map, Value};
 
@@ -230,18 +231,11 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
                 encode(enums, val, &pair[1], &mut codes)?;
                 entries[r] = Some(codes);
             }
-            for e in entries {
-                match e {
-                    Some(codes) => {
-                        out.push(1);
-                        out.extend(codes);
-                    }
-                    None => {
-                        out.push(0);
-                        val.defaults(enums, out);
-                    }
-                }
-            }
+            let mut default = Vec::new();
+            val.defaults(enums, &mut default);
+            let flat =
+                encode_map_rows(&entries, &default).ok_or_else(|| "Mapの値スロット数が型と一致しません".to_string())?;
+            out.extend(flat);
         }
         SType::List(t, max) => {
             let items = v.as_array().ok_or_else(|| format!("配列が必要です（{v}）"))?;
