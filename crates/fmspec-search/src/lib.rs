@@ -7,6 +7,8 @@
 
 pub mod bfs;
 pub mod check;
+pub mod simulate;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
-pub use check::{check, check_evidence, Outcome, Status};
+pub use check::{check, check_evidence, sample, Outcome, Sampled, Status};
+pub use simulate::{simulate, SimOptions, SimResult, SimStats, PRNG_NAME};

@@ -1,11 +1,44 @@
 [workspace]
 resolver = "2"
-members = ["crates/fmspec-core", "crates/fmspec-ir", "crates/fmspec-search", "crates/fmspec-cli"]
+members = [
+    "crates/fmspec-core",
+    "crates/fmspec-ir",
+    "crates/fmspec-search",
+    "crates/fmspec-api",
+    "crates/fmspec-cli",
+    # Ruby の native extension と、その下のバインディング層（Makiri の Nupur の写し。rakelib/nupur.rake）。
+    "ext/fmspec",
+    "vendor/nupur",
+    "vendor/nupur/sys",
+]
+# Ruby のヘッダがなくてもビルドできる、エンジンのcrate。`cargo build` と `cargo test` の既定の対象。
+default-members = [
+    "crates/fmspec-core",
+    "crates/fmspec-ir",
+    "crates/fmspec-search",
+    "crates/fmspec-api",
+    "crates/fmspec-cli",
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+# Nupur が前提とするlintの設定（仕様書 §3.2）。Nupur の写しと拡張が `[lints] workspace = true` で使う。
+# panic は Ruby の内部エラーの例外になるが、頼まれていない内部エラーなので、新しく増やすときは理由を付けて allow する。
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(nupur_lint_probe)',
+    'cfg(nupur_sys_lint_probe)',
+    'cfg(nupur_no_unwind)',
+    'cfg(dylint_lib, values(any()))',
+] }
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
 
 # native extension は panic を例外に変換するので unwind にする（仕様書 §3.2）。
 [profile.dev]

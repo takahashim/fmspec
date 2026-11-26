@@ -1,5 +1,7 @@
 //! 仕様書 §17.1.1 の境界ケース。表の各行を独立したテストにする。
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 mod common;
 
 use common::*;

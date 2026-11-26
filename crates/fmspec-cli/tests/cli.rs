@@ -1,5 +1,7 @@
 //! コマンドの終了コードと出力（仕様書 §15）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 mod common;
 
 use common::*;
@@ -217,9 +219,54 @@ fn usage_errors() {
         vec!["check", "tickets.json", "--strategy", "dfs"],
         vec!["check", "tickets.json", "--bogus"],
         vec!["verify-certificate", "tickets.json"],
-        vec!["simulate", "tickets.json"],
+        vec!["simulate", "tickets.json", "--traces", "0"],
+        vec!["simulate", "tickets.json", "--max-states", "3"],
+        vec!["shrink", "tickets.json"],
     ] {
         let (code, body) = f.json(&args);
         assert_eq!((code, &body["status"]), (2, &json!("usage_error")), "{args:?}");
     }
+}
+
+#[test]
+fn simulate_samples_traces_reproducibly() {
+    let f = files();
+    let (code, body) = f.json(&[
+        "simulate",
+        "tickets.json",
+        "--traces",
+        "50",
+        "--max-steps",
+        "20",
+        "--seed",
+        "42",
+    ]);
+    assert_eq!((code, &body["status"]), (0, &json!("sampled")));
+    assert_eq!(body["simulation"]["completed_traces"], json!(50));
+    assert_eq!(body["simulation"]["steps"], json!(1000));
+    assert_eq!(body["simulation"]["prng"], json!("splitmix64"));
+
+    // guard のないモデルでは、どこかのトレースで違反か範囲外更新に行き当たる。
+    let run = |seed: &str| f.json(&["simulate", "noguard.json", "--seed", seed, "--trace-out", "sim.json"]);
+    let (code, first) = run("7");
+    assert!(code == 1 || code == 2, "{first}");
+    assert_eq!(first["trace"]["seed"], json!(7));
+    // 同じ seed なら同じトレース、違う seed なら（このモデルでは）違うトレースになる。
+    let (_, again) = run("7");
+    assert_eq!(first["trace"], again["trace"]);
+    assert!((0..20).any(|seed| run(&seed.to_string()).1["trace"]["steps"] != first["trace"]["steps"]));
+    // 見つけたトレースは、判定ゲートで再生できる。
+    run("7");
+    let (code, replayed) = f.json(&["replay", "noguard.json", "sim.json"]);
+    assert_eq!(
+        (code, &replayed["status"]),
+        (if first["status"] == "violated" { 1 } else { 2 }, &first["status"])
+    );
+
+    // 人間向けの表示では、網羅性の主張がないことを示す。
+    let (_, out, _) = f.run(&["simulate", "tickets.json", "--traces", "3", "--max-steps", "5"]);
+    assert_eq!(
+        out,
+        "Sampled: tickets（網羅性の主張なし）\n  シミュレーション: seed 0、トレース 3/3、ステップ数 15（splitmix64）\n"
+    );
 }

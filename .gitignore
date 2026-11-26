@@ -1,3 +1,5 @@
 /target/
 /spike/**/target/
 /tmp/
+/lib/fmspec/*.bundle
+/lib/fmspec/*.so

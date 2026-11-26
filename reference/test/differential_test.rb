@@ -94,9 +94,27 @@ class DifferentialTest < Minitest::Test
       expected, path, cert = compare(ir, "seed #{seed}", **options)
       statuses[expected["status"]] += 1
       compare_certificates(ir, expected, path, cert, rng, options) if expected["status"] == "verified"
+      compare_simulation(ir, path, rng, options.except(:max_states))
     end
     # 生成器が片寄って、どれかの結果をまったく試していない、ということがないようにする。
     %w[verified violated error].each { |s| assert_operator statuses[s], :>, COUNT / 30, "結果の分布: #{statuses}" }
+  end
+
+  # 同じ seed のシミュレーションが、同じトレースをたどることを確かめる。
+  def compare_simulation(ir, path, rng, options)
+    sim = { seed: rng.rand(2**64), traces: rng.rand(1..8), max_steps: rng.rand(0..12) }
+    expected = reference(ir).simulate(**sim, **options)
+    actual, code = cli("simulate", path, "--seed", sim[:seed].to_s, "--traces", sim[:traces].to_s,
+                       "--max-steps", sim[:max_steps].to_s, *flags(**options))
+    context = -> { "#{JSON.generate(ir)}\noptions: #{options} #{sim}\nreference: #{expected}\nengine: #{actual}" }
+    assert_equal expected["status"], actual["status"], context
+    assert_equal({ "sampled" => 0, "violated" => 1, "error" => 2 }.fetch(expected["status"]), code, context)
+    assert_equal expected["completed_traces"], actual["simulation"]["completed_traces"], context
+    assert_equal expected["total_steps"], actual["simulation"]["steps"], context
+    return if expected["status"] == "sampled"
+
+    assert_equal expected["property"], actual["property"].except("source"), context
+    assert_equal expected["steps"], actual["trace"]["steps"], context
   end
 
   # 証明書を崩して、受理・拒否とその理由を比べる。

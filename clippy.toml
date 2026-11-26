@@ -1,0 +1,3 @@
+# Nupur の `rb::Error` はメッセージをインラインで持つ（256バイト）ので、
+# `Result<_, Error>` は clippy の result_large_err の既定値を超える（vendor/nupur/README.ja.md）。
+large-error-threshold = 288

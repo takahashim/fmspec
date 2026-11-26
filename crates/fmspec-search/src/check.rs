@@ -1,6 +1,7 @@
 //! モデル検査の経路。探索器で証拠を生成し、判定ゲートを通してから結果を返す（仕様書 §3.1、§8.3）。
 
 use crate::bfs::{bfs, BfsOptions, Stats};
+use crate::simulate::{simulate, SimOptions, SimStats};
 use fmspec_core::evidence::{Evidence, Limit, Reject};
 use fmspec_core::gate::{decide, CheckedModel, Verdict, VerdictKind};
 use fmspec_core::semantics::Conditions;
@@ -67,4 +68,28 @@ pub fn check(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Outc
     let mut outcome = check_evidence(model, cond, found.evidence, found.stats);
     outcome.search_time = search_time;
     outcome
+}
+
+/// シミュレーションの結果。
+pub struct Sampled {
+    /// 違反または評価エラーを見つけた場合は、判定ゲートを通した結果。
+    /// 見つからなければ `None`。指定したサンプルの検査を完了しただけで、網羅性の主張はない。
+    pub found: Option<Outcome>,
+    pub stats: SimStats,
+}
+
+/// ランダムシミュレーションでモデルを検査する。違反や評価エラーは、判定ゲートを通してから返す。
+pub fn sample(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> Sampled {
+    let started = Instant::now();
+    let result = simulate(model, cond, opts);
+    let search_time = started.elapsed();
+    let found = result.evidence.map(|evidence| {
+        let mut outcome = check_evidence(model, cond, evidence, Stats::default());
+        outcome.search_time = search_time;
+        outcome
+    });
+    Sampled {
+        found,
+        stats: result.stats,
+    }
 }

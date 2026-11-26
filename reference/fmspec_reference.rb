@@ -384,6 +384,86 @@ module FmspecReference
         "certificate" => states.map { |s| s.map { |v| json_value(v) } } }
     end
 
+    # ---- ランダムシミュレーション（仕様書 §9）----
+
+    # SplitMix64。エンジンと同じ乱数列を作る。
+    class SplitMix64
+      MASK = 2**64 - 1
+
+      def initialize(seed)
+        @state = seed
+      end
+
+      def next
+        @state = (@state + 0x9E3779B97F4A7C15) & MASK
+        z = @state
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
+        z ^ (z >> 31)
+      end
+
+      # 0...n の一様な整数。剰余の偏りは、棄却して取り除く。
+      def below(n)
+        threshold = (2**64) % n
+        loop do
+          x = self.next
+          return x % n if x >= threshold
+        end
+      end
+    end
+
+    def simulate(seed: 0, traces: 100, max_steps: 100, **options)
+      cond = conditions(**options)
+      rng = SplitMix64.new(seed)
+      completed = 0
+      total = 0
+      found = lambda do |prop, steps|
+        { "status" => prop.key?("violation") ? "violated" : "error", "property" => prop, "steps" => steps,
+          "completed_traces" => completed, "total_steps" => total }
+      end
+      traces.times do
+        state = initial
+        steps = []
+        if (bad = failing_invariant(state, cond))
+          return found.call(property("invariant", *bad), steps)
+        end
+        max_steps.times do
+          enabled = []
+          @actions.each do |action|
+            next unless cond[:actions].include?(action["name"])
+
+            begin
+              transitions(action, state).each { |t| enabled << [action, t] }
+            rescue StepError => e
+              return found.call(e.property, steps)
+            end
+          end
+          if enabled.empty?
+            if cond[:deadlock]
+              begin
+                return found.call({ "violation" => "deadlock" }, steps) unless terminal?(state)
+              rescue EvalError => e
+                return found.call({ "error" => e.detail, "site" => "terminal" }, steps)
+              end
+            end
+            break
+          end
+          action, transition = enabled[rng.below(enabled.length)]
+          total += 1
+          steps += [json_step(action, transition)]
+          if (bad = failing_contract(action, state, transition, cond))
+            return found.call(property("contract", *bad), steps)
+          end
+          state = transition["state"]
+          if (bad = failing_invariant(state, cond))
+            return found.call(property("invariant", *bad), steps)
+          end
+        end
+        completed += 1
+      end
+      { "status" => "sampled", "completed_traces" => completed, "total_steps" => total }
+    end
+
     # ---- 証明書の検査（仕様書 §14.2）----
 
     # 証明書（状態の配列）を検査する。受理なら nil、拒否なら理由の名前を返す。

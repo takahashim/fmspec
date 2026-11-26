@@ -3,6 +3,8 @@
 //! 探索器は証明の対象外なので、訪問状態、最短性、上限の扱いをここで検査する。
 //! 比較の相手は、辺の一覧を直接たどる独立した全列挙である。
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use fmspec_core::evidence::{Claim, Evidence, Limit};
 use fmspec_core::gate::{validate, CheckedModel};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
@@ -251,14 +253,13 @@ fn violations_in_the_initial_state_midway_on_an_edge_and_deadlocks_are_distingui
 
 #[test]
 fn an_interrupt_request_stops_the_search() {
-    let flag = std::sync::atomic::AtomicBool::new(true);
     let m = graph(3, &[(0, 1), (1, 2)], &[]);
     let o = check(
         &m,
         &conditions(&m, false),
         &BfsOptions {
             max_states: None,
-            interrupt: Some(&flag),
+            interrupt: Some(&|| true),
         },
     );
     assert_eq!(o.status, Status::Inconclusive(Limit::Interrupted));

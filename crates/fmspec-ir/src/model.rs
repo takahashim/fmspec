@@ -189,12 +189,21 @@ struct Scope<'a> {
     n_params: usize,
 }
 
+/// キーを1つだけ持つオブジェクトの、そのキーと値。
+fn single<'a>(map: &'a Map<String, Value>, path: &str, message: &str) -> Res<(&'a String, &'a Value)> {
+    match (map.iter().next(), map.len()) {
+        (Some(entry), 1) => Ok(entry),
+        _ => schema(path, message),
+    }
+}
+
 fn parse_type(v: &Value, path: &str, enums: &[EnumNames]) -> Res<Type> {
     let map = object(v, path, &["bool", "int", "enum"])?;
-    if map.len() != 1 {
-        return schema(path, "型は bool、int、enum のいずれか1つのキーを持つオブジェクトです");
-    }
-    let (key, body) = map.iter().next().unwrap();
+    let (key, body) = single(
+        map,
+        path,
+        "型は bool、int、enum のいずれか1つのキーを持つオブジェクトです",
+    )?;
     let path = format!("{path}.{key}");
     match key.as_str() {
         "bool" => {
@@ -253,32 +262,33 @@ fn operands<'a>(body: &'a Value, path: &str, n: usize) -> Res<&'a Vec<Value>> {
 
 /// n項の `all` / `any` を二項の式の木にたたむ。評価順と打ち切りは、記述順の評価と一致する。
 fn fold(mut items: Vec<Expr>, make: fn(Box<Expr>, Box<Expr>) -> Expr, unit: bool) -> Expr {
-    match items.len() {
-        0 => Expr::Const(CoreValue::Bool(unit)),
-        1 => make(
-            Box::new(items.pop().unwrap()),
-            Box::new(Expr::Const(CoreValue::Bool(unit))),
-        ),
-        2 => {
-            let b = items.pop().unwrap();
-            let a = items.pop().unwrap();
-            make(Box::new(a), Box::new(b))
-        }
-        n => {
-            let right = items.split_off(n / 2);
-            make(Box::new(fold(items, make, unit)), Box::new(fold(right, make, unit)))
-        }
+    let n = items.len();
+    if n > 2 {
+        let right = items.split_off(n / 2);
+        return make(Box::new(fold(items, make, unit)), Box::new(fold(right, make, unit)));
     }
+    let neutral = || Expr::Const(CoreValue::Bool(unit));
+    let mut items = items.into_iter();
+    match (items.next(), items.next()) {
+        (None, _) => neutral(),
+        (Some(a), None) => make(Box::new(a), Box::new(neutral())),
+        (Some(a), Some(b)) => make(Box::new(a), Box::new(b)),
+    }
+}
+
+/// ちょうど `N` 個のオペランド。
+fn exactly<const N: usize>(items: Vec<Expr>, path: &str) -> Res<[Box<Expr>; N]> {
+    let boxed: Vec<Box<Expr>> = items.into_iter().map(Box::new).collect();
+    boxed
+        .try_into()
+        .or_else(|_| schema(path, format!("オペランドは{N}個必要です")))
 }
 
 fn parse_expr(v: &Value, path: &str, scope: &Scope) -> Res<Expr> {
     let Some(map) = v.as_object() else {
         return schema(path, "式はオブジェクトです");
     };
-    if map.len() != 1 {
-        return schema(path, "式は演算子を表すキーを1つだけ持つオブジェクトです");
-    }
-    let (key, body) = map.iter().next().unwrap();
+    let (key, body) = single(map, path, "式は演算子を表すキーを1つだけ持つオブジェクトです")?;
     let path = format!("{path}.{key}");
     if let Some(lit) = parse_literal(key, body, &path, scope.enums)? {
         return Ok(Expr::Const(lit));
@@ -322,23 +332,18 @@ fn parse_expr(v: &Value, path: &str, scope: &Scope) -> Res<Expr> {
         "eq" => bin(BinOp::Eq),
         "ne" => bin(BinOp::Ne),
         "not" => {
-            let mut items = list(Some(1))?;
-            Ok(Expr::Not(Box::new(items.pop().unwrap())))
+            let [a] = exactly(list(Some(1))?, &path)?;
+            Ok(Expr::Not(a))
         }
         "all" => Ok(fold(list(None)?, Expr::And, true)),
         "any" => Ok(fold(list(None)?, Expr::Or, false)),
         "implies" => {
-            let mut items = list(Some(2))?;
-            let q = items.pop().unwrap();
-            let p = items.pop().unwrap();
-            Ok(Expr::Implies(Box::new(p), Box::new(q)))
+            let [p, q] = exactly(list(Some(2))?, &path)?;
+            Ok(Expr::Implies(p, q))
         }
         "ite" => {
-            let mut items = list(Some(3))?;
-            let b = items.pop().unwrap();
-            let a = items.pop().unwrap();
-            let c = items.pop().unwrap();
-            Ok(Expr::Ite(Box::new(c), Box::new(a), Box::new(b)))
+            let [c, a, b] = exactly(list(Some(3))?, &path)?;
+            Ok(Expr::Ite(c, a, b))
         }
         _ => schema(&path, format!("未知の演算子 {key:?}")),
     }
@@ -347,11 +352,11 @@ fn parse_expr(v: &Value, path: &str, scope: &Scope) -> Res<Expr> {
 /// 初期値のリテラルを、宣言した型の符号に変換する。
 fn parse_initial(v: &Value, path: &str, ty: &Type, enums: &[EnumNames]) -> Res<i64> {
     let map = object(v, path, &["int", "bool", "enum"])?;
-    if map.len() != 1 {
-        return schema(path, "初期値は int、bool、enum のいずれかのリテラルです");
-    }
-    let (key, body) = map.iter().next().unwrap();
-    let lit = parse_literal(key, body, &format!("{path}.{key}"), enums)?.unwrap();
+    let message = "初期値は int、bool、enum のいずれかのリテラルです";
+    let (key, body) = single(map, path, message)?;
+    let Some(lit) = parse_literal(key, body, &format!("{path}.{key}"), enums)? else {
+        return schema(path, message);
+    };
     match (ty, lit) {
         (Type::Bool, CoreValue::Bool(b)) => Ok(i64::from(b)),
         (Type::Int(_, _), CoreValue::Int(x)) => Ok(x),

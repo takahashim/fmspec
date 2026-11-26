@@ -9,3 +9,6 @@ publish.workspace = true
 fmspec-core = { path = "../fmspec-core" }
 serde_json = "1"
 sha2 = "0.10"
+
+[lints]
+workspace = true

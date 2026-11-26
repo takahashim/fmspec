@@ -7,3 +7,6 @@ publish.workspace = true
 
 [dependencies]
 fmspec-core = { path = "../fmspec-core" }
+
+[lints]
+workspace = true

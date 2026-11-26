@@ -1,5 +1,6 @@
 //! テスト用のモデルと補助関数。
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(dead_code)]
 
 use fmspec_core::evidence::{Claim, Evidence, TraceStep};

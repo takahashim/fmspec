@@ -1,5 +1,7 @@
 //! IRの読み込み。未知のバージョン・演算子、未定義参照、型不整合、重複定義を拒否する（仕様書 §6）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, TraceStep};
 use fmspec_core::step::Site;

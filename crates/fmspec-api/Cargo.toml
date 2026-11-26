@@ -1,0 +1,15 @@
+[package]
+name = "fmspec-api"
+description = "fmspec のJSONレベルのAPI。CLIとnative extensionが共有する"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fmspec-core = { path = "../fmspec-core" }
+fmspec-ir = { path = "../fmspec-ir" }
+fmspec-search = { path = "../fmspec-search" }
+serde_json = "1"
+
+[lints]
+workspace = true

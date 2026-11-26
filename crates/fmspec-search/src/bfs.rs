@@ -9,14 +9,13 @@ use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
 pub struct BfsOptions<'a> {
     /// 保持する異なる状態の数の上限。初期状態を含む。
     pub max_states: Option<usize>,
-    /// 中断要求。立っていれば探索を打ち切る。
-    pub interrupt: Option<&'a AtomicBool>,
+    /// 中断要求の問い合わせ。真を返したら探索を打ち切る。
+    pub interrupt: Option<&'a dyn Fn() -> bool>,
 }
 
 /// 探索器の報告。検査済みの値ではない（仕様書 §14.1.1）。
@@ -96,7 +95,7 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
 
     let mut queue: VecDeque<usize> = VecDeque::from([0]);
     while let Some(cur) = queue.pop_front() {
-        if opts.interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        if opts.interrupt.is_some_and(|requested| requested()) {
             return finish(Evidence::Unavailable(Limit::Interrupted), stats);
         }
         let state = nodes[cur].state.clone();
