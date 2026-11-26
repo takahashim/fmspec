@@ -132,7 +132,8 @@ module Fmspec
                    end
         label = field == "output" ? "return value" : field
         many = expected.length > 1 ? "one of " : ""
-        ["  expected #{label}: #{many}#{expected.map(&:inspect).join(', ')}", "  observed #{label}: #{observed.inspect}"]
+        shown = Types.unrepresentable?(observed) ? observed["unrepresentable"] : observed.inspect
+        ["  expected #{label}: #{many}#{expected.map(&:inspect).join(', ')}", "  observed #{label}: #{shown}"]
       end
     end
 
@@ -164,10 +165,16 @@ module Fmspec
       @native = native
       @binding = binding
       @options = options
-      # 操作ごとの、列挙型の引数と内部選択の名前。command には、ラベルを Symbol で渡す。
-      @enum_args = model.to_ir["actions"].to_h do |action|
+      # 型。エンジンとやりとりするJSONの値と、command と observe の Ruby の値を、型に従って変換する。
+      ir = model.to_ir
+      enums = (ir["enums"] || []).to_h { |e| [e["name"], Types::Enum.new(e["name"].to_sym, e["variants"].map(&:to_sym))] }
+      @state_types = ir["states"].to_h { |s| [s["name"].to_sym, Types.from_ir(s["type"], enums)] }
+      @arg_types = ir["actions"].to_h do |action|
         bindings = action["params"] + action["choices"]
-        [action["name"].to_sym, bindings.select { |b| b["type"].key?("enum") }.map { |b| b["name"].to_sym }]
+        [action["name"].to_sym, bindings.to_h { |b| [b["name"].to_sym, Types.from_ir(b["type"], enums)] }]
+      end
+      @output_types = ir["actions"].to_h do |action|
+        [action["name"].to_sym, action["output"] && Types.from_ir(action["output"]["type"], enums)]
       end
     end
 
@@ -178,7 +185,7 @@ module Fmspec
 
         answer = ask(session.next_input)
         case answer["status"]
-        when "input" then normalize(answer["action"], answer["args"].merge(answer["choices"]))
+        when "input" then decode(answer["action"], answer["args"].merge(answer["choices"]))
         when "end" then nil
         else throw :finished, outcome(answer["status"].to_sym, steps, answer)
         end
@@ -203,12 +210,23 @@ module Fmspec
 
     private
 
-    # 入力を [操作名, キーワード引数] にそろえる。列挙型の値は Symbol にする。
+    # エンジンが選んだ入力（JSON）を、[操作名, キーワード引数] にする。値は型に従って Ruby の値にする。
+    def decode(action, args)
+      action = action.to_sym
+      types = arg_types(action)
+      [action, args.to_h { |name, value| [name.to_sym, types.fetch(name.to_sym).from_wire(value)] }]
+    end
+
+    # 記録した入力を、[操作名, キーワード引数] にそろえる。列挙型のラベルは Symbol にする。
     def normalize(action, args)
       action = action.to_sym
-      enums = @enum_args.fetch(action) { raise ArgumentError, "未定義の操作 #{action}" }
-      [action, (args || {}).to_h { |name, value| [name.to_sym, enums.include?(name.to_sym) ? value.to_sym : value] }]
+      types = arg_types(action)
+      [action, (args || {}).to_h do |name, value|
+        [name.to_sym, types[name.to_sym].is_a?(Types::Enum) && value.is_a?(String) ? value.to_sym : value]
+      end]
     end
+
+    def arg_types(action) = @arg_types.fetch(action) { raise ArgumentError, "未定義の操作 #{action}" }
 
     def run(seed, &next_input)
       context = begin
@@ -254,7 +272,7 @@ module Fmspec
         steps << TestResult::Step.new(action, args, output, nil)
         observation = observe(context, steps)
         steps.last.observation = observation
-        report = wire_input(action, args).merge("output" => wire_value(output), "observation" => wire(observation))
+        report = wire_input(action, args).merge("output" => wire_output(action, output), "observation" => wire(observation))
         answer = ask(session.observe(JSON.generate(report)))
         return outcome(answer["status"].to_sym, steps, answer) unless answer["status"] == "continue"
       end
@@ -282,21 +300,22 @@ module Fmspec
     # 入力を、公開引数（args）と注入する選択（choices）に分ける。
     def wire_input(action, args)
       injected = @binding.commands.fetch(action).inject
+      types = arg_types(action)
       choices, params = args.partition { |name, _| injected.include?(name) }.map(&:to_h)
-      { "action" => action, "args" => params.transform_values { |v| wire_value(v) },
-        "choices" => choices.transform_values { |v| wire_value(v) } }
+      wire_args = ->(h) { h.to_h { |name, v| [name, types[name] ? types[name].to_wire(v) : Types.unrepresentable(v)] } }
+      { "action" => action, "args" => wire_args.(params), "choices" => wire_args.(choices) }
     end
 
-    def wire(observation) = observation.to_h { |name, value| [name.to_s, wire_value(value)] }
+    # 実装から得た値を、型に従ってエンジンに渡せる形にする。
+    # 仕様の値にならないものは、どの値とも一致しないJSONにするので、不適合として報告される。
+    def wire(observation)
+      observation.to_h { |name, value| [name.to_s, @state_types.fetch(name).to_wire(value)] }
+    end
 
-    # 実装から得た値を、エンジンに渡せる形にする。仕様の値にならないものは nil にする。
-    # nil は仕様のどの値とも一致しないので、不適合として報告される。
-    def wire_value(value)
-      case value
-      when Integer then value.between?(I64_MIN, I64_MAX) ? value : nil
-      when true, false, String then value
-      when Symbol then value.to_s
-      end
+    # 出力を宣言しない操作の戻り値は比べないので、何を渡してもよい。
+    def wire_output(action, output)
+      type = @output_types.fetch(action)
+      type ? type.to_wire(output) : nil
     end
   end
 

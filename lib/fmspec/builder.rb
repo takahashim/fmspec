@@ -52,15 +52,22 @@ module Fmspec
     # ---- 宣言 ----
 
     # 状態変数。`state :sold, int(0..4), initial: 0`。
+    # 複合型の初期値は Ruby の値で書く（`initial: Set[]`、`initial: { x: 0, y: 0 }`、`initial: nil`）。
     def state(name, type, initial:)
       claim(name, "状態変数")
       type = Types.coerce(type, "状態変数 #{name}")
-      value = type.literal(initial)
-      if type.is_a?(Types::Int) && !value.between?(type.min, type.max)
-        raise BuildError, "状態変数 #{name} の初期値 #{value} が #{type} の範囲外です"
-      end
+      initial_node = if Types.scalar?(type.kind)
+                       value = type.literal(initial)
+                       if type.is_a?(Types::Int) && !value.between?(type.min, type.max)
+                         raise BuildError, "状態変数 #{name} の初期値 #{value} が #{type} の範囲外です"
+                       end
 
-      @states << { name: name.to_sym, type: type, initial: value, source: source_of(caller_locations(1, 1)) }
+                       Expr.lift(value, type.kind).node
+                     else
+                       type.check!(initial, "状態変数 #{name} の初期値")
+                       Expr.lift(initial, type.kind, enums: declared_enums).node
+                     end
+      @states << { name: name.to_sym, type: type, initial: initial_node, source: source_of(caller_locations(1, 1)) }
       nil
     end
 
@@ -73,9 +80,17 @@ module Fmspec
     end
 
     # 定数。記号的な状態から、状態変数と同じように名前で参照できる。
-    def constant(name, value)
+    # 複合型の値は、型を添えて書く（`constant :menu, set_of(item), Set[:apple, :bread]`）。
+    def constant(name, *args)
       claim(name, "定数")
-      @constants[name.to_sym] = Expr.lift(value, enums: declared_enums)
+      case args.length
+      when 1 then @constants[name.to_sym] = Expr.lift(args[0], enums: declared_enums)
+      when 2
+        type = Types.coerce(args[0], "定数 #{name}")
+        type.check!(args[1], "定数 #{name} の値")
+        @constants[name.to_sym] = Expr.lift(args[1], type.kind, enums: declared_enums)
+      else raise BuildError, "constant は constant(名前, 値) か constant(名前, 型, 値) と書きます"
+      end
       nil
     end
 
@@ -148,7 +163,7 @@ module Fmspec
         "enums" => @enums.values.map { |e| { "name" => e.name.to_s, "variants" => e.labels.map(&:to_s) } },
         "states" => @states.each_with_index.map do |s, i|
           { "id" => i, "name" => s[:name].to_s, "type" => s[:type].to_ir,
-            "initial" => Expr.lift(s[:initial], s[:type].kind).node, "source" => s[:source] }
+            "initial" => s[:initial], "source" => s[:source] }
         end,
         "actions" => @actions,
         "invariants" => @invariants,
@@ -262,7 +277,12 @@ module Fmspec
 
       type &&= Types.coerce(type, "操作 #{@name} の出力")
       expr = lift(value, type&.kind)
+      unless Types.scalar?(type ? type.kind : expr.kind)
+        raise BuildError, "操作 #{@name}: 出力の型は bool、int、enum に限ります（#{Types.kind_name(type ? type.kind : expr.kind)}）"
+      end
+
       type ||= output_type(expr)
+
       @branch.output = [expr.expect(type.kind, "操作 #{@name} の出力"), type]
       nil
     end
