@@ -9,10 +9,11 @@
 //! Recordのフィールドの名前は、モデル全体で共有する [`Fields`] で番号にする。
 
 use crate::json::{array, index, int, object, operands, required, schema, single, string};
-use crate::lower::{parse_type, type_error, type_name, Ctx, Error, Res};
+use crate::lower::{const_values, parse_type, type_error, type_name, Ctx, Error, Res};
 use crate::types::{SType, XType, MAX_KEYS};
 use fmspec_core::encoding::{SType as CS, XType as CX};
 use fmspec_core::infer::Scope;
+use fmspec_core::lowering::{Constant as CConstant, Layout as CLayout, LowerCtx};
 use fmspec_core::model::{BinOp, Value as CV};
 use fmspec_core::source::{Item, Over, SetOp, TExpr};
 use serde_json::Value;
@@ -105,6 +106,30 @@ impl<'c, 'a> Resolver<'c, 'a> {
 
     pub(crate) fn fields(&self) -> &Fields {
         &self.fields
+    }
+
+    /// 中核の下ろしの文脈。
+    pub(crate) fn lower_ctx(&self) -> LowerCtx {
+        let f = &self.fields;
+        let layout = |l: &crate::lower::Layout| CLayout {
+            ty: f.stype(&l.ty),
+            offset: l.offset,
+        };
+        LowerCtx {
+            enums: self.enums.iter().map(|e| e.variants.len() as i64).collect(),
+            states: self.states.map(|ls| ls.iter().map(layout).collect()),
+            args: self.args.iter().map(layout).collect(),
+            next: self.next,
+            out: self.output.map(|t| f.stype(t)),
+            consts: self
+                .constants
+                .iter()
+                .map(|c| CConstant {
+                    ty: f.stype(&c.ty),
+                    slots: const_values(self.enums, &c.ty, &c.codes),
+                })
+                .collect(),
+        }
     }
 
     /// 中核の型検査の文脈。
@@ -642,13 +667,13 @@ fn same_x(a: &CX, b: &CX) -> bool {
 
 /// 下ろしと名前解決の結果を突き合わせる。名前解決の構文木は、中核の型検査器に型 `t` を認められなければならない。
 /// 下ろしが誤りを返したなら、名前解決も同じ誤りを返さなければならない。
-pub(crate) fn agree<T>(lowered: Res<T>, resolved: Res<(XType, TExpr)>, r: &Resolver, path: &str) -> Res<T> {
+pub(crate) fn agree<T>(lowered: Res<T>, resolved: Res<(XType, TExpr)>, r: &Resolver, path: &str) -> Res<(T, TExpr)> {
     let internal = |m: String| Err(Error::Type(format!("{path}: 内部エラー: {m}")));
     match (lowered, resolved) {
         (Ok(x), Ok((t, e))) => {
             let want = r.fields().xtype(&t);
             match fmspec_core::infer::check(&e, &r.scope(), &mut Vec::new()) {
-                Some(got) if same_x(&got, &want) => Ok(x),
+                Some(got) if same_x(&got, &want) => Ok((x, e)),
                 Some(_) => internal("中核の型検査器の型が名前解決の型と異なります".to_string()),
                 None => internal("中核の型検査器が名前解決の構文木を受理しません".to_string()),
             }

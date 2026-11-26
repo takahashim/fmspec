@@ -9,11 +9,10 @@
 //! 型が付く式を拒否しないことは証明していない（拒否はモデルの読み込みの誤りになるので、テストで検査する）。
 
 use crate::encoding::STy;
-use crate::encoding::{
-    copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, to_xtype, wf_stype_exec, xtype_eq, SType, XType,
-};
+use crate::encoding::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys, lemma_stys, lemma_xtys, sty, stys, to_xty, wf_stype, xty, xtys, XTy};
+use crate::encoding::{wf_stype_exec, xtype_eq, SType, XType};
 use crate::model::{BinOp, Value};
 use crate::source::{Item, Over, SetOp, TExpr};
 use vstd::prelude::*;

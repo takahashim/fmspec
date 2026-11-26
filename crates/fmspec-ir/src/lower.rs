@@ -411,12 +411,14 @@ fn defaults(enums: &[EnumNames], st: &SType) -> Vec<C> {
 
 /// 値の符号のスロット。
 fn consts(enums: &[EnumNames], st: &SType, codes: &[i64]) -> Vec<C> {
+    const_values(enums, st, codes).into_iter().map(C::Const).collect()
+}
+
+/// 値の符号の、スロットごとの中核の値。
+pub(crate) fn const_values(enums: &[EnumNames], st: &SType, codes: &[i64]) -> Vec<CV> {
     let mut tys = Vec::new();
     st.slot_types(enums, &mut tys);
-    tys.iter()
-        .zip(codes)
-        .map(|(t, x)| C::Const(core_value(t, *x)))
-        .collect()
+    tys.iter().zip(codes).map(|(t, x)| core_value(t, *x)).collect()
 }
 
 /// 添字 `idx`（`0..rows.len()` に収まる）の行を選ぶ。二分木の `ite` にする。
@@ -693,6 +695,15 @@ fn quant_ranges(enums: &[EnumNames], st: &SType) -> Vec<(Type, i64, i64)> {
 
 // ---- 下ろし ----
 
+/// 旧来の下ろしの出力 `old` と、中核の下ろしの出力 `new` が一致することを確かめる。
+fn same_lowering(old: Vec<C>, new: Option<Vec<C>>, path: &str) -> Res<Vec<C>> {
+    match new {
+        Some(xs) if xs == old => Ok(old),
+        Some(_) => type_error(path, "内部エラー: 中核の下ろしの出力が旧来の下ろしと異なります"),
+        None => type_error(path, "内部エラー: 中核の下ろしが式を受理しません"),
+    }
+}
+
 impl<'a> Ctx<'a> {
     pub(crate) fn expect(&self, path: &str, t: &XType, want: &XType) -> Res<()> {
         if t != want {
@@ -745,7 +756,9 @@ impl<'a> Ctx<'a> {
     pub(crate) fn prop(&self, v: &Value, path: &str) -> Res<C> {
         let r = Resolver::new(self);
         let resolved = r.prop(v, path).map(|e| (XType::Bool, e));
-        agree(self.bool_in(v, path, &[], 0), resolved, &r, path)
+        let (old, e) = agree(self.bool_in(v, path, &[], 0), resolved, &r, path)?;
+        let new = fmspec_core::lowering::lower_prop(&e, &r.lower_ctx());
+        same_lowering(vec![old], new.map(|x| vec![x]), path).map(|mut xs| xs.remove(0))
     }
 
     fn bool_in(&self, v: &Value, path: &str, sc: &[Bound], depth: usize) -> Res<C> {
@@ -758,7 +771,9 @@ impl<'a> Ctx<'a> {
     pub(crate) fn stored(&self, v: &Value, path: &str, st: &SType, depth: usize) -> Res<Vec<C>> {
         let r = Resolver::new(self);
         let resolved = r.stored(v, path, st);
-        agree(self.stored_slots(v, path, st, depth), resolved, &r, path)
+        let (old, e) = agree(self.stored_slots(v, path, st, depth), resolved, &r, path)?;
+        let new = fmspec_core::lowering::lower_stored(&e, &r.lower_ctx(), &r.fields().stype(st), depth);
+        same_lowering(old, new, path)
     }
 
     fn stored_slots(&self, v: &Value, path: &str, st: &SType, depth: usize) -> Res<Vec<C>> {

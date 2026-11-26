@@ -1270,7 +1270,7 @@ fn copy_xtypes(_parent: &XType, ts: &Vec<XType>) -> (r: Vec<XType>)
     out
 }
 
-fn usizes_eq(a: &Vec<usize>, b: &Vec<usize>) -> (r: bool)
+pub fn usizes_eq(a: &Vec<usize>, b: &Vec<usize>) -> (r: bool)
     ensures
         r ==> a@ == b@,
 {

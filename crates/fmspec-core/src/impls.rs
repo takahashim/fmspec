@@ -16,6 +16,53 @@ impl Clone for Expr {
     }
 }
 
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        use Expr::*;
+        match (self, other) {
+            (Const(a), Const(b)) => a == b,
+            (Var(a), Var(b)) | (Arg(a), Arg(b)) | (Next(a), Next(b)) | (Local(a), Local(b)) => a == b,
+            (Out, Out) => true,
+            (Bin(o, a, b), Bin(p, c, d)) => o == p && a == c && b == d,
+            (Not(a), Not(b)) | (Code(a), Code(b)) => a == b,
+            (And(a, b), And(c, d)) | (Or(a, b), Or(c, d)) | (Implies(a, b), Implies(c, d)) | (Let(a, b), Let(c, d)) => {
+                a == c && b == d
+            }
+            (Ite(a, b, c), Ite(d, e, f)) => a == d && b == e && c == f,
+            (Forall(t, l, h, a), Forall(u, m, i, b)) | (Exists(t, l, h, a), Exists(u, m, i, b)) => {
+                t == u && l == m && h == i && a == b
+            }
+            (Fail(t, k), Fail(u, l)) => t == u && k == l,
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Expr::*;
+        match self {
+            Const(v) => write!(f, "Const({v:?})"),
+            Var(i) => write!(f, "Var({i})"),
+            Arg(i) => write!(f, "Arg({i})"),
+            Next(i) => write!(f, "Next({i})"),
+            Out => write!(f, "Out"),
+            Bin(o, a, b) => write!(f, "Bin({o:?}, {a:?}, {b:?})"),
+            Not(a) => write!(f, "Not({a:?})"),
+            And(a, b) => write!(f, "And({a:?}, {b:?})"),
+            Or(a, b) => write!(f, "Or({a:?}, {b:?})"),
+            Implies(a, b) => write!(f, "Implies({a:?}, {b:?})"),
+            Ite(c, a, b) => write!(f, "Ite({c:?}, {a:?}, {b:?})"),
+            Local(i) => write!(f, "Local({i})"),
+            Let(a, b) => write!(f, "Let({a:?}, {b:?})"),
+            Forall(t, l, h, a) => write!(f, "Forall({t:?}, {l}, {h}, {a:?})"),
+            Exists(t, l, h, a) => write!(f, "Exists({t:?}, {l}, {h}, {a:?})"),
+            Code(a) => write!(f, "Code({a:?})"),
+            Fail(t, k) => write!(f, "Fail({t:?}, {k})"),
+        }
+    }
+}
+
 impl Clone for Update {
     fn clone(&self) -> Self {
         Update {

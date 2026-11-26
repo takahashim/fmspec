@@ -19,3 +19,4 @@ unexpected_cfgs = { level = "allow", check-cfg = ['cfg(verus_keep_ghost)'] }
 style = { level = "allow", priority = -1 }
 complexity = { level = "allow", priority = -1 }
 ptr_arg = "allow"
+vec_init_then_push = "allow"
