@@ -390,7 +390,7 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
     for l in &args {
         let slots: Vec<Expr> = (l.offset..l.offset + l.ty.width(enums)).map(Expr::Arg).collect();
         let core = crate::resolve::Resolver::new(&ctx);
-        let Some(c) = fmspec_core::slots::canonical(&core.fields().stype(&l.ty), &slots, &core.lower_ctx().enums)
+        let Some(c) = fmspec_core::canon::canonical(&core.fields().stype(&l.ty), &slots, &core.lower_ctx().enums)
         else {
             return schema(path, "内部エラー: 中核が引数の型の正規形を扱えません");
         };

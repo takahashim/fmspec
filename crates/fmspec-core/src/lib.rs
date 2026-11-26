@@ -9,6 +9,7 @@
 //! - [`source`]：IRの式の型付き構文木と、値の上の意味論（仕様）
 //! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
 //! - [`slots`]：下ろしで使う、スロットの式の組み立て
+//! - [`canon`]：スロットの型と、正規形の判定
 //! - [`lists`]：Listのスロットの補題（行への区切り、行の選択、行のつなぎ直し）
 //! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
@@ -26,6 +27,7 @@
 //! - [`mbt`]：Model-Based Testing の候補集合
 
 pub mod bindings;
+pub mod canon;
 pub mod cert;
 pub mod encoding;
 pub mod equality;

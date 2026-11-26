@@ -957,7 +957,7 @@ pub proof fn lemma_xwidth_of(t: STy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_xwidths_of(ts: Seq<STy>, enums: Seq<i64>)
+pub proof fn lemma_xwidths_of(ts: Seq<STy>, enums: Seq<i64>)
     ensures
         to_xtys(ts).len() == ts.len(),
         xwidth_sum(to_xtys(ts), enums) == width_sum(ts, enums),

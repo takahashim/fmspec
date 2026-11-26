@@ -236,7 +236,15 @@ VERUS_MUTANTS = [
   ["slots.rs", "c.push(copy_expr(&rows[t][j]));", "c.push(copy_expr(&rows[0][j]));", "どの添字でもListの先頭の行を選ぶ"],
   ["slots.rs", "        let start = p.checked_mul(w)?.checked_add(1)?;\n        let end = start.checked_add(w)?;\n        if end > slots.len() {\n            return None;\n        }\n        let ghost i0", "        let start = p.checked_mul(w)?;\n        let end = start.checked_add(w)?;\n        if end > slots.len() {\n            return None;\n        }\n        let ghost i0", "Listの長さのスロットを行に含める"],
   ["slots.rs", "if size != slots.len() {", "if size > slots.len() {", "Mapのスロットの長さを確かめない"],
-  ["slots.rs", "vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&alt[j]), copy_expr(&rows[p][j])));", "vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&rows[p][j]), copy_expr(&alt[j])));", "行の置き換えを逆にする"]
+  ["slots.rs", "vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&alt[j]), copy_expr(&rows[p][j])));", "vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&rows[p][j]), copy_expr(&alt[j])));", "行の置き換えを逆にする"],
+  ["canon.rs", "ite(copy_expr(&slots[0]), inner, empty)", "ite(copy_expr(&slots[0]), empty, inner)", "Optionの有無と中身の判定を入れ替える"],
+  ["canon.rs", "if is_bool_lit(&inner, true) && is_bool_lit(&empty, true) {", "if is_bool_lit(&inner, true) {", "Optionの中身が既定値かを確かめずに真にする"],
+  ["canon.rs", "items.push(ite(copy_expr(&row[0]), c, empty));", "items.push(c);", "Mapのキーのない行の値を確かめない"],
+  ["canon.rs", "items.push(ite(bin(BinOp::Lt, ci(p as i64), copy_expr(&len)), c, empty));", "items.push(ite(bin(BinOp::Le, ci(p as i64), copy_expr(&len)), c, empty));", "Listの長さの位置の行を要素として判定する"],
+  ["canon.rs", "items.push(eq(copy_expr(&xs[i]), copy_expr(&ys[i])));", "items.push(eq(copy_expr(&xs[i]), copy_expr(&xs[i])));", "既定値と比べない"],
+  ["canon.rs", "items.push(canonical(&ts[i], &parts[i], enums)?);", "items.push(canonical(&ts[0], &parts[i], enums)?);", "組の各要素を最初の要素の型で判定する"],
+  ["canon.rs", "STy::List(e, max) => seq![Type::Int(0, max as i64)]", "STy::List(e, max) => seq![Type::Int(1, max as i64)]", "Listの長さのスロットの型から0を除く"],
+  ["canon.rs", "(Type::Int(lo, hi), Value::Int(k)) => lo <= k <= hi,", "(Type::Int(lo, hi), Value::Int(k)) => true,", "整数のスロットの範囲を確かめない"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -325,7 +333,13 @@ VERUS_CANARIES = [
   ["lists.rs", "assert(slot_vals(out[p], env, l) =~= nv[p]);", "lemma_ite_rows の各行"],
   ["lists.rs", "lemma_flat(a, b, st, env, l, enums);", "lemma_flat の帰納"],
   ["slots.rs", "assert(ite_row(out@[p as int]@, rows@[p as int]@, *k, alt@, p as int));", "ite_rows のループ"],
-  ["slots.rs", "rows.push(sub_exprs(slots, at, end));", "map_rows のループ"]
+  ["slots.rs", "rows.push(sub_exprs(slots, at, end));", "map_rows のループ"],
+  ["canon.rs", "        lemma_map_join(rows, env, ls, rs, k, x, enums);", "lemma_canon_map_eval の正規形の組み立て"],
+  ["canon.rs", "        lemma_list_join(len, rows, env, ls, its, e, max, enums);", "lemma_canon_list_eval の正規形の組み立て"],
+  ["canon.rs", "        lemma_concat_split(slots, parts, xts, enums);", "lemma_canon_tuple_eval の正規形の組み立て"],
+  ["canon.rs", "        let v = SVal::Some(Box::new(w));", "lemma_canon_option_vals の中身のある値"],
+  ["canon.rs", "        lemma_flat_split(t, a, w);", "lemma_flat_split の帰納"],
+  ["canon.rs", "            lemma_ty_repeat_add(et, n, m);", "lemma_member_in のList"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)
