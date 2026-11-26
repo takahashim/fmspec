@@ -4,6 +4,7 @@
 //! 探索器（BFS など）は別crateに置き、証拠を生成するだけで判定を直接返さない（仕様書 §3.1）。
 //!
 //! - [`model`]：IR検証前のモデル、値、型、式
+//! - [`encoding`]：IRの複合型と値の意味、スロットの列への符号化（仕様）
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
 //! - [`typing`]：型規則、整形式性、`validate`、型健全性
 //! - [`step`]：遷移の意味論と遷移列挙
@@ -16,6 +17,7 @@
 
 pub mod bindings;
 pub mod cert;
+pub mod encoding;
 pub mod eval;
 pub mod evidence;
 pub mod expr_copy;

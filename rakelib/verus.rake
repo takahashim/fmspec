@@ -39,6 +39,12 @@ end
 
 # 変異。[ファイル, 元の文字列, 置き換え, 説明]。元の文字列はファイルにちょうど1回現れなければならない。
 VERUS_MUTANTS = [
+  ["encoding.rs", "        SType::Option(x) => 1 + width(*x, enums),", "        SType::Option(x) => width(*x, enums),",
+   "Optionの幅に有無のスロットを数えない"],
+  ["encoding.rs", "SVal::List(items) => seq![Value::Int(items.len() as i64)] + enc_items(", "SVal::List(items) => enc_items(",
+   "Listの符号化に長さを入れない"],
+  ["encoding.rs", "        SType::Enum(id) => id < enums.len() && enums[id as int] >= 1,",
+   "        SType::Enum(id) => id < enums.len() && enums[id as int] >= 0,", "ラベルのない列挙型を整形式とする"],
   ["map_encoding.rs", "let tag: i64 = if present { 1 } else { 0 };",
    "let tag: i64 = if present { 0 } else { 1 };", "Mapの符号化でキーの有無を反転する"],
   ["ranking.rs", "prefix.checked_mul(radix)?.checked_add(digit)",
@@ -171,6 +177,9 @@ VERUS_MUTANTS = [
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
 # 前提や不変条件が矛盾していて証明が空虚に通っているなら、ここの assert(false) も通ってしまう。
 VERUS_CANARIES = [
+  ["encoding.rs", "        assert(s.skip(prefix.len() as int) == last);", "lemma_models_enc_seq の帰納"],
+  ["encoding.rs", "            assert(rows =~= Seq::new(n, |_i: int| None::<SVal>));", "lemma_default_len のMap"],
+  ["encoding.rs", "            assert(n * w >= 1) by (nonlinear_arith)", "lemma_width_pos のMap"],
   ["eval.rs", "    to_bool(eval(e, c))\n}", "eval_prop"],
   ["eval.rs", "    if i < tys.len() && i < xs.len() {\n        Ok(decode_value(&tys[i], xs[i]))", "lookup_value"],
   ["eval.rs", "        assert(inner@.subrange(0, n as int) =~= ls@);\n        x = x + 1;", "quant のループの末尾"],
