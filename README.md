@@ -3,11 +3,12 @@
 Rubyで書く実行可能な形式仕様と、Rust製の検証エンジンによるモデル検査。
 
 設計は [docs/ruby_model_checker_spec.md](docs/ruby_model_checker_spec.md) にある。
-現在の実装は、ロードマップの段階1〜6（Rails向け初期リリースの範囲）である。
+現在の実装は、ロードマップの段階1〜8である。
 Rubyで仕様を書いて、モデル検査、シミュレーション、実装との適合性検査（Model-Based Testing）ができる。
 状態と引数には、Bool、有界Int、Enumのほか、Tuple、Record、Option、有限Set、有限Map、有界Listを使える。
+複数の仕様の合成（`Fmspec.compose`）、並行するプロセス（`process`）、有界応答性（`responds`）、移行の段階（`migration`）も書ける。
 Railsアプリケーションとの結合は、別gemの `fmspec-rails` にある。
-モデル合成、並行処理、有界応答性はまだない。
+仕様書§12.1の `requires` と `modifies`、段階9（性能改善、記号的検証）はまだない。
 
 ```ruby
 require "fmspec"
@@ -90,3 +91,17 @@ rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 `rake verus` には Verus 0.2026.10.04.426d8b0 が必要で、実行ファイルを環境変数 `VERUS` で指定する。
 `rake nupur:lint` には、Makiriのチェックアウト（環境変数 `MAKIRI`、既定は `../makiri`）と cargo-dylint が必要である。
 何を証明し、何を信頼しているかは [docs/verification.md](docs/verification.md) にある。
+
+## CI
+
+GitHub Actions（`.github/workflows/ci.yml`）で、上の検査をすべて実行する。
+
+| ジョブ | 内容 |
+|---|---|
+| `rust` | `rake lint`、`rake nupur:check`、Rustのテスト、参照実装のテスト、参照実装との比較テスト |
+| `ruby` | native extension のビルドと Rubyのテスト。Ruby 3.3 と 4.0 |
+| `rails` | `fmspec-rails` のテスト。PostgreSQL を立て、分離レベル別のテストも skip させない |
+| `verus` | `rake verus`。Verus は `rakelib/verus.rake` の `VERUS_VERSION` のリリースを取得する |
+| `nupur` | `rake nupur:upstream` と `rake nupur:lint`。Makiri の固定コミット（`rakelib/nupur.rake` の `NUPUR_COMMIT`）を取得する |
+
+rakelib は UTF-8 のファイルを読むので、手元でもロケールを UTF-8 にしておく（例：`LANG=C.UTF-8`）。
