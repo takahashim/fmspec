@@ -3,7 +3,7 @@
 use crate::conditions::{conditions_from_json, conditions_to_json};
 use crate::model::Model;
 use crate::value::{
-    args_from_json, args_to_json, output_from_json, output_to_json, state_from_json, state_to_json, type_to_json,
+    args_from_json, args_to_json, core_type_to_json, output_from_json, output_to_json, state_from_json, state_to_json,
     value_from_json, value_to_json,
 };
 use crate::{CERTIFICATE_VERSION, ENGINE_VERSION, TRACE_VERSION};
@@ -80,13 +80,12 @@ pub fn certificate_to_json(model: &Model, cert: &Certificate) -> Value {
         .states
         .iter()
         .map(|s| {
-            let row: Vec<Value> = s
+            let names = &model.names;
+            let row: Vec<Value> = names
+                .state_types
                 .iter()
                 .enumerate()
-                .map(|(i, x)| match model.raw().state_types.get(i) {
-                    Some(ty) => value_to_json(&model.names, ty, *x),
-                    None => json!(x),
-                })
+                .map(|(i, ty)| value_to_json(names, ty, s.get(names.state_slots(i)).unwrap_or(&[])))
                 .collect();
             Value::Array(row)
         })
@@ -109,7 +108,7 @@ pub fn certificate_from_json(model: &Model, json: &str) -> Result<Certificate, T
     let Some(rows) = map.get("states").and_then(Value::as_array) else {
         return format("states は状態の配列です");
     };
-    let types = &model.raw().state_types;
+    let types = &model.names.state_types;
     let mut states = Vec::new();
     for (k, row) in rows.iter().enumerate() {
         let Some(row) = row.as_array() else {
@@ -121,7 +120,7 @@ pub fn certificate_from_json(model: &Model, json: &str) -> Result<Certificate, T
         let mut state = Vec::new();
         for (v, ty) in row.iter().zip(types.iter()) {
             match value_from_json(&model.names.enums, ty, v) {
-                Ok(x) => state.push(x),
+                Ok(x) => state.extend(x),
                 Err(e) => return format(format!("states[{k}]: {e}")),
             }
         }
@@ -148,7 +147,7 @@ pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::mod
         ErrKind::TypeMismatch => json!({"kind": "type_mismatch"}),
         ErrKind::Unbound => json!({"kind": "unbound"}),
         ErrKind::OutOfRange(x) => match ty {
-            Some(ty) => json!({"kind": "out_of_range", "value": x, "type": type_to_json(&model.names, ty)}),
+            Some(ty) => json!({"kind": "out_of_range", "value": x, "type": core_type_to_json(&model.names, ty)}),
             None => json!({"kind": "out_of_range", "value": x}),
         },
         ErrKind::DivByZero => json!({"kind": "division_by_zero"}),
@@ -160,12 +159,13 @@ pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::mod
 }
 
 /// `Expr::Fail` の番号と、その名前。番号はIRの下ろし方が決める。
-const FAILURES: [(i64, &str); 5] = [
-    (1, "none"),
-    (2, "missing_key"),
-    (3, "index_out_of_range"),
-    (4, "full"),
-    (5, "empty"),
+const FAILURES: [(i64, &str); 6] = [
+    (crate::lower::FAIL_NONE, "none"),
+    (crate::lower::FAIL_MISSING_KEY, "missing_key"),
+    (crate::lower::FAIL_INDEX, "index_out_of_range"),
+    (crate::lower::FAIL_FULL, "full"),
+    (crate::lower::FAIL_EMPTY, "empty"),
+    (crate::lower::FAIL_NOT_IN_DOMAIN, "not_in_domain"),
 ];
 
 fn failure_name(code: i64) -> Option<&'static str> {
@@ -229,10 +229,14 @@ pub fn claim_to_json(model: &Model, claim: &Claim) -> Value {
                 Site::Guard => ("guard", None),
                 Site::Output => ("output", act.and_then(|a| a.output.as_ref()).map(|o| &o.ty)),
                 Site::Update(u) => {
-                    let target = act.and_then(|a| a.updates.get(*u)).map(|up| up.target);
-                    if let Some(t) = target {
-                        out["target"] = name_of(&names.states, t);
+                    let owner = names.actions.get(*a).and_then(|n| n.updates.get(*u));
+                    if let Some(o) = owner {
+                        out["target"] = name_of(&names.states, o.var);
+                        if names.state_types.get(o.var).map(|t| t.width(&names.enums)).unwrap_or(1) > 1 {
+                            out["slot"] = json!(o.slot);
+                        }
                     }
+                    let target = act.and_then(|a| a.updates.get(*u)).map(|up| up.target);
                     ("update", target.and_then(|t| model.raw().state_types.get(t)))
                 }
             };
@@ -288,8 +292,14 @@ fn claim_from_json(model: &Model, v: Option<&Value>) -> Result<Claim, TraceError
                 "output" => Site::Output,
                 _ => {
                     let target = map.get("target").and_then(Value::as_str).unwrap_or("");
-                    let index = names.states.iter().position(|n| n == target);
-                    let update = index.and_then(|t| model.raw().actions[a].updates.iter().position(|u| u.target == t));
+                    let slot = map.get("slot").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let index = names.state_index(target);
+                    let update = index.and_then(|t| {
+                        names.actions[a]
+                            .updates
+                            .iter()
+                            .position(|o| o.var == t && o.slot == slot)
+                    });
                     match update {
                         Some(u) => Site::Update(u),
                         None => return format(format!("claim: 操作 {action_name:?} は {target:?} を更新しません")),

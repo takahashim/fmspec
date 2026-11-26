@@ -8,7 +8,10 @@
 mod canonical;
 mod conditions;
 mod evidence;
+mod json;
+mod lower;
 mod model;
+pub mod types;
 mod value;
 
 pub use conditions::{conditions_from_json, conditions_to_json, default_conditions};
@@ -16,9 +19,11 @@ pub use evidence::{
     certificate_from_json, certificate_to_json, claim_to_json, error_to_json, trace_from_json, trace_to_json, Trace,
     TraceError,
 };
-pub use model::{load, parse, ActionNames, EnumNames, LoadError, Model, Names, Source};
+pub use model::{load, parse, ActionNames, EnumNames, LoadError, Model, Names, Source, UpdateSlot};
+pub use types::{SType, XType};
 pub use value::{
-    args_from_json, args_to_json, output_to_json, state_to_json, type_to_json, value_from_json, value_to_json,
+    args_from_json, args_to_json, core_type_to_json, output_to_json, output_value_from_json, state_to_json,
+    type_to_json, value_from_json, value_to_json,
 };
 
 /// このエンジンが読めるIRのバージョン。

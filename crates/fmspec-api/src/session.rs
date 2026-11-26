@@ -5,7 +5,9 @@
 
 use crate::conditions;
 use fmspec_core::evidence::Claim;
-use fmspec_ir::{claim_to_json, output_to_json, state_to_json, value_from_json, value_to_json, Model};
+use fmspec_ir::{
+    claim_to_json, output_to_json, output_value_from_json, state_to_json, value_from_json, value_to_json, Model,
+};
 use fmspec_search::{InputCheck, ModelError, NextInput, Observed, PossibleOutcome, Seen, SeenOutput};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -16,14 +18,20 @@ const DEFAULT_MAX_CANDIDATES: u64 = 10_000;
 pub struct Session {
     model: Arc<Model>,
     inner: fmspec_search::Session,
+    /// 観測する状態変数。
+    observed: Vec<usize>,
+    /// 操作ごとの、注入する内部選択の添字（`choices` の中での添字、昇順）。
+    injected: Vec<Vec<usize>>,
     started: bool,
 }
 
-fn seen(model: &Model, var: usize, v: Option<&Value>) -> Seen {
-    let ty = &model.raw().state_types[var];
-    match v.map(|v| value_from_json(&model.names.enums, ty, v)) {
-        Some(Ok(x)) => Seen::Value(x),
-        _ => Seen::Unrepresentable,
+/// 観測した値を、状態変数のスロットごとの値にする。型の符号にできなければ、すべてのスロットを一致しない値とする。
+fn seen(model: &Model, var: usize, v: Option<&Value>) -> Vec<Seen> {
+    let names = &model.names;
+    let ty = &names.state_types[var];
+    match v.map(|v| value_from_json(&names.enums, ty, v)) {
+        Some(Ok(codes)) => codes.into_iter().map(Seen::Value).collect(),
+        _ => vec![Seen::Unrepresentable; ty.width(&names.enums)],
     }
 }
 
@@ -58,6 +66,7 @@ impl Session {
             }
         };
         let mut injected: Vec<Vec<usize>> = vec![Vec::new(); model.names.actions.len()];
+        let observed: Vec<usize> = observed;
         if let Some(v) = map.get("inject").filter(|v| !v.is_null()) {
             let message = "inject は、操作名から内部選択の名前の配列へのオブジェクトです";
             for (action_name, choices) in v.as_object().ok_or(message)? {
@@ -65,7 +74,6 @@ impl Session {
                     .names
                     .action_index(action_name)
                     .ok_or(format!("未定義の操作 {action_name:?}"))?;
-                let n_params = model.raw().actions[a].n_params;
                 for choice in choices.as_array().ok_or(message)? {
                     let choice = choice.as_str().ok_or(message)?;
                     let k = model.names.actions[a]
@@ -73,18 +81,35 @@ impl Session {
                         .iter()
                         .position(|n| n == choice)
                         .ok_or(format!("操作 {action_name:?} に内部選択 {choice:?} はありません"))?;
-                    if !injected[a].contains(&(n_params + k)) {
-                        injected[a].push(n_params + k);
+                    if !injected[a].contains(&k) {
+                        injected[a].push(k);
                     }
                 }
                 injected[a].sort_unstable();
             }
         }
         let max = usize::try_from(max).unwrap_or(usize::MAX);
-        let inner = fmspec_search::Session::new(cond, observed, injected, seed, max);
+        let slots: Vec<usize> = observed.iter().flat_map(|v| model.names.state_slots(*v)).collect();
+        let injected_slots: Vec<Vec<usize>> = injected
+            .iter()
+            .enumerate()
+            .map(|(a, ks)| {
+                let act = &model.names.actions[a];
+                ks.iter()
+                    .flat_map(|k| {
+                        let i = act.params.len() + k;
+                        let start = act.arg_offsets[i];
+                        start..start + act.arg_types[i].width(&model.names.enums)
+                    })
+                    .collect()
+            })
+            .collect();
+        let inner = fmspec_search::Session::new(cond, slots, injected_slots, seed, max);
         Ok(Session {
             model,
             inner,
+            observed,
+            injected,
             started: false,
         })
     }
@@ -93,27 +118,26 @@ impl Session {
     fn observation(&self, v: &Value) -> Result<Vec<Seen>, String> {
         let map = v.as_object().ok_or("observation はオブジェクトです")?;
         let mut out = Vec::new();
-        for var in self.inner.observed() {
+        for var in &self.observed {
             let name = &self.model.names.states[*var];
             if !map.contains_key(name) {
                 return Err(format!("observation に状態変数 {name:?} がありません"));
             }
-            out.push(seen(&self.model, *var, map.get(name)));
+            out.extend(seen(&self.model, *var, map.get(name)));
         }
         Ok(out)
     }
 
     /// 状態を、観測する変数だけのJSONにする。
     fn projected(&self, state: &[i64]) -> Value {
+        let names = &self.model.names;
         let mut map = Map::new();
-        for var in self.inner.observed() {
-            if let (Some(name), Some(ty), Some(x)) = (
-                self.model.names.states.get(*var),
-                self.model.raw().state_types.get(*var),
-                state.get(*var),
-            ) {
-                map.insert(name.clone(), value_to_json(&self.model.names, ty, *x));
-            }
+        for var in &self.observed {
+            let slots = state.get(names.state_slots(*var)).unwrap_or(&[]);
+            map.insert(
+                names.states[*var].clone(),
+                value_to_json(names, &names.state_types[*var], slots),
+            );
         }
         Value::Object(map)
     }
@@ -140,7 +164,6 @@ impl Session {
             .action_index(name)
             .ok_or(format!("未定義の操作 {name:?}"))?;
         let empty = json!({});
-        let act = &self.model.raw().actions[action];
         let names = &self.model.names.actions[action];
         let args = map
             .get("args")
@@ -152,40 +175,42 @@ impl Session {
             .unwrap_or(&empty)
             .as_object()
             .ok_or("choices はオブジェクトです")?;
-        let injected = self.inner.injected(action);
+        let injected = &self.injected[action];
         if args.len() != names.params.len() || choices.len() != injected.len() {
             return Err(format!("操作 {name:?} の引数または注入する選択の個数が合いません"));
         }
         let mut values = Vec::new();
-        let read = |given: &Map<String, Value>, binding: &String, index: usize| -> Result<i64, String> {
+        let read = |given: &Map<String, Value>, binding: &String, index: usize| -> Result<Vec<i64>, String> {
             let v = given.get(binding).ok_or(format!("引数 {binding:?} がありません"))?;
-            value_from_json(&self.model.names.enums, &act.domains[index], v)
+            value_from_json(&self.model.names.enums, &names.arg_types[index], v)
                 .map_err(|e| format!("引数 {binding:?}: {e}"))
         };
         for (i, param) in names.params.iter().enumerate() {
-            values.push(read(args, param, i)?);
+            values.extend(read(args, param, i)?);
         }
-        for index in injected {
-            values.push(read(choices, &names.choices[index - act.n_params], *index)?);
+        for k in injected {
+            values.extend(read(choices, &names.choices[*k], names.params.len() + k)?);
         }
         Ok((action, values))
     }
 
     /// 入力を、公開引数（`args`）と注入する選択（`choices`）の名前付きのJSONにする。
     fn input_json(&self, action: usize, values: &[i64]) -> Value {
-        let act = &self.model.raw().actions[action];
+        let enums = &self.model.names.enums;
         let names = &self.model.names.actions[action];
         let mut args = Map::new();
         let mut choices = Map::new();
-        for (i, x) in values.iter().enumerate() {
-            if i < act.n_params {
-                args.insert(
-                    names.params[i].clone(),
-                    value_to_json(&self.model.names, &act.domains[i], *x),
-                );
-            } else if let Some(index) = self.inner.injected(action).get(i - act.n_params) {
-                let name = names.choices[index - act.n_params].clone();
-                choices.insert(name, value_to_json(&self.model.names, &act.domains[*index], *x));
+        let mut at = 0;
+        let order = (0..names.params.len()).chain(self.injected[action].iter().map(|k| names.params.len() + k));
+        for i in order {
+            let ty = &names.arg_types[i];
+            let w = ty.width(enums);
+            let v = value_to_json(&self.model.names, ty, values.get(at..at + w).unwrap_or(&[]));
+            at += w;
+            if i < names.params.len() {
+                args.insert(names.params[i].clone(), v);
+            } else {
+                choices.insert(names.choices[i - names.params.len()].clone(), v);
             }
         }
         json!({"action": names.name, "args": args, "choices": choices})
@@ -193,18 +218,26 @@ impl Session {
 
     /// 観測した値のうち、モデルが許すどの結果とも一致しない項目。
     fn mismatch(&self, possible: &[PossibleOutcome], output: SeenOutput, seen: &[Seen]) -> Vec<Value> {
+        let names = &self.model.names;
         let mut fields = Vec::new();
         if let SeenOutput::Returned(y) = output {
             if !possible.iter().any(|p| p.output.map(Seen::Value) == Some(y)) {
                 fields.push(json!("output"));
             }
         }
-        for (var, x) in self.inner.observed().iter().zip(seen) {
-            if !possible
-                .iter()
-                .any(|p| p.state.get(*var).map(|v| Seen::Value(*v)) == Some(*x))
-            {
-                fields.push(json!(self.model.names.states[*var]));
+        let mut at = 0;
+        for var in &self.observed {
+            let range = names.state_slots(*var);
+            let mine = &seen[at..at + range.len()];
+            at += range.len();
+            let matches = |p: &PossibleOutcome| {
+                p.state
+                    .get(range.clone())
+                    .map(|xs| xs.iter().zip(mine).all(|(x, y)| Seen::Value(*x) == *y))
+                    .unwrap_or(false)
+            };
+            if !possible.iter().any(matches) {
+                fields.push(json!(names.states[*var]));
             }
         }
         fields
@@ -272,10 +305,10 @@ impl Session {
         let observation = report.get("observation").ok_or("observation が必要です")?;
         let seen = self.observation(observation)?;
         let raw_output = report.get("output");
-        let output = match &self.model.raw().actions[action].output {
+        let output = match &self.model.names.actions[action].output {
             None => SeenOutput::Unchecked,
-            Some(out) => SeenOutput::Returned(
-                match raw_output.map(|v| value_from_json(&self.model.names.enums, &out.ty, v)) {
+            Some(_) => SeenOutput::Returned(
+                match raw_output.map(|v| output_value_from_json(&self.model, action, v)) {
                     Some(Ok(x)) => Seen::Value(x),
                     _ => Seen::Unrepresentable,
                 },

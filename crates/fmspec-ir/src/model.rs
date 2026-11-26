@@ -1,11 +1,14 @@
 //! IRのJSONを読み込み、名前を添字に解決して、中核のモデルを組み立てる。
 
 use crate::canonical;
+use crate::json::{array, index, object, optional_array, required, schema, source, string, unique, Res};
+use crate::lower::{self, Constant, Ctx, Layout};
+use crate::types::SType;
 use crate::IR_VERSION;
 use fmspec_core::gate::{validate, CheckedModel};
-use fmspec_core::model::{Action, BinOp, Contract, Expr, Output, RawModel, Type, Update, Value as CoreValue};
+use fmspec_core::model::{Action, Contract, Expr, Output, RawModel, Type, Update, Value as CoreValue};
 use fmspec_core::typing::InvalidModel;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -22,12 +25,43 @@ pub struct EnumNames {
     pub variants: Vec<String>,
 }
 
+/// 中核の更新が、どの更新のどのスロットに当たるか。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateSlot {
+    /// IRの更新の添字。
+    pub update: usize,
+    /// 更新する状態変数。
+    pub var: usize,
+    /// 状態変数の中のスロットの添字。
+    pub slot: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct ActionNames {
     pub name: String,
     pub params: Vec<String>,
     pub choices: Vec<String>,
+    /// 公開引数に続けて内部選択の型。
+    pub arg_types: Vec<SType>,
+    /// 各引数の、中核の引数の列での最初のスロット。
+    pub arg_offsets: Vec<usize>,
+    pub output: Option<SType>,
+    /// 中核の更新ごとの、IRの更新とスロット。
+    pub updates: Vec<UpdateSlot>,
     pub source: Option<Source>,
+}
+
+impl ActionNames {
+    /// 引数の名前。公開引数に続けて内部選択。
+    pub fn arg_names(&self) -> impl Iterator<Item = &String> {
+        self.params.iter().chain(self.choices.iter())
+    }
+
+    /// 中核の引数のスロットが、どの引数のどのスロットか。
+    pub fn arg_of_slot(&self, slot: usize) -> Option<(usize, usize)> {
+        let i = self.arg_offsets.iter().rposition(|o| *o <= slot)?;
+        Some((i, slot - self.arg_offsets[i]))
+    }
 }
 
 /// 添字に解決する前の名前。中核のモデルは名前を持たないので、表示と直列化のためにここで持つ。
@@ -36,6 +70,9 @@ pub struct Names {
     pub model: String,
     pub enums: Vec<EnumNames>,
     pub states: Vec<String>,
+    pub state_types: Vec<SType>,
+    /// 各状態変数の、状態のスロットの列での最初のスロット。
+    pub state_offsets: Vec<usize>,
     pub state_sources: Vec<Option<Source>>,
     pub actions: Vec<ActionNames>,
     pub invariants: Vec<String>,
@@ -55,6 +92,22 @@ impl Names {
 
     pub fn contract_index(&self, name: &str) -> Option<usize> {
         self.contracts.iter().position(|n| n == name)
+    }
+
+    pub fn state_index(&self, name: &str) -> Option<usize> {
+        self.states.iter().position(|n| n == name)
+    }
+
+    /// 状態のスロットが、どの状態変数のどのスロットか。
+    pub fn state_of_slot(&self, slot: usize) -> Option<(usize, usize)> {
+        let i = self.state_offsets.iter().rposition(|o| *o <= slot)?;
+        Some((i, slot - self.state_offsets[i]))
+    }
+
+    /// 状態変数のスロットの範囲。
+    pub fn state_slots(&self, var: usize) -> std::ops::Range<usize> {
+        let start = self.state_offsets[var];
+        start..start + self.state_types[var].width(&self.enums)
     }
 }
 
@@ -95,274 +148,41 @@ impl fmt::Display for LoadError {
     }
 }
 
-type Res<T> = Result<T, LoadError>;
+fn lowered<T>(r: lower::Res<T>, site: impl FnOnce(String) -> LoadError) -> Res<T> {
+    match r {
+        Ok(x) => Ok(x),
+        Err(lower::Error::Schema(e)) => Err(e),
+        Err(lower::Error::Type(detail)) => Err(site(detail)),
+    }
+}
 
-fn schema<T>(path: &str, message: impl Into<String>) -> Res<T> {
-    Err(LoadError::Schema {
+fn invalid(reason: InvalidModel, message: String) -> LoadError {
+    LoadError::Invalid { reason, message }
+}
+
+fn parse_stype(v: &Value, path: &str, enums: &[EnumNames]) -> Res<SType> {
+    lowered(lower::parse_type(v, path, enums), |detail| LoadError::Schema {
         path: path.to_string(),
-        message: message.into(),
+        message: detail,
     })
 }
 
-fn object<'a>(v: &'a Value, path: &str, allowed: &[&str]) -> Res<&'a Map<String, Value>> {
-    let Some(map) = v.as_object() else {
-        return schema(path, "オブジェクトが必要です");
-    };
-    for key in map.keys() {
-        if !allowed.contains(&key.as_str()) {
-            return schema(path, format!("未知のキー {key:?}"));
+/// 局所変数のない環境で値を評価し、スロットごとの符号にする（初期値と定数）。
+fn constant_codes(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<Vec<i64>, LoadError> {
+    let slots = lowered(ctx.stored(v, path, st, 0), |detail| LoadError::Schema {
+        path: path.to_string(),
+        message: format!("初期値の型が状態変数の型と合いません（{detail}）"),
+    })?;
+    let mut tys = Vec::new();
+    st.slot_types(ctx.enums, &mut tys);
+    let mut codes = Vec::new();
+    for (e, ty) in slots.iter().zip(&tys) {
+        match lower::eval_const(e, ty) {
+            Ok(x) => codes.push(x),
+            Err(kind) => return schema(path, format!("値を評価できません（{kind:?}）")),
         }
     }
-    Ok(map)
-}
-
-fn required<'a>(map: &'a Map<String, Value>, path: &str, key: &str) -> Res<&'a Value> {
-    match map.get(key) {
-        Some(v) => Ok(v),
-        None => schema(path, format!("キー {key:?} が必要です")),
-    }
-}
-
-fn array<'a>(v: &'a Value, path: &str) -> Res<&'a Vec<Value>> {
-    match v.as_array() {
-        Some(a) => Ok(a),
-        None => schema(path, "配列が必要です"),
-    }
-}
-
-fn optional_array<'a>(map: &'a Map<String, Value>, path: &str, key: &str) -> Res<&'a [Value]> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(&[]),
-        Some(v) => Ok(array(v, &format!("{path}.{key}"))?),
-    }
-}
-
-fn string(v: &Value, path: &str) -> Res<String> {
-    match v.as_str() {
-        Some(s) => Ok(s.to_string()),
-        None => schema(path, "文字列が必要です"),
-    }
-}
-
-fn int(v: &Value, path: &str) -> Res<i64> {
-    match v.as_i64() {
-        Some(i) if v.is_i64() || v.is_u64() => Ok(i),
-        _ => schema(path, "符号付き64ビット整数が必要です"),
-    }
-}
-
-fn index(v: &Value, path: &str) -> Res<usize> {
-    match v.as_u64().and_then(|i| usize::try_from(i).ok()) {
-        Some(i) => Ok(i),
-        None => schema(path, "0以上の整数の添字が必要です"),
-    }
-}
-
-fn unique(seen: &mut HashSet<String>, name: &str, path: &str, what: &str) -> Res<()> {
-    if seen.insert(name.to_string()) {
-        Ok(())
-    } else {
-        schema(path, format!("{what} {name:?} の定義が重複しています"))
-    }
-}
-
-fn source(map: &Map<String, Value>, path: &str) -> Res<Option<Source>> {
-    let Some(v) = map.get("source") else {
-        return Ok(None);
-    };
-    if v.is_null() {
-        return Ok(None);
-    }
-    let path = format!("{path}.source");
-    let map = object(v, &path, &["file", "line"])?;
-    let file = string(required(map, &path, "file")?, &format!("{path}.file"))?;
-    let line = match required(map, &path, "line")?.as_u64() {
-        Some(n) => n,
-        None => return schema(&format!("{path}.line"), "0以上の整数が必要です"),
-    };
-    Ok(Some(Source { file, line }))
-}
-
-struct Scope<'a> {
-    enums: &'a [EnumNames],
-    /// 操作の公開引数の個数。操作の外では `0`。
-    n_params: usize,
-}
-
-/// キーを1つだけ持つオブジェクトの、そのキーと値。
-fn single<'a>(map: &'a Map<String, Value>, path: &str, message: &str) -> Res<(&'a String, &'a Value)> {
-    match (map.iter().next(), map.len()) {
-        (Some(entry), 1) => Ok(entry),
-        _ => schema(path, message),
-    }
-}
-
-fn parse_type(v: &Value, path: &str, enums: &[EnumNames]) -> Res<Type> {
-    let map = object(v, path, &["bool", "int", "enum"])?;
-    let (key, body) = single(
-        map,
-        path,
-        "型は bool、int、enum のいずれか1つのキーを持つオブジェクトです",
-    )?;
-    let path = format!("{path}.{key}");
-    match key.as_str() {
-        "bool" => {
-            object(body, &path, &[])?;
-            Ok(Type::Bool)
-        }
-        "int" => {
-            let range = object(body, &path, &["min", "max"])?;
-            let min = int(required(range, &path, "min")?, &format!("{path}.min"))?;
-            let max = int(required(range, &path, "max")?, &format!("{path}.max"))?;
-            Ok(Type::Int(min, max))
-        }
-        _ => {
-            let name = string(body, &path)?;
-            match enums.iter().position(|e| e.name == name) {
-                Some(id) => Ok(Type::Enum(id)),
-                None => schema(&path, format!("未定義の列挙型 {name:?}")),
-            }
-        }
-    }
-}
-
-fn parse_enum_literal(v: &Value, path: &str, enums: &[EnumNames]) -> Res<CoreValue> {
-    let map = object(v, path, &["type", "variant"])?;
-    let ty = string(required(map, path, "type")?, &format!("{path}.type"))?;
-    let variant = string(required(map, path, "variant")?, &format!("{path}.variant"))?;
-    let Some(id) = enums.iter().position(|e| e.name == ty) else {
-        return schema(path, format!("未定義の列挙型 {ty:?}"));
-    };
-    let Some(k) = enums[id].variants.iter().position(|x| *x == variant) else {
-        return schema(path, format!("列挙型 {ty:?} に未定義のラベル {variant:?}"));
-    };
-    Ok(CoreValue::Enum(id, k as i64))
-}
-
-/// リテラル（`int`、`bool`、`enum`）を読む。リテラルでなければ `None`。
-fn parse_literal(key: &str, body: &Value, path: &str, enums: &[EnumNames]) -> Res<Option<CoreValue>> {
-    match key {
-        "int" => Ok(Some(CoreValue::Int(int(body, path)?))),
-        "bool" => match body.as_bool() {
-            Some(b) => Ok(Some(CoreValue::Bool(b))),
-            None => schema(path, "真偽値が必要です"),
-        },
-        "enum" => Ok(Some(parse_enum_literal(body, path, enums)?)),
-        _ => Ok(None),
-    }
-}
-
-fn operands<'a>(body: &'a Value, path: &str, n: usize) -> Res<&'a Vec<Value>> {
-    let items = array(body, path)?;
-    if items.len() != n {
-        return schema(path, format!("オペランドは{n}個必要です（{}個あります）", items.len()));
-    }
-    Ok(items)
-}
-
-/// n項の `all` / `any` を二項の式の木にたたむ。評価順と打ち切りは、記述順の評価と一致する。
-fn fold(mut items: Vec<Expr>, make: fn(Box<Expr>, Box<Expr>) -> Expr, unit: bool) -> Expr {
-    let n = items.len();
-    if n > 2 {
-        let right = items.split_off(n / 2);
-        return make(Box::new(fold(items, make, unit)), Box::new(fold(right, make, unit)));
-    }
-    let neutral = || Expr::Const(CoreValue::Bool(unit));
-    let mut items = items.into_iter();
-    match (items.next(), items.next()) {
-        (None, _) => neutral(),
-        (Some(a), None) => make(Box::new(a), Box::new(neutral())),
-        (Some(a), Some(b)) => make(Box::new(a), Box::new(b)),
-    }
-}
-
-/// ちょうど `N` 個のオペランド。
-fn exactly<const N: usize>(items: Vec<Expr>, path: &str) -> Res<[Box<Expr>; N]> {
-    let boxed: Vec<Box<Expr>> = items.into_iter().map(Box::new).collect();
-    boxed
-        .try_into()
-        .or_else(|_| schema(path, format!("オペランドは{N}個必要です")))
-}
-
-fn parse_expr(v: &Value, path: &str, scope: &Scope) -> Res<Expr> {
-    let Some(map) = v.as_object() else {
-        return schema(path, "式はオブジェクトです");
-    };
-    let (key, body) = single(map, path, "式は演算子を表すキーを1つだけ持つオブジェクトです")?;
-    let path = format!("{path}.{key}");
-    if let Some(lit) = parse_literal(key, body, &path, scope.enums)? {
-        return Ok(Expr::Const(lit));
-    }
-    let bin = |op: BinOp| -> Res<Expr> {
-        let items = operands(body, &path, 2)?;
-        let a = parse_expr(&items[0], &format!("{path}[0]"), scope)?;
-        let b = parse_expr(&items[1], &format!("{path}[1]"), scope)?;
-        Ok(Expr::Bin(op, Box::new(a), Box::new(b)))
-    };
-    let list = |n: Option<usize>| -> Res<Vec<Expr>> {
-        let items = match n {
-            Some(n) => operands(body, &path, n)?,
-            None => array(body, &path)?,
-        };
-        items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| parse_expr(item, &format!("{path}[{i}]"), scope))
-            .collect()
-    };
-    match key.as_str() {
-        "var" => Ok(Expr::Var(index(body, &path)?)),
-        "param" => Ok(Expr::Arg(index(body, &path)?)),
-        "choice" => match scope.n_params.checked_add(index(body, &path)?) {
-            Some(i) => Ok(Expr::Arg(i)),
-            None => schema(&path, "添字が大きすぎます"),
-        },
-        "next" => Ok(Expr::Next(index(body, &path)?)),
-        "output" => {
-            object(body, &path, &[])?;
-            Ok(Expr::Out)
-        }
-        "add" => bin(BinOp::Add),
-        "sub" => bin(BinOp::Sub),
-        "mul" => bin(BinOp::Mul),
-        "lt" => bin(BinOp::Lt),
-        "le" => bin(BinOp::Le),
-        "gt" => bin(BinOp::Gt),
-        "ge" => bin(BinOp::Ge),
-        "eq" => bin(BinOp::Eq),
-        "ne" => bin(BinOp::Ne),
-        "not" => {
-            let [a] = exactly(list(Some(1))?, &path)?;
-            Ok(Expr::Not(a))
-        }
-        "all" => Ok(fold(list(None)?, Expr::And, true)),
-        "any" => Ok(fold(list(None)?, Expr::Or, false)),
-        "implies" => {
-            let [p, q] = exactly(list(Some(2))?, &path)?;
-            Ok(Expr::Implies(p, q))
-        }
-        "ite" => {
-            let [c, a, b] = exactly(list(Some(3))?, &path)?;
-            Ok(Expr::Ite(c, a, b))
-        }
-        _ => schema(&path, format!("未知の演算子 {key:?}")),
-    }
-}
-
-/// 初期値のリテラルを、宣言した型の符号に変換する。
-fn parse_initial(v: &Value, path: &str, ty: &Type, enums: &[EnumNames]) -> Res<i64> {
-    let map = object(v, path, &["int", "bool", "enum"])?;
-    let message = "初期値は int、bool、enum のいずれかのリテラルです";
-    let (key, body) = single(map, path, message)?;
-    let Some(lit) = parse_literal(key, body, &format!("{path}.{key}"), enums)? else {
-        return schema(path, message);
-    };
-    match (ty, lit) {
-        (Type::Bool, CoreValue::Bool(b)) => Ok(i64::from(b)),
-        (Type::Int(_, _), CoreValue::Int(x)) => Ok(x),
-        (Type::Enum(id), CoreValue::Enum(id2, k)) if *id == id2 => Ok(k),
-        _ => schema(path, "初期値の型が状態変数の型と合いません"),
-    }
+    Ok(codes)
 }
 
 fn parse_bindings(
@@ -370,7 +190,7 @@ fn parse_bindings(
     path: &str,
     enums: &[EnumNames],
     seen: &mut HashSet<String>,
-) -> Res<(Vec<String>, Vec<Type>)> {
+) -> Res<(Vec<String>, Vec<SType>)> {
     let mut names = Vec::new();
     let mut types = Vec::new();
     for (i, item) in items.iter().enumerate() {
@@ -378,7 +198,7 @@ fn parse_bindings(
         let map = object(item, &path, &["name", "type"])?;
         let name = string(required(map, &path, "name")?, &format!("{path}.name"))?;
         unique(seen, &name, &path, "引数")?;
-        types.push(parse_type(
+        types.push(parse_stype(
             required(map, &path, "type")?,
             &format!("{path}.type"),
             enums,
@@ -388,7 +208,35 @@ fn parse_bindings(
     Ok((names, types))
 }
 
-fn parse_action(v: &Value, path: &str, enums: &[EnumNames]) -> Res<(ActionNames, Action)> {
+fn layouts(enums: &[EnumNames], types: &[SType]) -> Vec<Layout> {
+    let mut offset = 0;
+    types
+        .iter()
+        .map(|ty| {
+            let l = Layout { ty: ty.clone(), offset };
+            offset += ty.width(enums);
+            l
+        })
+        .collect()
+}
+
+fn slot_types(enums: &[EnumNames], types: &[SType]) -> Vec<Type> {
+    let mut out = Vec::new();
+    for t in types {
+        t.slot_types(enums, &mut out);
+    }
+    out
+}
+
+struct Parsed<'a> {
+    enums: &'a [EnumNames],
+    states: &'a [Layout],
+    state_names: &'a [String],
+    constants: &'a [Constant],
+}
+
+fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames, Action)> {
+    let enums = p.enums;
     let map = object(
         v,
         path,
@@ -396,7 +244,7 @@ fn parse_action(v: &Value, path: &str, enums: &[EnumNames]) -> Res<(ActionNames,
     )?;
     let name = string(required(map, path, "name")?, &format!("{path}.name"))?;
     let mut seen = HashSet::new();
-    let (params, mut domains) = parse_bindings(
+    let (params, mut arg_types) = parse_bindings(
         optional_array(map, path, "params")?,
         &format!("{path}.params"),
         enums,
@@ -408,42 +256,120 @@ fn parse_action(v: &Value, path: &str, enums: &[EnumNames]) -> Res<(ActionNames,
         enums,
         &mut seen,
     )?;
-    let n_params = domains.len();
-    domains.extend(choice_types);
-    let scope = Scope { enums, n_params };
-    let guard = match map.get("guard") {
-        None | Some(Value::Null) => Expr::Const(CoreValue::Bool(true)),
-        Some(g) => parse_expr(g, &format!("{path}.guard"), &scope)?,
+    let n_user_params = arg_types.len();
+    arg_types.extend(choice_types);
+    let args = layouts(enums, &arg_types);
+    let n_params = args
+        .get(n_user_params)
+        .map(|l| l.offset)
+        .unwrap_or_else(|| args.last().map(|l| l.offset + l.ty.width(enums)).unwrap_or(0));
+    let ctx = Ctx {
+        enums,
+        states: Some(p.states),
+        args: &args,
+        n_params: n_user_params,
+        next: false,
+        output: None,
+        constants: p.constants,
     };
+    let what = |kind: &str| format!("操作 {name:?} の{kind}");
+    let user_guard = match map.get("guard") {
+        None | Some(Value::Null) => Expr::Const(CoreValue::Bool(true)),
+        Some(g) => lowered(ctx.prop(g, &format!("{path}.guard")), |d| {
+            invalid(
+                InvalidModel::Guard(a),
+                format!("{}が Bool 式でないか、未定義の参照を含みます（{d}）", what(" guard ")),
+            )
+        })?,
+    };
+    // スロットごとに列挙した引数の組のうち、正規形でないものは無効にする。
+    let mut canon = Vec::new();
+    for l in &args {
+        let slots: Vec<Expr> = (l.offset..l.offset + l.ty.width(enums)).map(Expr::Arg).collect();
+        let c = lower::canonical(enums, &l.ty, &slots);
+        if !matches!(c, Expr::Const(CoreValue::Bool(true))) {
+            canon.push(c);
+        }
+    }
+    let guard = canon
+        .into_iter()
+        .rev()
+        .fold(user_guard, |acc, c| Expr::And(Box::new(c), Box::new(acc)));
     let mut updates = Vec::new();
-    for (i, item) in optional_array(map, path, "updates")?.iter().enumerate() {
-        let path = format!("{path}.updates[{i}]");
+    let mut owners = Vec::new();
+    for (u, item) in optional_array(map, path, "updates")?.iter().enumerate() {
+        let path = format!("{path}.updates[{u}]");
         let up = object(item, &path, &["target", "expr"])?;
         let target = index(required(up, &path, "target")?, &format!("{path}.target"))?;
-        let expr = parse_expr(required(up, &path, "expr")?, &format!("{path}.expr"), &scope)?;
-        updates.push(Update { target, expr });
+        let Some(l) = p.states.get(target) else {
+            return Err(invalid(
+                InvalidModel::Update(a, u),
+                format!("{} {} 番目の更新の対象 {target} は未定義です", what(""), u + 1),
+            ));
+        };
+        let slots = lowered(
+            ctx.stored(required(up, &path, "expr")?, &format!("{path}.expr"), &l.ty, 0),
+            |d| {
+                invalid(
+                    InvalidModel::Update(a, u),
+                    format!(
+                        "{} {} 番目の更新（{:?}）が不正です（{d}）",
+                        what(""),
+                        u + 1,
+                        p.state_names[target]
+                    ),
+                )
+            },
+        )?;
+        for (j, expr) in slots.into_iter().enumerate() {
+            updates.push(Update {
+                target: l.offset + j,
+                expr,
+            });
+            owners.push(UpdateSlot {
+                update: u,
+                var: target,
+                slot: j,
+            });
+        }
     }
-    let output = match map.get("output") {
-        None | Some(Value::Null) => None,
+    let (output, output_type) = match map.get("output") {
+        None | Some(Value::Null) => (None, None),
         Some(o) => {
             let path = format!("{path}.output");
             let out = object(o, &path, &["type", "expr"])?;
-            let ty = parse_type(required(out, &path, "type")?, &format!("{path}.type"), enums)?;
-            let expr = parse_expr(required(out, &path, "expr")?, &format!("{path}.expr"), &scope)?;
-            Some(Output { ty, expr })
+            let st = parse_stype(required(out, &path, "type")?, &format!("{path}.type"), enums)?;
+            let Some(ty) = st.core() else {
+                return schema(&format!("{path}.type"), "出力の型は bool、int、enum に限ります");
+            };
+            let mut slots = lowered(
+                ctx.stored(required(out, &path, "expr")?, &format!("{path}.expr"), &st, 0),
+                |d| {
+                    invalid(
+                        InvalidModel::Output(a),
+                        format!("{}出力の型または式が不正です（{d}）", what("")),
+                    )
+                },
+            )?;
+            let expr = slots.pop().unwrap_or(Expr::Const(CoreValue::Bool(false)));
+            (Some(Output { ty, expr }), Some(st))
         }
     };
     let names = ActionNames {
         name,
         params,
         choices,
+        arg_offsets: args.iter().map(|l| l.offset).collect(),
+        arg_types,
+        output: output_type,
+        updates: owners,
         source: source(map, path)?,
     };
     Ok((
         names,
         Action {
             n_params,
-            domains,
+            domains: slot_types(enums, &args.iter().map(|l| l.ty.clone()).collect::<Vec<_>>()),
             guard,
             updates,
             output,
@@ -462,6 +388,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             "ir_version",
             "name",
             "enums",
+            "constants",
             "states",
             "actions",
             "invariants",
@@ -498,9 +425,31 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         enums.push(EnumNames { name, variants });
     }
 
+    let no_args: Vec<Layout> = Vec::new();
+    let mut constants: Vec<Constant> = Vec::new();
+    let mut seen = HashSet::new();
+    for (i, item) in optional_array(map, path, "constants")?.iter().enumerate() {
+        let path = format!("$.constants[{i}]");
+        let c = object(item, &path, &["name", "type", "value"])?;
+        let name = string(required(c, &path, "name")?, &format!("{path}.name"))?;
+        unique(&mut seen, &name, &path, "定数")?;
+        let ty = parse_stype(required(c, &path, "type")?, &format!("{path}.type"), &enums)?;
+        let ctx = Ctx {
+            enums: &enums,
+            states: None,
+            args: &no_args,
+            n_params: 0,
+            next: false,
+            output: None,
+            constants: &constants,
+        };
+        let codes = constant_codes(&ctx, required(c, &path, "value")?, &format!("{path}.value"), &ty)?;
+        constants.push(Constant { name, ty, codes });
+    }
+
     let mut states = Vec::new();
     let mut state_sources = Vec::new();
-    let mut state_types = Vec::new();
+    let mut state_stypes = Vec::new();
     let mut init = Vec::new();
     let mut seen = HashSet::new();
     for (i, item) in array(required(map, path, "states")?, "$.states")?.iter().enumerate() {
@@ -513,32 +462,53 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         }
         let name = string(required(s, &path, "name")?, &format!("{path}.name"))?;
         unique(&mut seen, &name, &path, "状態変数")?;
-        let ty = parse_type(required(s, &path, "type")?, &format!("{path}.type"), &enums)?;
-        init.push(parse_initial(
+        let ty = parse_stype(required(s, &path, "type")?, &format!("{path}.type"), &enums)?;
+        let ctx = Ctx {
+            enums: &enums,
+            states: None,
+            args: &no_args,
+            n_params: 0,
+            next: false,
+            output: None,
+            constants: &constants,
+        };
+        init.extend(constant_codes(
+            &ctx,
             required(s, &path, "initial")?,
             &format!("{path}.initial"),
             &ty,
-            &enums,
         )?);
-        state_types.push(ty);
+        state_stypes.push(ty);
         state_sources.push(source(s, &path)?);
         states.push(name);
     }
+    let state_layouts = layouts(&enums, &state_stypes);
+    let parsed = Parsed {
+        enums: &enums,
+        states: &state_layouts,
+        state_names: &states,
+        constants: &constants,
+    };
 
     let mut action_names = Vec::new();
     let mut actions = Vec::new();
     let mut seen = HashSet::new();
     for (i, item) in optional_array(map, path, "actions")?.iter().enumerate() {
         let path = format!("$.actions[{i}]");
-        let (names, action) = parse_action(item, &path, &enums)?;
+        let (names, action) = parse_action(item, &path, i, &parsed)?;
         unique(&mut seen, &names.name, &path, "操作")?;
         action_names.push(names);
         actions.push(action);
     }
 
-    let scope = Scope {
+    let ctx = Ctx {
         enums: &enums,
+        states: Some(&state_layouts),
+        args: &no_args,
         n_params: 0,
+        next: false,
+        output: None,
+        constants: &constants,
     };
     let mut invariant_names = Vec::new();
     let mut invariant_sources = Vec::new();
@@ -549,10 +519,14 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         let inv = object(item, &path, &["name", "expr", "source"])?;
         let name = string(required(inv, &path, "name")?, &format!("{path}.name"))?;
         unique(&mut seen, &name, &path, "不変条件")?;
-        invariants.push(parse_expr(
-            required(inv, &path, "expr")?,
-            &format!("{path}.expr"),
-            &scope,
+        invariants.push(lowered(
+            ctx.prop(required(inv, &path, "expr")?, &format!("{path}.expr")),
+            |d| {
+                invalid(
+                    InvalidModel::Invariant(i),
+                    format!("不変条件 {name:?} が Bool 式でないか、未定義の参照を含みます（{d}）"),
+                )
+            },
         )?);
         invariant_sources.push(source(inv, &path)?);
         invariant_names.push(name);
@@ -571,26 +545,49 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         let Some(action) = action_names.iter().position(|a| a.name == action_name) else {
             return schema(&format!("{path}.action"), format!("未定義の操作 {action_name:?}"));
         };
-        let scope = Scope {
+        let act = &action_names[action];
+        let args: Vec<Layout> = act
+            .arg_types
+            .iter()
+            .zip(&act.arg_offsets)
+            .map(|(ty, offset)| Layout {
+                ty: ty.clone(),
+                offset: *offset,
+            })
+            .collect();
+        let cctx = Ctx {
             enums: &enums,
-            n_params: actions[action].n_params,
+            states: Some(&state_layouts),
+            args: &args,
+            n_params: act.params.len(),
+            next: true,
+            output: act.output.as_ref(),
+            constants: &constants,
         };
-        contracts.push(Contract {
-            action,
-            expr: parse_expr(required(con, &path, "expr")?, &format!("{path}.expr"), &scope)?,
-        });
+        let expr = lowered(cctx.prop(required(con, &path, "expr")?, &format!("{path}.expr")), |d| {
+            invalid(
+                InvalidModel::Contract(i),
+                format!("遷移契約 {name:?} が Bool 式でないか、未定義の参照を含みます（{d}）"),
+            )
+        })?;
+        contracts.push(Contract { action, expr });
         contract_sources.push(source(con, &path)?);
         contract_names.push(name);
     }
 
     let terminal = match map.get("terminal") {
         None | Some(Value::Null) => None,
-        Some(t) => Some(parse_expr(t, "$.terminal", &scope)?),
+        Some(t) => Some(lowered(ctx.prop(t, "$.terminal"), |d| {
+            invalid(
+                InvalidModel::Terminal,
+                format!("終端条件が Bool 式でないか、未定義の参照を含みます（{d}）"),
+            )
+        })?),
     };
 
     let raw = RawModel {
         enums: enums.iter().map(|e| e.variants.len() as i64).collect(),
-        state_types,
+        state_types: slot_types(&enums, &state_stypes),
         init,
         actions,
         invariants,
@@ -601,6 +598,8 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         model: model_name,
         enums,
         states,
+        state_offsets: state_layouts.iter().map(|l| l.offset).collect(),
+        state_types: state_stypes,
         state_sources,
         actions: action_names,
         invariants: invariant_names,
@@ -611,6 +610,33 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
     Ok((raw, names, canonical::digest(&root)))
 }
 
+/// 中核のIR検証が返した理由の添字（スロットと中核の更新）を、IRの定義の添字に戻す。
+fn user_reason(reason: InvalidModel, names: &Names) -> InvalidModel {
+    let update = |a: usize, k: usize| {
+        names
+            .actions
+            .get(a)
+            .and_then(|act| act.updates.get(k))
+            .map(|o| o.update)
+            .unwrap_or(k)
+    };
+    match reason {
+        InvalidModel::StateType(i) => InvalidModel::StateType(names.state_of_slot(i).map(|(v, _)| v).unwrap_or(i)),
+        InvalidModel::Domain(a, d) => InvalidModel::Domain(
+            a,
+            names
+                .actions
+                .get(a)
+                .and_then(|act| act.arg_of_slot(d))
+                .map(|(x, _)| x)
+                .unwrap_or(d),
+        ),
+        InvalidModel::Update(a, k) => InvalidModel::Update(a, update(a, k)),
+        InvalidModel::DuplicateUpdate(a, k) => InvalidModel::DuplicateUpdate(a, update(a, k)),
+        other => other,
+    }
+}
+
 fn describe(reason: &InvalidModel, names: &Names) -> String {
     let action = |a: &usize| names.actions[*a].name.as_str();
     match reason {
@@ -618,20 +644,14 @@ fn describe(reason: &InvalidModel, names: &Names) -> String {
         InvalidModel::StateType(i) => {
             format!(
                 "状態変数 {:?} の型が不正です（空の整数範囲、または未定義の列挙型）",
-                names.states[*i]
+                names.states.get(*i).map(String::as_str).unwrap_or("?")
             )
         }
         InvalidModel::Initial => "初期値が状態変数の型の範囲外です".to_string(),
         InvalidModel::Params(a) => format!("操作 {:?} の引数の個数が不正です", action(a)),
         InvalidModel::Domain(a, d) => {
             let act = &names.actions[*a];
-            let name = act
-                .params
-                .iter()
-                .chain(act.choices.iter())
-                .nth(*d)
-                .map(String::as_str)
-                .unwrap_or("?");
+            let name = act.arg_names().nth(*d).map(String::as_str).unwrap_or("?");
             format!(
                 "操作 {:?} の引数 {name:?} のドメインが不正です（空の整数範囲、または未定義の列挙型）",
                 act.name
@@ -677,9 +697,12 @@ pub fn load(json: &str) -> Result<Model, LoadError> {
     let (raw, names, digest) = parse(json)?;
     match validate(raw) {
         Ok(checked) => Ok(Model { names, digest, checked }),
-        Err(reason) => Err(LoadError::Invalid {
-            message: describe(&reason, &names),
-            reason,
-        }),
+        Err(reason) => {
+            let reason = user_reason(reason, &names);
+            Err(LoadError::Invalid {
+                message: describe(&reason, &names),
+                reason,
+            })
+        }
     }
 }
