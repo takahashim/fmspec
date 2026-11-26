@@ -14,9 +14,13 @@ use fmspec_core::step::{Enumerated, Transition};
 /// 乱数のアルゴリズムの名前。結果に記録する。
 pub const PRNG_NAME: &str = "splitmix64";
 
-struct SplitMix64(u64);
+pub(crate) struct SplitMix64(u64);
 
 impl SplitMix64 {
+    pub(crate) fn new(seed: u64) -> SplitMix64 {
+        SplitMix64(seed)
+    }
+
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -26,7 +30,7 @@ impl SplitMix64 {
     }
 
     /// `0..n` の一様な整数。`n` は1以上。剰余の偏りは、棄却して取り除く。
-    fn below(&mut self, n: u64) -> u64 {
+    pub(crate) fn below(&mut self, n: u64) -> u64 {
         let threshold = n.wrapping_neg() % n;
         loop {
             let x = self.next();
@@ -77,7 +81,7 @@ fn property_claim(
 /// ランダムシミュレーションで証拠を探す。
 pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> SimResult {
     let n_actions = model.raw().actions.len();
-    let mut rng = SplitMix64(opts.seed);
+    let mut rng = SplitMix64::new(opts.seed);
     let mut stats = SimStats::default();
     let found = |evidence: Evidence, stats: SimStats| SimResult {
         evidence: Some(evidence),

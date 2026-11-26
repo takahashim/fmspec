@@ -7,24 +7,27 @@
 
 mod human;
 mod report;
+mod session;
 
 use fmspec_core::evidence::Evidence;
 use fmspec_core::gate::decide;
+use fmspec_core::gate::VerdictKind;
 use fmspec_core::semantics::Conditions;
 use fmspec_ir::{certificate_from_json, certificate_to_json, default_conditions, trace_from_json, LoadError};
-use fmspec_search::{check as search_check, sample, BfsOptions, SimOptions, Status};
+use fmspec_search::{check as search_check, sample, shrink as search_shrink, BfsOptions, SimOptions, Status};
 use serde_json::{json, Map, Value};
 use std::time::Instant;
 
 pub use fmspec_ir::{load, Model};
 pub use human::human;
+pub use session::Session;
 
 /// 中断要求の問い合わせ。真を返したら、探索を打ち切って `inconclusive` を返す。
 pub type Interrupt<'a> = Option<&'a dyn Fn() -> bool>;
 
 const CONDITION_KEYS: [&str; 4] = ["actions", "invariants", "contracts", "deadlock"];
 
-fn options<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, String> {
+pub(crate) fn options<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, String> {
     let map = v.as_object().ok_or("オプションはオブジェクトです")?;
     for key in map.keys() {
         if !CONDITION_KEYS.contains(&key.as_str()) && !allowed.contains(&key.as_str()) {
@@ -58,7 +61,7 @@ fn select(
 }
 
 /// オプションから検査条件を作る。省略した項目は、すべてが対象で、デッドロック検査は無効。
-fn conditions(model: &Model, map: &Map<String, Value>) -> Result<Conditions, String> {
+pub(crate) fn conditions(model: &Model, map: &Map<String, Value>) -> Result<Conditions, String> {
     let deadlock = match map.get("deadlock") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
@@ -77,7 +80,7 @@ fn conditions(model: &Model, map: &Map<String, Value>) -> Result<Conditions, Str
     Ok(c)
 }
 
-fn count(map: &Map<String, Value>, key: &str, min: u64) -> Result<Option<u64>, String> {
+pub(crate) fn count(map: &Map<String, Value>, key: &str, min: u64) -> Result<Option<u64>, String> {
     match map.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => match v.as_u64() {
@@ -188,4 +191,43 @@ pub fn replay(model: &Model, trace: &str) -> Value {
     let evidence = Evidence::Trace(trace.steps, trace.claim);
     let verdict = decide(model.checked(), &cond, &evidence);
     report::evidence_report(model, &cond, &evidence, &verdict)
+}
+
+/// 縮小で試す候補の数の、既定の上限。
+const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
+
+/// モデル違反のトレースを縮小する（仕様書 §10）。
+///
+/// 元のトレースを判定ゲートが受理しなければ、その拒否を報告する。
+/// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に記録する。
+/// オプションは `attempts`（試す候補の数の上限）。
+pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
+    let map = opts.as_object().ok_or("オプションはオブジェクトです")?;
+    if let Some(key) = map.keys().find(|k| k.as_str() != "attempts") {
+        return Err(format!("未知のオプション {key:?}"));
+    }
+    let attempts = count(map, "attempts", 1)?.unwrap_or(DEFAULT_SHRINK_ATTEMPTS);
+    let trace = match trace_from_json(model, trace) {
+        Ok(trace) => trace,
+        Err(e) => return Ok(report::unreadable_evidence(model, &e.to_string())),
+    };
+    let cond = trace.conditions.clone();
+    let original = trace.steps.len();
+    let evidence = Evidence::Trace(trace.steps, trace.claim);
+    let verdict = decide(model.checked(), &cond, &evidence);
+    if !matches!(verdict.kind(), VerdictKind::Violated | VerdictKind::Error) {
+        return Ok(report::evidence_report(model, &cond, &evidence, &verdict));
+    }
+    let Evidence::Trace(steps, claim) = evidence else {
+        return Err("トレースではありません".to_string());
+    };
+    let attempts = usize::try_from(attempts).unwrap_or(usize::MAX);
+    let shrunk = Evidence::Trace(search_shrink(model.checked(), &cond, &steps, &claim, attempts), claim);
+    let verdict = decide(model.checked(), &cond, &shrunk);
+    let mut body = report::evidence_report(model, &cond, &shrunk, &verdict);
+    body["original_steps"] = json!(original);
+    if let Some(seed) = trace.seed {
+        body["trace"]["seed"] = json!(seed);
+    }
+    Ok(body)
 }

@@ -222,6 +222,7 @@ fn usage_errors() {
         vec!["simulate", "tickets.json", "--traces", "0"],
         vec!["simulate", "tickets.json", "--max-states", "3"],
         vec!["shrink", "tickets.json"],
+        vec!["bisect", "tickets.json"],
     ] {
         let (code, body) = f.json(&args);
         assert_eq!((code, &body["status"]), (2, &json!("usage_error")), "{args:?}");
@@ -269,4 +270,43 @@ fn simulate_samples_traces_reproducibly() {
         out,
         "Sampled: tickets（網羅性の主張なし）\n  シミュレーション: seed 0、トレース 3/3、ステップ数 15（splitmix64）\n"
     );
+}
+
+#[test]
+fn shrink_shortens_a_trace_and_keeps_the_violation() {
+    let f = files();
+    // シミュレーションで見つけた違反のトレースを、不変条件の違反を保ったまま短くする。
+    let seed = (0..200u32)
+        .map(|s| s.to_string())
+        .find(|seed| {
+            let (_, body) = f.json(&[
+                "simulate",
+                "noguard.json",
+                "--seed",
+                seed,
+                "--invariants",
+                "capacity_respected",
+            ]);
+            body["status"] == "violated" && body["trace"]["steps"].as_array().unwrap().len() > 2
+        })
+        .expect("2ステップより長い違反のトレースが見つかるはず");
+    let (_, found) = f.json(&["simulate", "noguard.json", "--seed", &seed, "--trace-out", "long.json"]);
+    let (code, body) = f.json(&["shrink", "noguard.json", "long.json", "--trace-out", "short.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("violated")));
+    assert_eq!(body["property"]["name"], json!("capacity_respected"));
+    assert_eq!(
+        body["original_steps"],
+        json!(found["trace"]["steps"].as_array().unwrap().len())
+    );
+    // このモデルの最短の反例は2ステップで、縮小はそこに達する。
+    assert_eq!(body["trace"]["steps"].as_array().unwrap().len(), 2);
+    let (code, replayed) = f.json(&["replay", "noguard.json", "short.json"]);
+    assert_eq!((code, &replayed["status"]), (1, &json!("violated")));
+
+    // 受理されないトレースは縮小しない。
+    let mut forged: Value = serde_json::from_str(&f.get("long.json")).unwrap();
+    forged["steps"][0]["state"]["sold"] = json!(0);
+    f.0.borrow_mut().insert("forged.json".to_string(), forged.to_string());
+    let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("rejected")));
 }

@@ -29,6 +29,7 @@ const USAGE: &str = "\
   fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [検査条件] [--trace-out FILE]
   fmspec verify-certificate MODEL.json CERTIFICATE.json [検査条件]
   fmspec replay MODEL.json TRACE.json
+  fmspec shrink MODEL.json TRACE.json [--trace-out FILE]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
   --actions A,B,...      対象の操作
@@ -249,6 +250,17 @@ fn cmd_replay(io: &Io, a: &Args) -> Result<Run, Run> {
     Ok(finish(a.json, fmspec_api::replay(&model, &trace)))
 }
 
+fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
+    let [model_path, trace_path] = a.positional.as_slice() else {
+        return usage(a.json, "shrink にはモデルとトレースのファイルを指定します");
+    };
+    let model = load_model(io, model_path, a.json)?;
+    let trace = read(io, trace_path, a.json)?;
+    let body = fmspec_api::shrink(&model, &trace, &json!({})).map_err(|e| failure(a.json, "usage_error", e))?;
+    save_trace(io, a, &body)?;
+    Ok(finish(a.json, body))
+}
+
 /// コマンドを実行する。ファイルの読み書きは引数の関数で行う。
 pub fn run(
     args: &[String],
@@ -288,7 +300,7 @@ pub fn run(
         "simulate" => cmd_simulate(&io, &parsed),
         "verify-certificate" => cmd_verify_certificate(&io, &parsed),
         "replay" => cmd_replay(&io, &parsed),
-        "shrink" => usage(json, "shrink はまだ実装していません（ロードマップの段階5）"),
+        "shrink" => cmd_shrink(&io, &parsed),
         _ => usage(json, format!("未知のコマンド {command:?}\n{USAGE}")),
     };
     match result {

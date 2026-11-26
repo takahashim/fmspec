@@ -17,7 +17,9 @@ pub use evidence::{
     TraceError,
 };
 pub use model::{load, parse, ActionNames, EnumNames, LoadError, Model, Names, Source};
-pub use value::{args_to_json, output_to_json, state_to_json, type_to_json, value_to_json};
+pub use value::{
+    args_from_json, args_to_json, output_to_json, state_to_json, type_to_json, value_from_json, value_to_json,
+};
 
 /// このエンジンが読めるIRのバージョン。
 pub const IR_VERSION: i64 = 1;

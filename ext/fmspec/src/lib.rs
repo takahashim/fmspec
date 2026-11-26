@@ -1,7 +1,10 @@
 //! fmspec の Ruby native extension（仕様書 §3.2）。
 //!
-//! Ruby に公開するのは `Fmspec::Native::Model` だけである。IRのJSON文字列を受け取り、
-//! Rust 側で検証してから包んだ、不変のオブジェクトである。ペイロードは Ruby の値を持たない。
+//! Ruby に公開するオブジェクトは2種類ある。どちらのペイロードも Ruby の値を持たない。
+//!
+//! - `Fmspec::Native::Model`: IRのJSON文字列を受け取り、Rust 側で検証してから包んだ、不変のオブジェクト。
+//! - `Fmspec::Native::Session`: Model-Based Testing の1ケース分の候補状態集合を持つオブジェクト。
+//!   操作は GVL を保持したまま行う。
 //!
 //! 境界の規則は次のとおり。
 //!
@@ -17,16 +20,33 @@ use nupur::string::ReadError;
 use nupur::typed::{Birth, Payload, TypedType};
 use nupur::{function, method};
 use serde_json::Value as Json;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-/// IR検証を通ったモデル。
+/// IR検証を通ったモデル。セッションと共有する。
 struct ModelBox {
-    model: fmspec_api::Model,
+    model: Arc<fmspec_api::Model>,
 }
 
 impl Payload for ModelBox {}
 
+/// MBTのセッション。メソッドは GVL を保持したまま呼ばれるので、ロックが競合することはない。
+struct SessionBox {
+    session: Mutex<fmspec_api::Session>,
+}
+
+impl Payload for SessionBox {}
+
+impl SessionBox {
+    /// セッションを借りる。前の操作が panic していても、そのまま使う。
+    fn lock(&self) -> MutexGuard<'_, fmspec_api::Session> {
+        self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 static MODEL: TypedType<ModelBox, 0> = TypedType::base(c"Fmspec::Native::Model");
 static MODEL_CLASS: RbConst<DataClass> = RbConst::new();
+static SESSION: TypedType<SessionBox, 0> = TypedType::base(c"Fmspec::Native::Session");
+static SESSION_CLASS: RbConst<DataClass> = RbConst::new();
 static INTERNAL: RbConst<ExceptionClass> = RbConst::new();
 
 fn read(ruby: &Ruby, v: Value) -> Result<String, Error> {
@@ -53,7 +73,7 @@ fn model_load(ruby: &Ruby, ir: Value) -> Result<Value, Error> {
         Ok(model) => {
             let birth = Birth {
                 klass: MODEL_CLASS.defined(ruby)?,
-                data: ModelBox { model },
+                data: ModelBox { model: Arc::new(model) },
                 roots: [],
             };
             Ok(MODEL.wrap::<Value>(ruby, birth)?.value())
@@ -72,7 +92,7 @@ fn model_describe(ruby: &Ruby, this: Value) -> Result<Value, Error> {
 fn model_check(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error> {
     let handle = MODEL.check(this)?;
     let options = read_json(ruby, options)?;
-    let model = &handle.data().model;
+    let model: &fmspec_api::Model = &handle.data().model;
     // `Cancel::requested` は、GVL を解放した処理が中断要求を問い合わせるための Nupur の関数で、
     // アトミックな値を読むだけである。nupur_lints は Nupur の関数を一律に Ruby-free でないものと
     // 扱うので、ここで例外にする。lint が直れば、この expect が満たされなくなって検査に失敗する。
@@ -91,7 +111,7 @@ fn model_check(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error>
 fn model_simulate(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error> {
     let handle = MODEL.check(this)?;
     let options = read_json(ruby, options)?;
-    let model = &handle.data().model;
+    let model: &fmspec_api::Model = &handle.data().model;
     // `model_check` と同じ理由の例外。
     #[cfg_attr(
         dylint_lib = "nupur_lints",
@@ -109,7 +129,7 @@ fn model_verify_certificate(ruby: &Ruby, this: Value, certificate: Value, option
     let handle = MODEL.check(this)?;
     let certificate = read(ruby, certificate)?;
     let options = read_json(ruby, options)?;
-    let model = &handle.data().model;
+    let model: &fmspec_api::Model = &handle.data().model;
     let result = nupur::gvl::without_gvl(ruby, move || {
         fmspec_api::to_text(fmspec_api::verify_certificate(model, &certificate, &options))
     })?;
@@ -120,8 +140,79 @@ fn model_verify_certificate(ruby: &Ruby, this: Value, certificate: Value, option
 fn model_replay(ruby: &Ruby, this: Value, trace: Value) -> Result<Value, Error> {
     let handle = MODEL.check(this)?;
     let trace = read(ruby, trace)?;
-    let model = &handle.data().model;
+    let model: &fmspec_api::Model = &handle.data().model;
     let result = nupur::gvl::without_gvl(ruby, move || fmspec_api::replay(model, &trace).to_string())?;
+    text(ruby, &result)
+}
+
+/// `Session.start(model, options_json)`: セッションを作る。
+/// オプションに誤りがあれば、その内容を書いたJSON文字列を返す。
+fn session_start(ruby: &Ruby, model: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(model)?;
+    let options = read_json(ruby, options)?;
+    match fmspec_api::Session::new(Arc::clone(&handle.data().model), &options) {
+        Ok(session) => {
+            let data = SessionBox {
+                session: Mutex::new(session),
+            };
+            let birth = Birth {
+                klass: SESSION_CLASS.defined(ruby)?,
+                data,
+                roots: [],
+            };
+            Ok(SESSION.wrap::<Value>(ruby, birth)?.value())
+        }
+        Err(message) => text(ruby, &fmspec_api::to_text(Err(message))),
+    }
+}
+
+/// `#initial(observation_json)`: 初期観測を渡す。
+fn session_initial(ruby: &Ruby, this: Value, observation: Value) -> Result<Value, Error> {
+    let handle = SESSION.check(this)?;
+    let observation = read_json(ruby, observation)?;
+    let result = handle.data().lock().start(&observation);
+    text(ruby, &fmspec_api::to_text(result))
+}
+
+/// `#next_input`: 次の入力を問い合わせる。
+fn session_next_input(ruby: &Ruby, this: Value) -> Result<Value, Error> {
+    let handle = SESSION.check(this)?;
+    let result = handle.data().lock().next_input();
+    text(ruby, &fmspec_api::to_text(result))
+}
+
+/// `#check_input(input_json)`: 入力が全候補で有効かを確かめる。
+fn session_check_input(ruby: &Ruby, this: Value, input: Value) -> Result<Value, Error> {
+    let handle = SESSION.check(this)?;
+    let input = read_json(ruby, input)?;
+    let result = handle.data().lock().check_input(&input);
+    text(ruby, &fmspec_api::to_text(result))
+}
+
+/// `#observe(report_json)`: 実装の応答を渡して、候補集合を更新する。
+fn session_observe(ruby: &Ruby, this: Value, report: Value) -> Result<Value, Error> {
+    let handle = SESSION.check(this)?;
+    let report = read_json(ruby, report)?;
+    let result = handle.data().lock().observe(&report);
+    text(ruby, &fmspec_api::to_text(result))
+}
+
+/// `#candidates`: 現在の候補の状態のJSON文字列。
+fn session_candidates(ruby: &Ruby, this: Value) -> Result<Value, Error> {
+    let handle = SESSION.check(this)?;
+    let candidates = handle.data().lock().candidates();
+    text(ruby, &candidates.to_string())
+}
+
+/// `#shrink(trace_json, options_json)`: モデル違反のトレースを縮小する。
+fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(this)?;
+    let trace = read(ruby, trace)?;
+    let options = read_json(ruby, options)?;
+    let model: &fmspec_api::Model = &handle.data().model;
+    let result = nupur::gvl::without_gvl(ruby, move || {
+        fmspec_api::to_text(fmspec_api::shrink(model, &trace, &options))
+    })?;
     text(ruby, &result)
 }
 
@@ -168,6 +259,16 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     model.define_method("simulate", method!(model_simulate, 1))?;
     model.define_method("verify_certificate", method!(model_verify_certificate, 2))?;
     model.define_method("replay", method!(model_replay, 1))?;
+    model.define_method("shrink", method!(model_shrink, 2))?;
+
+    let session = native.define_data_class(ruby, "Session", None)?;
+    SESSION_CLASS.set(session)?;
+    session.define_singleton_method("start", function!(session_start, 2))?;
+    session.define_method("initial", method!(session_initial, 1))?;
+    session.define_method("next_input", method!(session_next_input, 0))?;
+    session.define_method("check_input", method!(session_check_input, 1))?;
+    session.define_method("observe", method!(session_observe, 1))?;
+    session.define_method("candidates", method!(session_candidates, 0))?;
     Ok(())
 }
 

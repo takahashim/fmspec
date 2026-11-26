@@ -130,6 +130,9 @@ pub fn human(body: &Value) -> String {
     if let Some(message) = body.get("message") {
         let _ = writeln!(out, "  {}", plain(message));
     }
+    if let Some(n) = body.get("original_steps") {
+        let _ = writeln!(out, "  縮小前は {n} ステップ");
+    }
     if let Some(n) = body.get("certificate_states") {
         let checked = if status == "verified" {
             "（判定ゲートが受理）"

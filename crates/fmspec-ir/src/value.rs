@@ -30,7 +30,8 @@ pub fn value_to_json(names: &Names, ty: &Type, x: i64) -> Value {
     }
 }
 
-pub(crate) fn value_from_json(enums: &[EnumNames], ty: &Type, v: &Value) -> Result<i64, String> {
+/// 型に応じて、JSONの値を符号にする。型に合わない値は `Err`。
+pub fn value_from_json(enums: &[EnumNames], ty: &Type, v: &Value) -> Result<i64, String> {
     match ty {
         Type::Bool => v
             .as_bool()
@@ -94,12 +95,8 @@ pub fn args_to_json(model: &Model, action: usize, args: &[i64]) -> (Value, Value
     (Value::Object(params), Value::Object(choices))
 }
 
-pub(crate) fn args_from_json(
-    model: &Model,
-    action: usize,
-    params: &Value,
-    choices: &Value,
-) -> Result<Vec<i64>, String> {
+/// 公開引数と内部選択のJSONを、操作の引数の列にする。
+pub fn args_from_json(model: &Model, action: usize, params: &Value, choices: &Value) -> Result<Vec<i64>, String> {
     let act = &model.raw().actions[action];
     let names = &model.names.actions[action];
     let params = params.as_object().ok_or("args はオブジェクトです")?;

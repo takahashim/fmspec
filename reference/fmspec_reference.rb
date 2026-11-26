@@ -464,6 +464,40 @@ module FmspecReference
       { "status" => "sampled", "completed_traces" => completed, "total_steps" => total }
     end
 
+    # ---- 適合性検査の候補集合（仕様書 §12.2）----
+
+    def action_named(name) = @actions.find { |a| a["name"] == name }
+
+    # 状態で有効な公開入力を、[操作名, 公開引数] の配列で返す。
+    def enabled_inputs(state, cond)
+      @actions.flat_map do |action|
+        next [] unless cond[:actions].include?(action["name"])
+
+        transitions(action, state).map { |t| [action["name"], t["params"]] }.uniq
+      end
+    end
+
+    # 全候補で有効な公開入力。
+    def common_inputs(candidates, cond)
+      candidates.map { |state| enabled_inputs(state, cond) }.reduce { |kept, inputs| kept & inputs } || []
+    end
+
+    # 実装の応答で候補集合を更新する。
+    # Cnext = { t | exists s in C, k, r: T(s, (a, k, r), t) and output_matches(r, y) and obs(t) = x }
+    # `observed` は観測する状態変数の添字、`seen` はその値。出力を宣言しない操作では、戻り値を比べない。
+    def next_candidates(candidates, name, params, output, observed, seen)
+      action = action_named(name)
+      candidates.flat_map do |state|
+        transitions(action, state).filter_map do |t|
+          next unless t["params"] == params
+          next unless action["output"].nil? || t["output"] == output
+          next unless observed.map { |i| t["state"][i] } == seen
+
+          t["state"]
+        end
+      end.uniq
+    end
+
     # ---- 証明書の検査（仕様書 §14.2）----
 
     # 証明書（状態の配列）を検査する。受理なら nil、拒否なら理由の名前を返す。

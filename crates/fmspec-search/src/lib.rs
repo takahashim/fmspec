@@ -7,8 +7,12 @@
 
 pub mod bfs;
 pub mod check;
+pub mod session;
+pub mod shrink;
 pub mod simulate;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
 pub use check::{check, check_evidence, sample, Outcome, Sampled, Status};
+pub use session::{InputCheck, ModelError, NextInput, Observed, Outcome as PossibleOutcome, Seen, SeenOutput, Session};
+pub use shrink::shrink;
 pub use simulate::{simulate, SimOptions, SimResult, SimStats, PRNG_NAME};
