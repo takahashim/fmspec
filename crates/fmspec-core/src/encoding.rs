@@ -792,7 +792,7 @@ pub proof fn lemma_enc_len(v: SVal, t: STy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_enc_seq_len(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
+pub proof fn lemma_enc_seq_len(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
     requires
         members(vs, ts, enums),
     ensures

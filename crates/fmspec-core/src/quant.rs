@@ -56,7 +56,7 @@ pub open spec fn unrank_seq_ok(ts: Seq<STy>, r: Expr, xs: Seq<Expr>, enums: Seq<
 }
 
 /// 整数の定数との二項演算は、`r` と同じく純粋である。
-proof fn lemma_bin_const_pure(op: BinOp, r: Expr, k: i64, n: nat)
+pub proof fn lemma_bin_const_pure(op: BinOp, r: Expr, k: i64, n: nat)
     requires
         pure_below(r, n),
     ensures
@@ -66,7 +66,7 @@ proof fn lemma_bin_const_pure(op: BinOp, r: Expr, k: i64, n: nat)
 }
 
 /// 整数の定数との二項演算の値。
-proof fn lemma_bin_const(op: BinOp, r: Expr, k: i64, env: Env, l: Seq<Value>, i: i64)
+pub proof fn lemma_bin_const(op: BinOp, r: Expr, k: i64, env: Env, l: Seq<Value>, i: i64)
     requires
         at_rank(r, env, l, i),
     ensures

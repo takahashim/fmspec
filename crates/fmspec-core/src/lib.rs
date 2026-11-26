@@ -11,6 +11,7 @@
 //! - [`slots`]：下ろしで使う、スロットの式の組み立て
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
+//! - [`equality`]：等しさの下ろしの補題（符号化の単射性と、値の種類）
 //! - [`quant`]：量化の下ろしの部品（値の番号から正規形のスロットを作る式）
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
 //! - [`typing`]：型規則、整形式性、`validate`、型健全性
@@ -25,6 +26,7 @@
 pub mod bindings;
 pub mod cert;
 pub mod encoding;
+pub mod equality;
 pub mod eval;
 pub mod evidence;
 pub mod expr_copy;

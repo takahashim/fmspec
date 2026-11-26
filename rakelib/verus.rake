@@ -206,7 +206,18 @@ VERUS_MUTANTS = [
   ["lowering.rs", "let hi = n as i64 - 1;", "let hi = n as i64 - 2;", "量化で最後の値をたどらない"],
   ["lowering.rs", "(copy_stype(t), cb(true), n as usize, us)", "(copy_stype(t), cb(false), n as usize, us)", "型の全体をたどる量化で値を選ばない"],
   ["lowering.rs", "let g = bin(BinOp::Lt, Expr::Local(d), copy_expr(&cs[0]));", "let g = bin(BinOp::Le, Expr::Local(d), copy_expr(&cs[0]));", "Listの長さの位置まで要素とみなす"],
-  ["lowering.rs", "let at = k.checked_mul(w)?.checked_add(1)?.checked_add(j)?;", "let at = k.checked_mul(w)?.checked_add(j)?;", "Listの長さのスロットを要素のスロットとみなす"]
+  ["lowering.rs", "let at = k.checked_mul(w)?.checked_add(1)?.checked_add(j)?;", "let at = k.checked_mul(w)?.checked_add(j)?;", "Listの長さのスロットを要素のスロットとみなす"],
+  ["lowering.rs", "bits = mark(&bits, &r, true);", "bits = mark(&bits, &r, false);", "Setのリテラルの要素に印を付けない"],
+  ["lowering.rs", "out.push(and(bin(BinOp::Ge, r, ci(0)), hit));", "out.push(hit);", "型に属さない要素の番号でSetのスロットを選ぶ"],
+  ["lowering.rs", "let out = mark(&bits, &r, true);", "let out = mark(&bits, &r, false);", "Setに要素を加えずに除く"],
+  ["lowering.rs", "let out = mark(&bits, &r, false);", "let out = mark(&bits, &r, true);", "Setから要素を除かずに加える"],
+  ["lowering.rs", "let pos = j.checked_mul(stride)?;", "let pos = j.checked_mul(w)?;", "Mapの大きさで有無の位置を値の幅で数える"],
+  ["lowering.rs", "out.push(not(any_of(&flags)));", "out.push(any_of(&flags));", "空かの判定を反転する"],
+  ["lowering.rs", "out.push(eq(len, ci(0)));", "out.push(eq(len, ci(1)));", "Listが空かを長さ1と比べる"],
+  ["lowering.rs", "                if *positive {", "                if !*positive {", "等しさと等しくなさを入れ替える"],
+  ["slots.rs", "Some(and(eq(copy_expr(&x[0]), copy_expr(&y[0])), implies(copy_expr(&x[0]), rest)))", "Some(implies(copy_expr(&x[0]), rest))", "Optionの有無を比べない"],
+  ["slots.rs", "XType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "XType::List(e, _) => small_stype(e),", "Listの長さの上限を確かめずに等しさを比べる"],
+  ["equality.rs", "SType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "SType::List(e, _) => small_stype(e),", "入れ子のListの長さの上限を確かめない"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -263,7 +274,16 @@ VERUS_CANARIES = [
   ["lowering.rs", "            lemma_list_quant_at(st, max, w, cs, us, g, items, env, l, enums);", "lemma_over_list の値の場合"],
   ["lowering.rs", "        lemma_models_enc(item, st, enums);", "lemma_list_quant_at の要素"],
   ["lowering.rs", "        lemma_scalar_bool(eval_src(body, se, sls2), eval_l(b, env, lx), se.enums);", "lemma_quant_step の選ぶ位置"],
-  ["quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);", "lemma_qscan の帰納"]
+  ["quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);", "lemma_qscan の帰納"],
+  ["lowering.rs", "                    lemma_setlit_step(es@.take(i + 1), *cx, sc0, b0, b1, *blk, sty(*t), bv, r, bits@);", "Setのリテラルのループ"],
+  ["lowering.rs", "                    lemma_mark(true, bits, r, out, p, i as i64, env, l2);\n                    let q", "lemma_insert の値の場合"],
+  ["lowering.rs", "                lemma_count_none(bits);", "lemma_is_empty の空の場合"],
+  ["lowering.rs", "            lemma_count_some(v->Map_0);\n            }\n            lemma_one_denotes(x, env, l2", "lemma_size のMap"],
+  ["lowering.rs", "                lemma_one_denotes(out[0], env, l, Value::Bool((va == vb) == positive), XTy::Bool, se.enums);", "lemma_eq の値の場合"],
+  ["equality.rs", "            lemma_inj_items(i1, i2, *e, enums);", "lemma_enc_inj のList"],
+  ["equality.rs", "            lemma_kinds_rows(rows, *x, enums);", "lemma_kinds のMap"],
+  ["equality.rs", "            lemma_enc_inj(vx, vy, st, enums);", "lemma_eq_coll の等しい場合"],
+  ["equality.rs", "            lemma_and(e0, imp, env, l, true, w1 == w2);", "lemma_eq_option の中身がある場合"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

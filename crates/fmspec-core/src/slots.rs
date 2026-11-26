@@ -17,6 +17,11 @@ use crate::encoding::{members, models_seq, sty, stys, width, width_sum, xty, xty
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{XTy, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
+use crate::equality::lemma_eq_tuple;
+use crate::equality::small_stype;
+#[cfg(verus_keep_ghost)]
+use crate::equality::{eq_ok, eq_seq_ok, lemma_eq_coll, lemma_eq_option, lemma_eq_parts, lemma_eq_scalar};
+#[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
@@ -1046,6 +1051,8 @@ pub open spec fn split_ok(part: Seq<Expr>, slots: Seq<Expr>, ts: Seq<XTy>, i: in
 
 /// 構造の等しさ。Option が空なら中身は比べない。
 pub fn eq_slots(t: &XType, x: &Vec<Expr>, y: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<Expr>)
+    ensures
+        r matches Some(c) ==> eq_ok(xty(*t), x@, y@, c, enums@),
     decreases t, 1nat,
 {
     match t {
@@ -1053,29 +1060,52 @@ pub fn eq_slots(t: &XType, x: &Vec<Expr>, y: &Vec<Expr>, enums: &Vec<i64>) -> (r
             if x.len() == 0 || y.len() == 0 {
                 return None;
             }
+            proof {
+                lemma_eq_scalar(xty(*t), x@, y@, enums@);
+            }
             Some(eq(copy_expr(&x[0]), copy_expr(&y[0])))
         },
         XType::Tuple(ts) => {
             proof {
                 assert(decreases_to!(*t => *ts));
             }
-            eq_parts(t, ts, x, y, enums)
+            let c = eq_parts(t, ts, x, y, enums)?;
+            proof {
+                lemma_eq_tuple(xty(*t), xtys(ts@), x@, y@, c, enums@);
+            }
+            Some(c)
         },
         XType::Record(_, ts) => {
             proof {
                 assert(decreases_to!(*t => *ts));
             }
-            eq_parts(t, ts, x, y, enums)
+            let c = eq_parts(t, ts, x, y, enums)?;
+            proof {
+                lemma_eq_tuple(xty(*t), xtys(ts@), x@, y@, c, enums@);
+            }
+            Some(c)
         },
         XType::Option(inner) => {
             if x.len() == 0 || y.len() == 0 {
                 return None;
             }
             let rest = eq_slots(inner, &sub_exprs(x, 1, x.len()), &sub_exprs(y, 1, y.len()), enums)?;
+            proof {
+                lemma_eq_option(xty(**inner), x@, y@, rest, enums@);
+            }
             Some(and(eq(copy_expr(&x[0]), copy_expr(&y[0])), implies(copy_expr(&x[0]), rest)))
         },
         // Set、Map、List は正規形なので、スロットの一致が値の一致である。
+        // Listの長さは整数のスロットに入るので、長さの上限が大きすぎる型は扱わない。
         XType::Set(_) | XType::Map(_, _) | XType::List(_, _) => {
+            let fits = match t {
+                XType::Map(_, v) => small_stype(v),
+                XType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),
+                _ => true,
+            };
+            if !fits {
+                return None;
+            }
             let n = if x.len() < y.len() {
                 x.len()
             } else {
@@ -1087,10 +1117,16 @@ pub fn eq_slots(t: &XType, x: &Vec<Expr>, y: &Vec<Expr>, enums: &Vec<i64>) -> (r
                 invariant
                     n <= x.len(),
                     n <= y.len(),
+                    i <= n,
+                    items@.len() == i,
+                    forall|q: int| 0 <= q < i ==> #[trigger] items@[q] == Expr::Bin(BinOp::Eq, Box::new(x@[q]), Box::new(y@[q])),
                 decreases n - i,
             {
                 items.push(eq(copy_expr(&x[i]), copy_expr(&y[i])));
                 i += 1;
+            }
+            proof {
+                lemma_eq_coll(xty(*t), x@, y@, items@, enums@);
             }
             Some(all_of(&items))
         },
@@ -1102,6 +1138,8 @@ fn eq_parts(_parent: &XType, ts: &Vec<XType>, x: &Vec<Expr>, y: &Vec<Expr>, enum
 >)
     requires
         decreases_to!(*_parent => *ts),
+    ensures
+        r matches Some(c) ==> eq_seq_ok(xtys(ts@), x@, y@, c, enums@),
     decreases _parent, 0nat,
 {
     let xs = split(ts, x, enums)?;
@@ -1109,6 +1147,10 @@ fn eq_parts(_parent: &XType, ts: &Vec<XType>, x: &Vec<Expr>, y: &Vec<Expr>, enum
     if xs.len() != ts.len() || ys.len() != ts.len() {
         return None;
     }
+    proof {
+        lemma_xtys(ts@);
+    }
+    let ghost tt = xtys(ts@);
     let mut items: Vec<Expr> = Vec::new();
     let mut i = 0;
     while i < ts.len()
@@ -1116,13 +1158,38 @@ fn eq_parts(_parent: &XType, ts: &Vec<XType>, x: &Vec<Expr>, y: &Vec<Expr>, enum
             decreases_to!(*_parent => *ts),
             xs.len() == ts.len(),
             ys.len() == ts.len(),
+            tt == xtys(ts@),
+            tt.len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] tt[j] == xty(ts@[j]),
+            i <= ts.len(),
+            items@.len() == i,
+            forall|k: int| 0 <= k < i ==> #[trigger] eq_ok(tt[k], xs@[k]@, ys@[k]@, items@[k], enums@),
         decreases ts.len() - i,
     {
         proof {
             vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
         }
-        items.push(eq_slots(&ts[i], &xs[i], &ys[i], enums)?);
+        let c = eq_slots(&ts[i], &xs[i], &ys[i], enums)?;
+        items.push(c);
+        proof {
+            assert(tt[i as int] == xty(ts@[i as int]));
+            assert(eq_ok(tt[i as int], xs@[i as int]@, ys@[i as int]@, items@[i as int], enums@));
+        }
         i += 1;
+    }
+    proof {
+        let px = Seq::new(xs@.len(), |k: int| xs@[k]@);
+        let py = Seq::new(ys@.len(), |k: int| ys@[k]@);
+        assert forall|k: int| 0 <= k < tt.len() implies #[trigger] eq_ok(tt[k], px[k], py[k], items@[k], enums@) by {
+            assert(eq_ok(tt[k], xs@[k]@, ys@[k]@, items@[k], enums@));
+        }
+        assert forall|k: int| 0 <= k < tt.len() implies #[trigger] split_ok(px[k], x@, tt, k, enums@) by {
+            assert(split_ok(xs@[k]@, x@, tt, k, enums@));
+        }
+        assert forall|k: int| 0 <= k < tt.len() implies #[trigger] split_ok(py[k], y@, tt, k, enums@) by {
+            assert(split_ok(ys@[k]@, y@, tt, k, enums@));
+        }
+        lemma_eq_parts(tt, x@, y@, px, py, items@, enums@);
     }
     Some(all_of(&items))
 }
