@@ -38,6 +38,8 @@ module Fmspec
       @initially = nil
       @names = {}
       @processes = {}
+      @responses = []
+      @migrations = {}
     end
 
     # ---- 型 ----
@@ -171,6 +173,78 @@ module Fmspec
       nil
     end
 
+    # 移行（仕様書 §12.5）。段階 `phases` を順に進む。ブロックの中の語彙（advance、holds）は
+    # Fmspec::Migration::Body にある。意味は Fmspec::Migration を参照。
+    #
+    #   migration :rename, phases: %i[initial dual_write backfilled contracted] do
+    #     advance(:backfilled) { |s| guard s.unmigrated.eq(0) }
+    #     holds(:copied, during: %i[backfilled contracted]) { |s| s.new_name.eq(s.old_name) }
+    #   end
+    #
+    # 記号的な状態からは、`s.rename.phase`、`s.rename.reached(:backfilled)`、`s.rename.during(:a, :b)` で段階を参照する。
+    def migration(name, phases:, &block)
+      claim(name, "移行")
+      name = name.to_sym
+      phases = Array(phases).map(&:to_sym)
+      raise BuildError, "移行 #{name} の phases: には2つ以上の段階を書きます" if phases.length < 2
+      raise BuildError, "移行 #{name} の段階の名前が重複しています" unless phases.uniq.length == phases.length
+
+      body = Migration::Body.new(name, phases)
+      # ブロックは普通の Ruby で、中の advance と holds のブロックが記号ブロックである。
+      body.instance_eval(&block) if block
+      state(:"#{name}.phase", enum(:"#{name}.phase", *phases), initial: phases.first)
+      @migrations[name] = phases
+      phase = reference(:"#{name}.phase", "var")
+      phases.each_cons(2) do |from, to|
+        action = :"#{name}.#{to}"
+        claim(action, "操作", :action)
+        steps, location = body.advances[to] || [proc { |_s| nil }, caller_locations(1, 1)&.first]
+        built, contracts = Migration::StepBuilder.new(self, action, source_of([location]), phase, from, to).build(&steps)
+        @actions << built
+        @contracts.concat(contracts)
+      end
+      body.invariants.each do |invariant, during, condition, location|
+        qualified = :"#{name}.#{invariant}"
+        claim(qualified, "不変条件", :invariant)
+        expr = lift(instance_exec(StateRef.new(self, "var"), &condition)).expect(:bool, "不変条件 #{qualified}")
+        node = Migration::Ref.new(self, name, phases, "var").during(*during).implies(expr).node
+        @invariants << { "name" => qualified.to_s, "expr" => node, "source" => source_of([location]) }
+      end
+      nil
+    end
+
+    # 有界応答性（仕様書 §12.5）。トリガーが起きたら、数えるステップで `within` 以内に応答が起きる。
+    # ブロックの中の語彙（trigger、response）は Fmspec::Response::Body にある。意味は Fmspec::Response を参照。
+    #
+    #   counting     数えるステップの操作の名前の配列。省略時はすべての操作
+    #   on_terminal  :violation（既定。果たされていない義務を残して終端状態に至れば違反）か :allowed
+    #
+    #   responds(:settled, within: 3, counting: [:run_job]) do
+    #     trigger { |s| s.queued }
+    #     response { |s| s.status.ne(:pending) }
+    #   end
+    #
+    # 経過を状態変数 `名前.elapsed` に持ち、不変条件 `名前` として検査する。
+    def responds(name, within:, counting: nil, on_terminal: :violation, &block)
+      raise BuildError, "有界応答性 #{name} にはブロックが必要です" unless block
+      raise BuildError, "有界応答性 #{name} の within: は0以上の整数です: #{within.inspect}" unless within.is_a?(Integer) && within >= 0
+      unless %i[violation allowed].include?(on_terminal)
+        raise BuildError, "有界応答性 #{name} の on_terminal: は :violation か :allowed です: #{on_terminal.inspect}"
+      end
+
+      claim(name, "不変条件", :invariant)
+      claim(:"#{name}.elapsed", "状態変数")
+      # ブロックは普通の Ruby で、中の trigger と response のブロックが記号ブロックである。
+      body = Response::Body.new(self, name)
+      body.instance_eval(&block)
+      raise BuildError, "有界応答性 #{name} には trigger が必要です" unless body.triggers[:defined]
+      raise BuildError, "有界応答性 #{name} には response が必要です" unless body.responses[:defined]
+
+      @responses << Response::Spec.new(name: name.to_s, trigger: body.triggers, response: body.responses, within: within,
+                                       counting: counting && Array(counting).map(&:to_s), on_terminal: on_terminal)
+      nil
+    end
+
     # 終端条件。真になる状態は、有効な遷移がなくてもデッドロックとみなさない。
     def terminal(&block)
       raise BuildError, "terminal にはブロックが必要です" unless block
@@ -189,6 +263,7 @@ module Fmspec
       return Expr.new({ ref => index }, @states[index][:type].kind) if index
       return @constants[name] if @constants.key?(name)
       return Process::Ref.new(self, name, @processes[name][:count], ref) if @processes.key?(name)
+      return Migration::Ref.new(self, name, @migrations[name], ref) if @migrations.key?(name)
 
       raise BuildError, "未定義の状態変数または定数です: #{name}"
     end
@@ -258,7 +333,7 @@ module Fmspec
       terminal = @terminal || processes_done
       ir["terminal"] = terminal if terminal
       ir["initial_constraint"] = @initially if @initially
-      ir
+      @responses.empty? ? ir : Response.expand(ir, @responses)
     end
 
     # プロセスのインスタンス `id` のステップを、操作に展開する。

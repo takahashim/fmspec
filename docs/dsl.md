@@ -256,7 +256,7 @@ invariant(:no_milk_alone) { |s| s.items.include?(:milk).implies(s.items.any? { |
 
 ## 記号ブロックで使えない構文
 
-記号ブロック（`action`、`step`、`invariant`、`terminal`、`ensures`、`on_accept`、`on_reject` のブロック）の中で、次の構文は使えない。
+記号ブロック（`action`、`step`、`advance`、`invariant`、`holds`、`terminal`、`trigger`、`response`、`ensures`、`on_accept`、`on_reject` のブロック）の中で、次の構文は使えない。
 
 | 構文 | 代わりに使うもの |
 |---|---|
@@ -375,6 +375,86 @@ Counter.check.trace.steps.map(&:action)
 
 read、write、commit などのどこでステップを区切るかは、仕様を書く人が決める。
 DBの分離レベル、ロック、制約は、ステップのguardと更新で表す仕様の仮定であり、エンジンがDBの意味を保証するものではない。
+
+## 有界応答性
+
+`responds` は、「トリガーが起きたら、数えるステップで `within` 以内に応答が起きる」という性質を書く（仕様書 §12.5）。
+
+```ruby
+Jobs = Fmspec.define(:jobs) do
+  # ...
+  responds(:processed, within: 3, counting: [:work]) do
+    trigger :enqueue
+    response { |s| s.done }
+  end
+end
+
+Jobs.check.verified?
+```
+
+| 要素 | 書き方 |
+|---|---|
+| トリガー | `trigger` に、操作の名前を並べるか、状態述語のブロックを渡す。両方を書くと、どちらか |
+| 応答 | `response`。書き方は `trigger` と同じ |
+| 数えるステップ | `counting:` に操作の名前の配列。省略時はすべての操作 |
+| 期限 | `within:`。0以上の整数 |
+| 終端での扱い | `on_terminal:`。`:violation`（既定）なら、果たされていない義務を残して終端状態に至ることも違反。`:allowed` なら違反にしない |
+
+意味は次のとおりである。
+実行の位置 j で、状態述語は j の状態で評価し、操作の名前は j に至る遷移の操作と比べる。
+
+- 位置 i のトリガーは、**義務**を作る。
+- 義務は、i から数えるステップが `within` 以下の位置（i 自身を含む）で応答が起きれば果たされる。
+- 果たされないまま、数えるステップが `within` を超える位置に至れば違反である。その位置で応答が起きても遅い。
+- 同時に存在する義務は、1つの応答ですべて果たされる。
+
+検査は、性質を有限モニタに変換して行う（仕様書 §12.6）。
+最も古い義務の経過（数えるステップの数、義務がなければ -1）を状態変数 `名前.elapsed` に持ち、各操作の最後にその更新を加え、不変条件 `名前` で違反を検出する。
+同時に存在する義務は1つの応答ですべて果たされるので、最も古い義務だけを数えれば足りる。
+元の操作の guard と更新は変えないので、元の状態変数の到達可能な値は変わらない。
+`check(invariants: [...])` で、性質ごとに検査を選べる。
+
+数えるステップが起きなければ、期限は来ない。
+数えるステップが起き続けることや、環境が応答することは、モデルの仮定である。
+仮定は `counting:` とモデルのguardで明示する。
+`test/response_test.rb` の例では、ワーカーの失敗が2回までであることを、`work` のguardで仮定している。
+これは有界の性質であり、一般的な非有界活性や公平性を保証するものではない。
+有効な遷移がなくなる状態は、`deadlock: true` で検査する。
+
+## 移行
+
+`migration` は、スキーマや機能フラグを段階的に切り替える手順を、段階の列として書く（仕様書 §12.5）。
+
+```ruby
+Rename = Fmspec.define(:rename) do
+  # 旧列、新列、新版のインスタンスの数、バックフィルの完了などの状態変数 ...
+  migration :rename, phases: %i[initial expand dual_write backfilled contracted] do
+    advance(:expand) { |_s| update new_name: -1 }
+    advance(:dual_write) { |s| guard s.new_instances.eq(2) }
+    advance(:backfilled) { |s| guard s.backfilled }
+    holds(:copied, during: %i[backfilled contracted]) { |s| s.new_name.eq(s.old_name) }
+  end
+  # デプロイ、書き込み、バックフィルの操作 ...
+end
+```
+
+| 語彙 | 内容 |
+|---|---|
+| `migration(名前, phases: [段階, ...])` | 段階の列。最初の段階から始まる |
+| `advance(段階) { \|s\| ... }` | その段階へ進む操作の中身。`action` のブロックと同じ語彙で、guardと更新を書く。公開引数は持たない |
+| `holds(名前, during: [段階, ...]) { \|s\| ... }` | 指定した段階で成り立つべき不変条件 |
+
+仕様は、基本のIRに次のように展開する。
+
+- 段階を、列挙型 `rename.phase` の状態変数 `rename.phase` にする。
+- 2番目以降の段階ごとに、その段階へ進む操作（`rename.expand` など）を作る。操作は直前の段階にいるときだけ有効で、`advance` のguardと更新に、段階の更新を加える。`advance` を書かない段階へは、無条件に進める。
+- `holds` を、不変条件 `rename.copied`（「段階が `during` のどれかなら、ブロックの式が真」）にする。
+
+記号ブロックからは、`s.rename.phase`、`s.rename.reached(:dual_write)`（その段階かそれより後）、`s.rename.during(:a, :b)` で段階を参照する。
+混在するバージョン、バックフィル、再試行は、普通の状態変数と操作で書き、段階をguardで参照する。
+`test/migration_test.rb` の例では、ローリングデプロイの途中で dual_write へ進む誤った手順を、旧版の書き込みが新列に届かない反例として検出する。
+
+これは移行の手順のモデルであり、実DBの移行全体の正しさを証明するものではない。
 
 ## 検査
 
