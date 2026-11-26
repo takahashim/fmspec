@@ -204,7 +204,9 @@ VERUS_MUTANTS = [
   ["lowering.rs", "Expr::Implies(Box::new(guard), Box::new(e))", "Expr::And(Box::new(guard), Box::new(e))", "forallのガードを論理積にする"],
   ["lowering.rs", "let at = j.checked_mul(stride)?;", "let at = j.checked_mul(w)?;", "Mapの有無の位置を値の幅で数える"],
   ["lowering.rs", "let hi = n as i64 - 1;", "let hi = n as i64 - 2;", "量化で最後の値をたどらない"],
-  ["lowering.rs", "(copy_stype(t), cb(true), n as usize)", "(copy_stype(t), cb(false), n as usize)", "型の全体をたどる量化で値を選ばない"]
+  ["lowering.rs", "(copy_stype(t), cb(true), n as usize, us)", "(copy_stype(t), cb(false), n as usize, us)", "型の全体をたどる量化で値を選ばない"],
+  ["lowering.rs", "let g = bin(BinOp::Lt, Expr::Local(d), copy_expr(&cs[0]));", "let g = bin(BinOp::Le, Expr::Local(d), copy_expr(&cs[0]));", "Listの長さの位置まで要素とみなす"],
+  ["lowering.rs", "let at = k.checked_mul(w)?.checked_add(1)?.checked_add(j)?;", "let at = k.checked_mul(w)?.checked_add(j)?;", "Listの長さのスロットを要素のスロットとみなす"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -257,7 +259,9 @@ VERUS_CANARIES = [
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
   ["lowering.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
-  ["lowering.rs", "            lemma_guard_pick(g, fs, bits, env, l);", "lemma_over_map の値の場合"],
+  ["lowering.rs", "        lemma_guard_pick(g, fs, bits, env, l);", "lemma_over_map_at の値の場合"],
+  ["lowering.rs", "            lemma_list_quant_at(st, max, w, cs, us, g, items, env, l, enums);", "lemma_over_list の値の場合"],
+  ["lowering.rs", "        lemma_models_enc(item, st, enums);", "lemma_list_quant_at の要素"],
   ["lowering.rs", "        lemma_scalar_bool(eval_src(body, se, sls2), eval_l(b, env, lx), se.enums);", "lemma_quant_step の選ぶ位置"],
   ["quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);", "lemma_qscan の帰納"]
 ].freeze

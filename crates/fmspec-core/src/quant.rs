@@ -5,8 +5,10 @@
 //! そのため、たどる順は値の正規順になる。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_seq, keys, keys_product, sty, stys, STy, SVal};
+use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, sty, stys, STy, SVal};
 use crate::encoding::{keys_exec, SType};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_stys, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
@@ -497,45 +499,46 @@ proof fn lemma_unrank_seq_step(tn: Seq<STy>, r: Expr, k: i64, pv: Seq<Expr>, lv:
 }
 
 
-// ---- 対象に含まれるかの印 ----
+// ---- 番号の位置の式を選ぶ ----
 
-/// 式の列 `fs` の各式は、局所変数 `l` のもとで `bits` の真偽になる。
-pub open spec fn flags_at(fs: Seq<Expr>, bits: Seq<bool>, env: Env, l: Seq<Value>) -> bool {
-    &&& fs.len() == bits.len()
+/// 式の列 `fs` の各式は、局所変数 `l` のもとで純粋で、値は `vals` になる。
+pub open spec fn vals_at(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq<Value>) -> bool {
+    &&& fs.len() == vals.len()
     &&& forall|j: int|
         0 <= j < fs.len() ==> pure_below(#[trigger] fs[j], l.len()) && eval_l(fs[j], env, l) == Ok::<Value, ErrKind>(
-            Value::Bool(bits[j]),
+            vals[j],
         )
 }
 
-/// 局所変数を後ろに加えても、印の値は変わらない。
-pub proof fn lemma_flags_weaken(fs: Seq<Expr>, bits: Seq<bool>, env: Env, l: Seq<Value>, l2: Seq<Value>)
+/// 局所変数を後ろに加えても、式の値は変わらない。
+pub proof fn lemma_vals_weaken(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq<Value>, l2: Seq<Value>)
     requires
-        flags_at(fs, bits, env, l),
+        vals_at(fs, vals, env, l),
         prefix(l, l2),
     ensures
-        flags_at(fs, bits, env, l2),
+        vals_at(fs, vals, env, l2),
 {
     assert forall|j: int| 0 <= j < fs.len() implies pure_below(#[trigger] fs[j], l2.len()) && eval_l(fs[j], env, l2)
-        == Ok::<Value, ErrKind>(Value::Bool(bits[j])) by {
+        == Ok::<Value, ErrKind>(vals[j]) by {
         lemma_weaken(fs[j], env, l, l2);
         lemma_pure_mono(fs[j], l.len(), l2.len());
     }
 }
 
-/// `x` は、番号 `r` の位置の印 `fs` の値になる。
-pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
+/// `x` は、番号 `r` が `lo..hi` にあれば、その位置の式 `fs[r]` と同じ値になる。
+pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> bool {
     &&& forall|m: nat| pure_below(r, m) && all_pure(fs, m) ==> #[trigger] pure_below(x, m)
-    &&& forall|env: Env, l: Seq<Value>, i: i64, bits: Seq<bool>|
-        #[trigger] at_rank(r, env, l, i) && #[trigger] flags_at(fs, bits, env, l) && 0 <= i < fs.len() ==> eval_l(
-            x,
-            env,
-            l,
-        ) == Ok::<Value, ErrKind>(Value::Bool(bits[i as int]))
+    &&& forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
+        #[trigger] at_rank(r, env, l, i) && #[trigger] vals_at(fs, vals, env, l) && lo <= i < hi ==> eval_l(x, env, l)
+            == Ok::<Value, ErrKind>(vals[i as int])
 }
 
-/// 番号 `r` の位置の印を選ぶ式。
-pub(crate) fn pick_flag(fs: &Vec<Expr>, r: &Expr) -> (x: Expr)
+pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
+    picks_in(x, fs, r, 0, fs.len() as int)
+}
+
+/// 番号 `r` の位置の式を選ぶ式。
+pub(crate) fn pick_slot(fs: &Vec<Expr>, r: &Expr) -> (x: Expr)
     requires
         fs@.len() <= 0x7fff_ffff,
     ensures
@@ -547,18 +550,7 @@ pub(crate) fn pick_flag(fs: &Vec<Expr>, r: &Expr) -> (x: Expr)
     pick_range(fs, 0, fs.len(), r)
 }
 
-/// `x` は、番号 `r` が `lo..hi` にあれば、その位置の印の値になる。
-pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> bool {
-    &&& forall|m: nat| pure_below(r, m) && all_pure(fs, m) ==> #[trigger] pure_below(x, m)
-    &&& forall|env: Env, l: Seq<Value>, i: i64, bits: Seq<bool>|
-        #[trigger] at_rank(r, env, l, i) && #[trigger] flags_at(fs, bits, env, l) && lo <= i < hi ==> eval_l(
-            x,
-            env,
-            l,
-        ) == Ok::<Value, ErrKind>(Value::Bool(bits[i as int]))
-}
-
-/// 番号 `r` の `lo..hi` の位置の印を、二分木の `ite` で選ぶ。
+/// 番号 `r` の `lo..hi` の位置の式を、二分木の `ite` で選ぶ。
 fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
     requires
         lo < hi <= fs@.len() <= 0x7fff_ffff,
@@ -569,12 +561,12 @@ fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
     if hi - lo == 1 {
         let x = copy_expr(&fs[lo]);
         proof {
-            assert forall|env: Env, l: Seq<Value>, i: i64, bits: Seq<bool>|
-                #[trigger] at_rank(*r, env, l, i) && #[trigger] flags_at(fs@, bits, env, l) && lo <= i < hi implies eval_l(
+            assert forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
+                #[trigger] at_rank(*r, env, l, i) && #[trigger] vals_at(fs@, vals, env, l) && lo <= i < hi implies eval_l(
                 x,
                 env,
                 l,
-            ) == Ok::<Value, ErrKind>(Value::Bool(bits[i as int])) by {
+            ) == Ok::<Value, ErrKind>(vals[i as int]) by {
                 assert(i == lo);
             }
         }
@@ -590,17 +582,88 @@ fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
             lemma_bin_const_pure(BinOp::Lt, *r, mid as i64, m);
             assert(pure_below(a, m) && pure_below(b, m));
         }
-        assert forall|env: Env, l: Seq<Value>, i: i64, bits: Seq<bool>|
-            #[trigger] at_rank(*r, env, l, i) && #[trigger] flags_at(fs@, bits, env, l) && lo <= i < hi implies eval_l(
+        assert forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
+            #[trigger] at_rank(*r, env, l, i) && #[trigger] vals_at(fs@, vals, env, l) && lo <= i < hi implies eval_l(
             x,
             env,
             l,
-        ) == Ok::<Value, ErrKind>(Value::Bool(bits[i as int])) by {
+        ) == Ok::<Value, ErrKind>(vals[i as int]) by {
             lemma_bin_const(BinOp::Lt, *r, mid as i64, env, l, i);
             assert(eval_l(c, env, l) == Ok::<Value, ErrKind>(Value::Bool(i < mid)));
         }
     }
     x
+}
+
+/// Listの要素は、要素の型に属する。
+pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
+    requires
+        list_items_member(items, t, enums),
+        0 <= k < items.len(),
+    ensures
+        member(items[k], t, enums),
+    decreases items.len(),
+{
+    if k < items.len() - 1 {
+        lemma_items_member(items.drop_last(), t, enums, k);
+        assert(items.drop_last()[k] == items[k]);
+    }
+}
+
+/// Listの要素の符号化の、`k` 番目の要素の `j` 番目のスロット。
+pub proof fn lemma_items_index(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int, j: int)
+    requires
+        list_items_member(items, t, enums),
+        0 <= k < items.len(),
+        0 <= j < width(t, enums),
+    ensures
+        member(items[k], t, enums),
+        enc_items(items, t, enums).len() == items.len() * width(t, enums),
+        0 <= k * width(t, enums) + j < items.len() * width(t, enums),
+        enc_items(items, t, enums)[k * width(t, enums) + j] == enc(items[k], t, enums)[j],
+    decreases items.len(),
+{
+    let n = items.len() as int;
+    let w = width(t, enums) as int;
+    lemma_enc_items_len(items, t, enums);
+    lemma_enc_items_len(items.drop_last(), t, enums);
+    assert(k * w + j < n * w) by (nonlinear_arith)
+        requires
+            0 <= k < n,
+            0 <= j < w,
+    ;
+    assert(0 <= k * w) by (nonlinear_arith)
+        requires
+            0 <= k,
+            0 <= w,
+    ;
+    lemma_enc_len(items.last(), t, enums);
+    if k == n - 1 {
+        assert((n - 1) * w + j - (n - 1) * w == j);
+    } else {
+        lemma_items_index(items.drop_last(), t, enums, k, j);
+        assert(items.drop_last()[k] == items[k]);
+    }
+}
+
+/// 先頭の `len` 個の位置を選ぶと、列の先頭になる。
+pub proof fn lemma_select_prefix(dom: Seq<SVal>, m: nat, len: nat)
+    requires
+        m <= dom.len(),
+    ensures
+        select_bits(dom, Seq::new(m, |i: int| i < len)) == dom.take(if m <= len { m as int } else { len as int }),
+    decreases m,
+{
+    if m > 0 {
+        let bits = Seq::new(m, |i: int| i < len);
+        assert(bits.drop_last() =~= Seq::new((m - 1) as nat, |i: int| i < len));
+        lemma_select_prefix(dom, (m - 1) as nat, len);
+        if m <= len {
+            assert(dom.take(m - 1).push(dom[m - 1]) =~= dom.take(m as int));
+        }
+    } else {
+        assert(dom.take(0) =~= Seq::<SVal>::empty());
+    }
 }
 
 // ---- 番号を順にたどる量化と、値を順にたどる量化 ----

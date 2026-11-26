@@ -1461,7 +1461,7 @@ pub open spec fn frag(e: TExpr) -> bool
             Over::Type(_) => true,
             Over::Set(_, s) => frag(*s),
             Over::Map(_, m) => frag(*m),
-            Over::List(_) => false,
+            Over::List(l) => frag(*l),
         },
         _ => false,
     }

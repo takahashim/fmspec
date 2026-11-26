@@ -824,7 +824,7 @@ pub proof fn lemma_enc_rows_len(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>
     }
 }
 
-proof fn lemma_enc_items_len(items: Seq<SVal>, t: STy, enums: Seq<i64>)
+pub proof fn lemma_enc_items_len(items: Seq<SVal>, t: STy, enums: Seq<i64>)
     requires
         list_items_member(items, t, enums),
     ensures
