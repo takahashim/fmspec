@@ -73,6 +73,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | 縮小（`fmspec-search`） | 縮小結果は判定ゲートが受理したトレースに限る。最短の反例に達することの確認 |
 | MBTのセッション（`fmspec-search`） | 仕様書§17.2.1の境界ケース、参照実装との候補集合の比較 |
 | MBTのドライバ（`lib/`） | 意図的にバグを入れた実装での、検出と縮小 |
+| Rails統合（`fmspec-rails/`） | 決済、ジョブ、Webhookを持つアプリケーションでの4種類の変異の検出、隔離の失敗の検出 |
 | IRと証拠の読み書き（`fmspec-ir`） | 不正なIRの拒否、往復、参照実装との比較 |
 | CLI（`fmspec-cli`） | 終了コードと出力 |
 | Ruby DSL（`lib/`） | 生成したIRと期待するIRの比較、参照実装による意味の確認、誤用の拒否 |
@@ -132,6 +133,7 @@ lintが直れば `expect` が満たされなくなり、`rake nupur:lint` が失
 | Rust | 1.100.0（cargoビルド）、1.98.1（Verus）、nightly-2026-08-20（`nupur_lints`） |
 | Nupur | Makiri v0.17.0.rc3（`rakelib/nupur.rake` の `NUPUR_COMMIT`） |
 | Ruby | 3.3以上。開発は4.0.10 |
+| Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite |
 
 検証に使うVerusと、cargoビルドに使う `vstd` のリリースは一致していない。
 仕様書のスパイクはVerus 0.2026.11.02で行っており、リリースを揃えることは残作業である。

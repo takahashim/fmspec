@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+# 本体は、リポジトリの中のものを使う。native extension は `rake compile` でビルドしておく。
+gem "fmspec", path: ".."
+
+gem "minitest"
+gem "rake"
+# テスト用のRailsアプリケーション（test/support）が使う。
+gem "railties", ">= 7.1"
+gem "sqlite3", ">= 2.1"

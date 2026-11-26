@@ -81,7 +81,7 @@ module Fmspec
 
     # 登録を、実行の前に仕様と照合する。
     def validate!
-      raise BuildError, "bind には setup が必要です" unless @setup
+      raise BuildError, "bind には setup が必要です" if setup_required? && !@setup
 
       ir = @model.to_ir
       actions = ir["actions"].to_h { |a| [a["name"].to_sym, a] }
@@ -97,6 +97,8 @@ module Fmspec
 
       @commands.each_value { |handler| check_keywords(handler, actions[handler.name]) }
     end
+
+    def setup_required? = true
 
     # command のブロックのキーワード引数が、操作の公開引数と合うことを確かめる。
     def check_keywords(handler, action)

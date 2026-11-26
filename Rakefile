@@ -3,7 +3,7 @@
 # fmspec の開発タスク。個別のタスクは rakelib/ にある。
 #
 #   rake            テストと Verus の検証をすべて実行する
-#   rake test       Rust のテスト、参照実装のテスト、比較テスト、Ruby のテスト
+#   rake test       Rust のテスト、参照実装のテスト、比較テスト、Ruby のテスト、fmspec-rails のテスト
 #   rake verus      中核の証明と、証明が空虚でないことの検査
 #   rake compile    native extension をビルドして lib/fmspec に置く
 #   rake nupur:check  Nupur の写しが、固定したコミットの内容と一致することの検査
@@ -43,10 +43,20 @@ namespace :test do
     cargo "build", "--quiet"
     ruby File.join(ROOT, "reference/test/differential_test.rb")
   end
+
+  # fmspec-rails は別gemで、依存を fmspec-rails/vendor/bundle に持つ（fmspec-rails で bundle install しておく）。
+  desc "fmspec-rails のテスト（Rails アプリケーションでの適合性検査）"
+  task rails: :compile do
+    dir = File.join(ROOT, "fmspec-rails")
+    env = { "BUNDLE_GEMFILE" => File.join(dir, "Gemfile") }
+    Dir[File.join(dir, "test/*_test.rb")].sort.each do |file|
+      sh env, "bundle", "exec", "ruby", "-Ilib", file, chdir: dir
+    end
+  end
 end
 
 desc "すべてのテスト"
-task test: %w[test:rust test:reference test:differential test:ruby]
+task test: %w[test:rust test:reference test:differential test:ruby test:rails]
 
 desc "clippy と rustfmt"
 task :lint do
