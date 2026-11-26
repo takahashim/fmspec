@@ -18,6 +18,7 @@ pub mod bindings;
 pub mod cert;
 pub mod eval;
 pub mod evidence;
+pub mod expr_copy;
 pub mod gate;
 mod impls;
 pub mod mbt;

@@ -1,7 +1,10 @@
 //! Map lookup lowering over the slots of an already evaluated map and key.
 
 #[cfg(verus_keep_ghost)]
+use crate::bindings::{eval_bindings, eval_bound_body};
+#[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
+use crate::expr_copy::copy_expr;
 use crate::model::*;
 use vstd::prelude::*;
 
@@ -177,6 +180,141 @@ pub fn require_map_key(present: Expr, rank_local: usize) -> (out: Expr)
         reveal_with_fuel(eval_l, 5);
     }
     out
+}
+
+pub open spec fn flat_slot(flat: Seq<Expr>, width: usize, column: usize, rank: int, env: Env, locals: Seq<Value>)
+    -> Result<Value, ErrKind>
+{
+    eval_l(flat[rank * (1 + width as int) + column as int], env, locals)
+}
+
+/// Project and select directly from the actual row-major lowered operand.
+pub fn select_flat_map_slot(
+    flat: &Vec<Expr>, rows: usize, width: usize, column: usize, rank_local: usize, fallback: Expr,
+) -> (out: Option<Expr>)
+    ensures
+        out is Some <==> column <= width && (rows == 0 || width < usize::MAX)
+            && (rows as int) * (1 + width) == flat@.len(),
+        out matches Some(expr) ==> (rows == 0 ==> expr == fallback)
+            && forall|env: Env, locals: Seq<Value>|
+                rank_local < locals.len() && locals[rank_local as int] is Int
+                    && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
+                ==> #[trigger] eval_l(expr, env, locals)
+                    == flat_slot(flat@, width, column, key_rank(locals, rank_local), env, locals),
+{
+    let indices = map_slot_indices(rows, width, column, flat.len())?;
+    let mut expressions: Vec<Expr> = Vec::new();
+    let mut i = 0;
+    while i < indices.len()
+        invariant
+            i <= indices@.len() == rows,
+            expressions@.len() == i,
+            forall|j: int| 0 <= j < rows ==> #[trigger] indices@[j] == j * (1 + width) + column
+                && indices@[j] < flat@.len(),
+            forall|j: int| 0 <= j < i ==> #[trigger] expressions@[j] == flat@[indices@[j] as int],
+        decreases indices@.len() - i,
+    {
+        expressions.push(copy_expr(&flat[indices[i]]));
+        i = i + 1;
+    }
+    let ghost projected = expressions@;
+    let expr = select_map_slot(expressions, rank_local, fallback);
+    proof {
+        assert forall|env: Env, locals: Seq<Value>|
+            rank_local < locals.len() && locals[rank_local as int] is Int
+                && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
+            implies #[trigger] eval_l(expr, env, locals)
+                == flat_slot(flat@, width, column, key_rank(locals, rank_local), env, locals) by {
+            let rank = key_rank(locals, rank_local);
+            assert(projected[rank] == flat@[indices@[rank] as int]);
+            assert(eval_l(expr, env, locals) == selected(projected, rank, env, locals));
+        }
+    }
+    Some(expr)
+}
+
+pub open spec fn guarded_map_slot(
+    check: Expr, payload: Expr, env: Env, locals: Seq<Value>,
+) -> Result<Value, ErrKind> {
+    eval_bound_body(seq![check], 1, payload, env, locals)
+}
+
+/// Compose the presence check and the selected payload as Block does with its let binding.
+pub proof fn guarded_lookup_matches_flat_row(
+    check: Expr, payload: Expr, flat: Seq<Expr>, rows: usize, width: usize,
+    column: usize, rank_local: usize, env: Env, locals: Seq<Value>,
+)
+    requires
+        0 < column <= width,
+        rank_local < locals.len(),
+        locals[rank_local as int] is Int,
+        0 <= key_rank(locals, rank_local) < rows,
+        eval_l(check, env, locals) == match as_bool(flat_slot(
+            flat, width, 0, key_rank(locals, rank_local), env, locals,
+        )) {
+            Ok(true) => Ok(Value::Bool(true)),
+            Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+            Err(error) => Err(error),
+        },
+        eval_l(payload, env, locals.push(Value::Bool(true))) == flat_slot(
+            flat, width, column, key_rank(locals, rank_local), env, locals.push(Value::Bool(true)),
+        ),
+    ensures
+        guarded_map_slot(check, payload, env, locals) == match as_bool(flat_slot(
+            flat, width, 0, key_rank(locals, rank_local), env, locals,
+        )) {
+            Ok(true) => flat_slot(
+                flat, width, column, key_rank(locals, rank_local), env, locals.push(Value::Bool(true)),
+            ),
+            Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+            Err(error) => Err(error),
+        },
+{
+    reveal_with_fuel(eval_bindings, 2);
+}
+
+/// Compile the presence check from the same flat operand used for payload selection.
+pub fn select_flat_map_check(flat: &Vec<Expr>, rows: usize, width: usize, rank_local: usize)
+    -> (out: Option<Expr>)
+    ensures
+        out is Some <==> (rows == 0 || width < usize::MAX) && (rows as int) * (1 + width) == flat@.len(),
+        out matches Some(check) ==> forall|env: Env, locals: Seq<Value>|
+            rank_local < locals.len() && locals[rank_local as int] is Int
+                && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
+            ==> #[trigger] eval_l(check, env, locals) ==
+                if key_rank(locals, rank_local) < 0 {
+                    Err(ErrKind::Failed(MISSING_KEY))
+                } else {
+                    match as_bool(flat_slot(flat@, width, 0, key_rank(locals, rank_local), env, locals)) {
+                        Ok(true) => Ok(Value::Bool(true)),
+                        Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+                        Err(error) => Err(error),
+                    }
+                },
+{
+    let presence = select_flat_map_slot(flat, rows, width, 0, rank_local, Expr::Const(Value::Bool(false)))?;
+    let ghost p = presence;
+    let check = require_map_key(presence, rank_local);
+    proof {
+        assert forall|env: Env, locals: Seq<Value>|
+            rank_local < locals.len() && locals[rank_local as int] is Int
+                && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
+            implies #[trigger] eval_l(check, env, locals) ==
+                if key_rank(locals, rank_local) < 0 {
+                    Err(ErrKind::Failed(MISSING_KEY))
+                } else {
+                    match as_bool(flat_slot(flat@, width, 0, key_rank(locals, rank_local), env, locals)) {
+                        Ok(true) => Ok(Value::Bool(true)),
+                        Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+                        Err(error) => Err(error),
+                    }
+                } by {
+            if key_rank(locals, rank_local) >= 0 {
+                assert(eval_l(p, env, locals) == flat_slot(flat@, width, 0, key_rank(locals, rank_local), env, locals));
+            }
+        }
+    }
+    Some(check)
 }
 
 } // verus!

@@ -12,25 +12,7 @@ use core::fmt;
 
 impl Clone for Expr {
     fn clone(&self) -> Self {
-        match self {
-            Expr::Const(v) => Expr::Const(*v),
-            Expr::Var(i) => Expr::Var(*i),
-            Expr::Arg(i) => Expr::Arg(*i),
-            Expr::Next(i) => Expr::Next(*i),
-            Expr::Out => Expr::Out,
-            Expr::Bin(op, a, b) => Expr::Bin(*op, a.clone(), b.clone()),
-            Expr::Not(a) => Expr::Not(a.clone()),
-            Expr::And(a, b) => Expr::And(a.clone(), b.clone()),
-            Expr::Or(a, b) => Expr::Or(a.clone(), b.clone()),
-            Expr::Implies(a, b) => Expr::Implies(a.clone(), b.clone()),
-            Expr::Ite(c, a, b) => Expr::Ite(c.clone(), a.clone(), b.clone()),
-            Expr::Local(i) => Expr::Local(*i),
-            Expr::Let(a, b) => Expr::Let(a.clone(), b.clone()),
-            Expr::Forall(ty, lo, hi, body) => Expr::Forall(*ty, *lo, *hi, body.clone()),
-            Expr::Exists(ty, lo, hi, body) => Expr::Exists(*ty, *lo, *hi, body.clone()),
-            Expr::Code(a) => Expr::Code(a.clone()),
-            Expr::Fail(ty, k) => Expr::Fail(*ty, *k),
-        }
+        crate::expr_copy::copy_expr(self)
     }
 }
 

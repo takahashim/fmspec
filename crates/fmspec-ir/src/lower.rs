@@ -16,7 +16,7 @@ use crate::json::{array, int, object, operands, required, schema, single, string
 use crate::model::{EnumNames, LoadError};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
 use fmspec_core::bindings::wrap_bindings;
-use fmspec_core::map_lookup::{map_slot_indices, require_map_key, select_map_slot, MISSING_KEY};
+use fmspec_core::map_lookup::{select_flat_map_check, select_flat_map_slot, MISSING_KEY};
 use fmspec_core::model::{BinOp, Expr as C, Type, Value as CV};
 use fmspec_core::ranking::{extend_rank, offset_rank, option_rank};
 use serde_json::Value;
@@ -1280,15 +1280,15 @@ impl<'a> Ctx<'a> {
                 };
                 let rows = k.keys(enums).unwrap_or(0) as usize;
                 let width = v.width(enums);
-                let select_column = |column, fallback| {
-                    let Some(indices) = map_slot_indices(rows, width, column, ms.len()) else {
-                        return type_error(path, "Mapのスロット配置が型と一致しません");
+                let select_column =
+                    |column, fallback| match select_flat_map_slot(&ms, rows, width, column, rank_local, fallback) {
+                        Some(expr) => Ok(expr),
+                        None => type_error(path, "Mapのスロット配置が型と一致しません"),
                     };
-                    let expressions = indices.into_iter().map(|index| ms[index].clone()).collect();
-                    Ok(select_map_slot(expressions, rank_local, fallback))
+                let Some(check) = select_flat_map_check(&ms, rows, width, rank_local) else {
+                    return type_error(path, "Mapのスロット配置が型と一致しません");
                 };
-                let presence = select_column(0, cb(false))?;
-                blk.bind(require_map_key(presence, rank_local));
+                blk.bind(check);
                 let slots = defaults(enums, &v)
                     .into_iter()
                     .enumerate()
