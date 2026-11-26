@@ -1,4 +1,4 @@
-//! Lowering ordered bindings to core let expressions.
+//! 評価の順に並べた束縛の列を、中核の `let` の入れ子にする。
 
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
@@ -9,7 +9,7 @@ use vstd::prelude::*;
 
 verus! {
 
-/// Evaluate a prefix in source order, stopping at its first error.
+/// 束縛の列を先頭から評価する。最初のエラーで止まる。
 pub open spec fn eval_bindings(
     bindings: Seq<Expr>,
     n: nat,
@@ -45,7 +45,7 @@ pub open spec fn eval_bound_body(
     }
 }
 
-/// The returned expression runs the bindings in order before evaluating the body.
+/// 束縛を順に評価してから本体を評価する式を返す。
 pub fn wrap_bindings(bindings: Vec<Expr>, body: Expr) -> (out: Expr)
     ensures
         forall|env: Env, locals: Seq<Value>|

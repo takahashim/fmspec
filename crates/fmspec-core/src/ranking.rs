@@ -1,4 +1,4 @@
-//! Building the arithmetic used by finite key rankings.
+//! Setの要素とMapのキーに付ける番号（rank）の計算。
 
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, Env, ErrKind};
@@ -8,7 +8,7 @@ use vstd::prelude::*;
 
 verus! {
 
-/// Rank within a closed integer interval whose lower endpoint is `min`.
+/// 下端が `min` の整数の区間での番号。
 pub fn offset_rank(value: Expr, min: i64) -> (out: Expr)
     ensures
         forall|env: Env, locals: Seq<Value>|
@@ -33,7 +33,7 @@ pub fn offset_rank(value: Expr, min: i64) -> (out: Expr)
     }
 }
 
-/// Append one component of a tuple or record rank in mixed radix.
+/// TupleとRecordの番号に、要素の番号を1桁加える（混合基数）。
 pub fn extend_rank(prefix: Expr, radix: i64, component: Expr) -> (out: Expr)
     ensures
         forall|env: Env, locals: Seq<Value>|
@@ -87,7 +87,7 @@ pub open spec fn mixed_rank_eval(
     }
 }
 
-/// Build the left-to-right mixed-radix expression used for tuple and record ranks.
+/// TupleとRecordの番号の式を作る。要素を左から順に、混合基数の桁として加える。
 pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
     ensures forall|env: Env, locals: Seq<Value>|
         #[trigger] eval_l(out, env, locals) == mixed_rank_eval(parts@, parts@.len() as nat, env, locals),
@@ -131,7 +131,7 @@ pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
     out
 }
 
-/// Reserve rank zero for None. The payload is evaluated only for Some.
+/// Optionの番号。空を0とし、中身の番号は値があるときだけ評価する。
 pub fn option_rank(present: Expr, payload: Expr) -> (out: Expr)
     ensures
         forall|env: Env, locals: Seq<Value>|
@@ -153,7 +153,7 @@ pub fn option_rank(present: Expr, payload: Expr) -> (out: Expr)
     out
 }
 
-/// Combining two in-range ranks preserves both digits.
+/// 範囲内の2桁を組み合わせた番号から、両方の桁が決まる。
 pub proof fn rank_digits_are_unique(radix: int, a: int, b: int, c: int, d: int)
     requires
         0 <= b < radix,
@@ -165,7 +165,7 @@ pub proof fn rank_digits_are_unique(radix: int, a: int, b: int, c: int, d: int)
     vstd::arithmetic::div_mod::lemma_fundamental_div_mod_converse(c * radix + d, radix, c, d);
 }
 
-/// Append a rank digit while encoding a key value.
+/// キーの値を符号化するときに、番号に1桁加える。
 pub fn append_rank_digit(prefix: u64, radix: u64, digit: u64) -> (out: Option<u64>)
     ensures
         out is Some <==> digit < radix && (prefix as int) * (radix as int) + digit <= u64::MAX,
@@ -202,7 +202,7 @@ pub open spec fn rank_digits_value(parts: Seq<(u64, u64)>, count: nat) -> Option
     }
 }
 
-/// Fold component ranks in order, checking each digit against its radix.
+/// 要素の番号を順にたたむ。各桁が基数の範囲内にあることを検査する。
 pub fn rank_digits_exec(parts: &Vec<(u64, u64)>) -> (out: Option<u64>)
     ensures out == rank_digits_value(parts@, parts@.len() as nat),
 {
@@ -228,7 +228,7 @@ pub fn rank_digits_exec(parts: &Vec<(u64, u64)>) -> (out: Option<u64>)
     out
 }
 
-/// Rank a scalar code within a closed signed integer interval.
+/// スカラーの符号の、閉区間での番号。
 pub fn rank_interval_code(value: i64, min: i64, max: i64) -> (out: Option<u64>)
     ensures
         out is Some <==> min <= value <= max,
@@ -241,7 +241,7 @@ pub fn rank_interval_code(value: i64, min: i64, max: i64) -> (out: Option<u64>)
     Some(offset as u64)
 }
 
-/// Rank an option tag, evaluating the payload rank only for the present case.
+/// 中身の番号があり、1を足してもあふれない。
 pub open spec fn rank_payload_can_increment(payload_rank: Option<u64>) -> bool {
     match payload_rank {
         Some(rank) => rank < u64::MAX,
@@ -249,6 +249,7 @@ pub open spec fn rank_payload_can_increment(payload_rank: Option<u64>) -> bool {
     }
 }
 
+/// Optionの有無 `tag` と中身の番号から、番号を作る。空なら0、値があれば中身の番号に1を足す。
 pub fn rank_option_code(tag: i64, payload_rank: Option<u64>) -> (out: Option<u64>)
     ensures
         out is Some <==> tag == 0 || (tag == 1 && rank_payload_can_increment(payload_rank)),
@@ -276,7 +277,7 @@ pub open spec fn product_rank(radices: Seq<int>, digits: Seq<int>, n: nat) -> in
     }
 }
 
-/// The ranks of two products are equal exactly when every component rank is equal.
+/// 2つの組の番号が等しいのは、すべての要素の番号が等しいときに限る。
 pub proof fn product_rank_is_injective(radices: Seq<int>, a: Seq<int>, b: Seq<int>, n: nat)
     requires
         n <= radices.len(),

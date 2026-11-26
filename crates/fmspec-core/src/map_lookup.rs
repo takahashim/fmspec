@@ -1,4 +1,4 @@
-//! Map lookup lowering over the slots of an already evaluated map and key.
+//! Mapの参照と更新の下ろし。Mapとキーは評価済みで、Mapはスロットの式の列、キーは番号を束縛した局所変数で受け取る。
 
 #[cfg(verus_keep_ghost)]
 use crate::bindings::{eval_bindings, eval_bound_body};
@@ -54,7 +54,7 @@ pub open spec fn put_map_row_sequence(
         put_map_row_slot(flat, payload, width, rank_local, row, column))
 }
 
-/// Construct the updated expression row at one known map rank.
+/// 番号 `row` の行を更新した式の行を作る。
 fn put_map_row(
     flat: &Vec<Expr>, payload: &Vec<Expr>, width: usize, rank_local: usize, row: usize,
 ) -> (out: Option<Vec<Expr>>)
@@ -175,7 +175,7 @@ pub proof fn lemma_flattened_put_rows(
     }
 }
 
-/// Update every row in rank order and flatten the resulting map.
+/// すべての行を番号の順に更新し、スロットの列に並べる。
 pub fn put_map_rows_exec(
     flat: &Vec<Expr>, rows: usize, width: usize, rank_local: usize, payload: &Vec<Expr>,
 ) -> (out: Option<Vec<Expr>>)
@@ -256,7 +256,7 @@ pub fn put_map_rows_exec(
     Some(updated)
 }
 
-/// Concatenate map rows and verify that their order and contents are preserved.
+/// 行をつなげてスロットの列にする。行の順と中身は変わらない。
 pub fn flatten_map_rows_exec(rows: &Vec<Vec<Expr>>) -> (out: Vec<Expr>)
     ensures
         out@ =~= flatten_map_rows(rows@, rows@.len() as nat),
@@ -291,7 +291,7 @@ pub fn flatten_map_rows_exec(rows: &Vec<Vec<Expr>>) -> (out: Vec<Expr>)
     flat
 }
 
-/// Set a map row's presence bit when the evaluated rank equals this row.
+/// キーの番号がこの行と等しければ、行の有無を真にする。
 pub fn put_presence_expr(old: Expr, rank: Expr, row: i64) -> (out: Expr)
     ensures
         out == Expr::Or(
@@ -318,7 +318,7 @@ pub fn put_presence_expr(old: Expr, rank: Expr, row: i64) -> (out: Expr)
     out
 }
 
-/// Replace a map row's payload exactly when the evaluated rank equals this row.
+/// キーの番号がこの行と等しいときに限り、行の値を置き換える。
 pub fn put_payload_expr(old: Expr, new: Expr, rank: Expr, row: i64) -> (out: Expr)
     ensures
         out == Expr::Ite(
@@ -351,7 +351,7 @@ pub open spec fn key_rank(locals: Seq<Value>, index: usize) -> int {
     }
 }
 
-/// Index a column in the flat layout [present, payload..., present, payload..., ...].
+/// スロットの列 [有無, 値..., 有無, 値..., ...] での、列 `column` の位置。
 pub fn map_slot_indices(rows: usize, payload_width: usize, column: usize, len: usize)
     -> (out: Option<Vec<usize>>)
     ensures
@@ -366,7 +366,7 @@ pub fn map_slot_indices(rows: usize, payload_width: usize, column: usize, len: u
     if column > payload_width {
         return None;
     }
-    // A zero-row map has no offsets, even when its payload width is very large.
+    // 行のないMapは、値の幅が大きくても位置を持たない。
     if rows == 0 {
         return if len == 0 { Some(Vec::new()) } else { None };
     }
@@ -407,7 +407,7 @@ pub fn map_slot_indices(rows: usize, payload_width: usize, column: usize, len: u
     Some(indices)
 }
 
-/// Build a balanced decision tree, consuming the leaves from right to left.
+/// 平衡した二分木の `ite` を作る。葉は右から順に取り出す。
 fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (out: Expr)
     requires
         lo < hi == old(column)@.len(),
@@ -458,7 +458,7 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
     }
 }
 
-/// Select a slot from a column indexed by the bound key's rank.
+/// 束縛したキーの番号で、列からスロットを選ぶ。
 pub fn select_map_slot(column: Vec<Expr>, rank_local: usize, fallback: Expr) -> (out: Expr)
     ensures
         column@.len() == 0 ==> out == fallback,
@@ -477,7 +477,7 @@ pub fn select_map_slot(column: Vec<Expr>, rank_local: usize, fallback: Expr) -> 
     }
 }
 
-/// Build the binding that raises MissingKey before any payload slot is used.
+/// キーがなければ MissingKey で失敗する束縛を作る。値のスロットを使う前に評価する。
 pub fn require_map_key(present: Expr, rank_local: usize) -> (out: Expr)
     ensures
         forall|env: Env, locals: Seq<Value>|
@@ -522,7 +522,7 @@ pub open spec fn flat_slot_int(flat: Seq<Expr>, width: usize, column: int, rank:
     eval_l(flat[rank * (1 + width as int) + column], env, locals)
 }
 
-/// Project and select directly from the actual row-major lowered operand.
+/// 下ろしたMapのスロットの列（行の順）から、列 `column` を取り出して選ぶ。
 pub fn select_flat_map_slot(
     flat: &Vec<Expr>, rows: usize, width: usize, column: usize, rank_local: usize, fallback: Expr,
 ) -> (out: Option<Expr>)
@@ -573,7 +573,7 @@ pub open spec fn guarded_map_slot(
     eval_bound_body(seq![check], 1, payload, env, locals)
 }
 
-/// Compose the presence check and the selected payload as Block does with its let binding.
+/// 有無の検査を `let` で束縛してから選んだ値を評価する（`Block` の束縛と同じ形）と、行の値が得られる。
 pub proof fn guarded_lookup_matches_flat_row(
     check: Expr, payload: Expr, flat: Seq<Expr>, rows: usize, width: usize,
     column: int, rank_local: usize, env: Env, locals: Seq<Value>,
@@ -607,7 +607,7 @@ pub proof fn guarded_lookup_matches_flat_row(
     reveal_with_fuel(eval_bindings, 2);
 }
 
-/// Compile the presence check from the same flat operand used for payload selection.
+/// 有無の検査を、値を選ぶのと同じスロットの列から作る。
 pub fn select_flat_map_check(flat: &Vec<Expr>, rows: usize, width: usize, rank_local: usize)
     -> (out: Option<Expr>)
     ensures
@@ -651,9 +651,9 @@ pub fn select_flat_map_check(flat: &Vec<Expr>, rows: usize, width: usize, rank_l
     Some(check)
 }
 
-/// Build the complete checked lookup operands used by `Map#get` from one flat map.
-/// The payload vector is in slot order and is selected only for in-range ranks;
-/// the check expression reports a missing key before the caller evaluates it.
+/// `Map#get` の下ろしに使う、検査と値のスロットの式を作る。
+/// 値のスロットは順に並び、番号が範囲内のときに限って行を選ぶ。
+/// 呼び出し側が検査を先に束縛するので、キーがなければ値を評価する前に失敗する。
 pub fn select_flat_map_lookup(
     flat: &Vec<Expr>, rows: usize, width: usize, rank_local: usize, defaults: &Vec<Expr>,
 ) -> (out: Option<(Expr, Vec<Expr>)>)

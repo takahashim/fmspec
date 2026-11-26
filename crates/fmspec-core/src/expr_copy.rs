@@ -1,4 +1,4 @@
-//! Copy core expressions for verified lowering.
+//! 中核の式の複製。検証済みの下ろしで、同じ式を複数のスロットで使うときに使う。
 
 use crate::model::Expr;
 use vstd::prelude::*;

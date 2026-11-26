@@ -1,4 +1,4 @@
-//! Encoding of a finite map after assigning each key its rank.
+//! キーに番号（rank）を付けたあとの、Mapの符号化。
 
 use vstd::prelude::*;
 
@@ -52,7 +52,7 @@ fn append_row(out: &mut Vec<i64>, present: bool, payload: &Vec<i64>)
     }
 }
 
-/// Encode ranked rows with one presence slot followed by the payload slots.
+/// 番号の順に並べた行を、有無のスロットと値のスロットの列にする。
 pub fn encode_map_rows(rows: &Vec<Option<Vec<i64>>>, default: &Vec<i64>) -> (out: Option<Vec<i64>>)
     ensures
         out is Some <==> prefix_fits(rows@, default@.len(), rows@.len() as int),
@@ -99,7 +99,7 @@ pub fn encode_map_rows(rows: &Vec<Option<Vec<i64>>>, default: &Vec<i64>) -> (out
     Some(flat)
 }
 
-/// Read a row by rank using the same flat offsets as Map#get lowering.
+/// 番号 `rank` の行の値のスロット。位置の計算は `Map#get` の下ろしと同じである。
 pub open spec fn encoded_payload(flat: Seq<i64>, width: nat, rank: int) -> Option<Seq<i64>> {
     let base = rank * (1 + width as int);
     if flat[base] == 0 {
