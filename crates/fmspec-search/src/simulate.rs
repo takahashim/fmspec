@@ -89,13 +89,18 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
     };
 
     for _ in 0..opts.traces {
-        let mut state = model.initial();
+        // 初期状態が1つなら乱数を消費しない。同じシードで、初期状態が1つのモデルの結果を変えないためである。
+        let inits = model.initials();
+        let start = if inits.len() > 1 {
+            inits[rng.below(inits.len() as u64) as usize].clone()
+        } else {
+            inits[0].clone()
+        };
+        let mut state = start.clone();
         let mut steps: Vec<TraceStep> = Vec::new();
         if let Some((i, v)) = model.invariants(cond, &state) {
-            return found(
-                Evidence::Trace(steps, property_claim(i, v, Claim::Invariant, Claim::InvariantError)),
-                stats,
-            );
+            let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+            return found(Evidence::Trace(start, steps, claim), stats);
         }
         for _ in 0..opts.max_steps {
             if opts.interrupt.is_some_and(|requested| requested()) {
@@ -110,7 +115,10 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
                     // 到達した状態は型に従い、操作の添字は範囲内なので、ここには来ない。
                     None => return found(Evidence::Unavailable(Limit::Interrupted), stats),
                     Some(Enumerated::Fail(args, site, kind)) => {
-                        return found(Evidence::Trace(steps, Claim::StepError(a, args, site, kind)), stats);
+                        return found(
+                            Evidence::Trace(start, steps, Claim::StepError(a, args, site, kind)),
+                            stats,
+                        );
                     }
                     Some(Enumerated::Ok(ts)) => enabled.extend(ts.into_iter().map(|t| (a, t))),
                 }
@@ -119,8 +127,8 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
                 if cond.deadlock {
                     match model.terminal(&state) {
                         Ok(true) => {}
-                        Ok(false) => return found(Evidence::Trace(steps, Claim::Deadlock), stats),
-                        Err(e) => return found(Evidence::Trace(steps, Claim::TerminalError(e)), stats),
+                        Ok(false) => return found(Evidence::Trace(start, steps, Claim::Deadlock), stats),
+                        Err(e) => return found(Evidence::Trace(start, steps, Claim::TerminalError(e)), stats),
                     }
                 }
                 break;
@@ -136,17 +144,13 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
                 state: t.state.clone(),
             });
             if let Some((k, v)) = violation {
-                return found(
-                    Evidence::Trace(steps, property_claim(k, v, Claim::Contract, Claim::ContractError)),
-                    stats,
-                );
+                let claim = property_claim(k, v, Claim::Contract, Claim::ContractError);
+                return found(Evidence::Trace(start, steps, claim), stats);
             }
             state = t.state;
             if let Some((i, v)) = model.invariants(cond, &state) {
-                return found(
-                    Evidence::Trace(steps, property_claim(i, v, Claim::Invariant, Claim::InvariantError)),
-                    stats,
-                );
+                let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+                return found(Evidence::Trace(start, steps, claim), stats);
             }
         }
         stats.traces += 1;

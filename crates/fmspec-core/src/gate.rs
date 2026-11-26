@@ -43,12 +43,16 @@ impl CheckedModel {
         &self.raw
     }
 
-    /// 初期状態の符号化列。
-    pub fn initial(&self) -> (s: Vec<i64>)
+    /// 初期状態の符号化列。1つ以上ある。
+    pub fn initials(&self) -> (r: &Vec<Vec<i64>>)
         ensures
-            s@ == self@.init@,
+            *r == self@.inits,
+            r@.len() >= 1,
     {
-        copy_vec(&self.raw.init)
+        proof {
+            use_type_invariant(self);
+        }
+        &self.raw.inits
     }
 
     /// 符号化列が状態型に従うか。
@@ -194,7 +198,7 @@ impl Verdict {
 /// 判定の意味。
 ///
 /// - `Verified`: 証拠は証明書で、モデルは検査条件の下で安全である。
-/// - `Violated` / `Error`: 証拠はトレースで、そのトレースは有効であり、末尾で主張どおりの違反 / 評価エラーが起きる。
+/// - `Violated` / `Error`: 証拠はトレースで、そのトレースは初期状態から始まって有効であり、末尾で主張どおりの違反 / 評価エラーが起きる。
 /// - `Inconclusive`: 証拠が得られなかった場合に限る。
 /// - `InvalidModel`: モデルが整形式でない場合に限る。それ以外の判定では、モデルは整形式である。
 /// - `Rejected`: 証拠が提示された場合に限る。証拠の拒否を成功や違反として扱わない。
@@ -202,21 +206,21 @@ pub open spec fn verdict_sound(m: RawModel, c: Conditions, ev: Evidence, k: Verd
     match k {
         VerdictKind::Verified => wf(m) && ev is Certificate && safe(m, c),
         VerdictKind::Violated => wf(m) && match ev {
-            Evidence::Trace(steps, claim) => is_violation(claim) && trace_ok(m, c, steps@) && claim_holds(
+            Evidence::Trace(start, steps, claim) => is_violation(claim) && is_init(m, start@) && trace_ok(
                 m,
                 c,
+                start@,
                 steps@,
-                claim,
-            ),
+            ) && claim_holds(m, c, start@, steps@, claim),
             _ => false,
         },
         VerdictKind::Error => wf(m) && match ev {
-            Evidence::Trace(steps, claim) => !is_violation(claim) && trace_ok(m, c, steps@) && claim_holds(
+            Evidence::Trace(start, steps, claim) => !is_violation(claim) && is_init(m, start@) && trace_ok(
                 m,
                 c,
+                start@,
                 steps@,
-                claim,
-            ),
+            ) && claim_holds(m, c, start@, steps@, claim),
             _ => false,
         },
         VerdictKind::Inconclusive => wf(m) && ev is Unavailable,
@@ -285,7 +289,7 @@ fn decide_wf(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
                 Some(r) => Verdict::rejected(r),
             }
         },
-        Evidence::Trace(steps, claim) => match check_trace(m, c, steps, claim) {
+        Evidence::Trace(start, steps, claim) => match check_trace(m, c, start, steps, claim) {
             None => if is_violation_exec(claim) {
                 Verdict::of(VerdictKind::Violated)
             } else {

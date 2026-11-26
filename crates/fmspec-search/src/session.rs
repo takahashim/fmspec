@@ -174,13 +174,14 @@ impl Session {
             .all(|(var, seen)| state.get(*var).map(|x| Seen::Value(*x)) == Some(*seen))
     }
 
-    /// 初期観測から候補集合を作る。初期状態が観測と一致すれば `true`。
+    /// 初期観測から候補集合を作る。観測と一致する初期状態があれば `true`。
     pub fn start(&mut self, model: &CheckedModel, seen: &[Seen]) -> bool {
-        let init = model.initial();
         self.candidates.clear();
         self.matched = 0;
-        if self.agrees(&init, seen) {
-            self.candidates.insert(init);
+        for init in model.initials() {
+            if self.agrees(init, seen) {
+                self.candidates.insert(init.clone());
+            }
         }
         !self.candidates.is_empty()
     }

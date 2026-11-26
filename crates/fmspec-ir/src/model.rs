@@ -185,6 +185,79 @@ fn constant_codes(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<Vec<i6
     Ok(codes)
 }
 
+/// 初期値の候補の組み合わせのうち、調べる数の上限。
+pub const MAX_INITIAL_CANDIDATES: usize = 1 << 20;
+
+/// 初期状態の集合。状態変数ごとの候補の直積から、`initial_constraint` を満たすものを残し、
+/// 符号化列の辞書順に整列して重複を除く。
+fn initial_states(
+    choices: &[Vec<Vec<i64>>],
+    state_types: &Vec<Type>,
+    enums: &[EnumNames],
+    layouts: &[Layout],
+    constants: &[Constant],
+    map: &serde_json::Map<String, Value>,
+) -> Res<Vec<Vec<i64>>> {
+    let total = choices.iter().try_fold(1usize, |n, c| {
+        n.checked_mul(c.len()).filter(|n| *n <= MAX_INITIAL_CANDIDATES)
+    });
+    if total.is_none() {
+        return schema(
+            "$.states",
+            format!("初期値の候補の組み合わせが {MAX_INITIAL_CANDIDATES} 個を超えます"),
+        );
+    }
+    let mut inits: Vec<Vec<i64>> = vec![Vec::new()];
+    for c in choices {
+        inits = inits
+            .iter()
+            .flat_map(|prefix| c.iter().map(move |codes| [prefix.as_slice(), codes].concat()))
+            .collect();
+    }
+    if let Some(e) = map.get("initial_constraint") {
+        let no_args: Vec<Layout> = Vec::new();
+        let ctx = Ctx {
+            enums,
+            states: Some(layouts),
+            args: &no_args,
+            n_params: 0,
+            next: false,
+            output: None,
+            constants,
+        };
+        let path = "$.initial_constraint";
+        let expr = lowered(ctx.prop(e, path), |d| LoadError::Schema {
+            path: path.to_string(),
+            message: format!("初期条件が Bool 式でないか、未定義の参照を含みます（{d}）"),
+        })?;
+        let mut kept = Vec::new();
+        for s in inits {
+            let no_tys: Vec<Type> = Vec::new();
+            let no_vals: Vec<i64> = Vec::new();
+            let ctx = fmspec_core::eval::Ctx {
+                st_tys: state_types,
+                arg_tys: &no_tys,
+                pre: &s,
+                args: &no_vals,
+                post: &no_vals,
+                out: None,
+            };
+            match fmspec_core::eval::eval_prop(&expr, &ctx) {
+                Ok(true) => kept.push(s),
+                Ok(false) => {}
+                Err(kind) => return schema(path, format!("初期条件を評価できません（{kind:?}）")),
+            }
+        }
+        inits = kept;
+    }
+    if inits.is_empty() {
+        return schema("$.initial_constraint", "初期条件を満たす初期状態がありません");
+    }
+    inits.sort();
+    inits.dedup();
+    Ok(inits)
+}
+
 /// 引数の宣言。`domain` は動的ドメイン（`in`）の式。
 struct Bindings<'v> {
     names: Vec<String>,
@@ -329,7 +402,11 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
         let fail = |d: String| {
             invalid(
                 InvalidModel::Guard(a),
-                format!("{}の引数 {:?} のドメインが不正です（{d}）", what(""), arg_names_at(&params, &choices, i)),
+                format!(
+                    "{}の引数 {:?} のドメインが不正です（{d}）",
+                    what(""),
+                    arg_names_at(&params, &choices, i)
+                ),
             )
         };
         let before = Ctx {
@@ -343,7 +420,10 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
         } else {
             serde_json::json!({"choice": i - n_user_params})
         };
-        members.push(lowered(ctx.prop(&serde_json::json!({"contains": [domain, me]}), &dpath), fail)?);
+        members.push(lowered(
+            ctx.prop(&serde_json::json!({"contains": [domain, me]}), &dpath),
+            fail,
+        )?);
     }
     let guard = members
         .into_iter()
@@ -452,6 +532,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             "invariants",
             "contracts",
             "terminal",
+            "initial_constraint",
         ],
     )?;
     let version = required(map, path, "ir_version")?;
@@ -519,11 +600,12 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
     let mut states = Vec::new();
     let mut state_sources = Vec::new();
     let mut state_stypes = Vec::new();
-    let mut init = Vec::new();
+    // 状態変数ごとの初期値の候補。
+    let mut choices: Vec<Vec<Vec<i64>>> = Vec::new();
     let mut seen = HashSet::new();
     for (i, item) in array(required(map, path, "states")?, "$.states")?.iter().enumerate() {
         let path = format!("$.states[{i}]");
-        let s = object(item, &path, &["id", "name", "type", "initial", "source"])?;
+        let s = object(item, &path, &["id", "name", "type", "initial", "initial_in", "source"])?;
         if let Some(id) = s.get("id") {
             if index(id, &format!("{path}.id"))? != i {
                 return schema(&format!("{path}.id"), format!("id は定義順の添字 {i} と一致させます"));
@@ -541,17 +623,28 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             output: None,
             constants: &constants,
         };
-        init.extend(constant_codes(
-            &ctx,
-            required(s, &path, "initial")?,
-            &format!("{path}.initial"),
-            &ty,
-        )?);
+        choices.push(match (s.get("initial"), s.get("initial_in")) {
+            (Some(v), None) => vec![constant_codes(&ctx, v, &format!("{path}.initial"), &ty)?],
+            (None, Some(vs)) => {
+                let path = format!("{path}.initial_in");
+                let vs = array(vs, &path)?;
+                if vs.is_empty() {
+                    return schema(&path, "initial_in は空でない配列です");
+                }
+                vs.iter()
+                    .enumerate()
+                    .map(|(j, v)| constant_codes(&ctx, v, &format!("{path}[{j}]"), &ty))
+                    .collect::<Res<_>>()?
+            }
+            _ => return schema(&path, "initial と initial_in のどちらか一方を書きます"),
+        });
         state_stypes.push(ty);
         state_sources.push(source(s, &path)?);
         states.push(name);
     }
     let state_layouts = layouts(&enums, &state_stypes);
+    let state_types = slot_types(&enums, &state_stypes);
+    let inits = initial_states(&choices, &state_types, &enums, &state_layouts, &constants, map)?;
     let parsed = Parsed {
         enums: &enums,
         states: &state_layouts,
@@ -656,8 +749,8 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
 
     let raw = RawModel {
         enums: enums.iter().map(|e| e.variants.len() as i64).collect(),
-        state_types: slot_types(&enums, &state_stypes),
-        init,
+        state_types,
+        inits,
         actions,
         invariants,
         contracts,
@@ -716,7 +809,8 @@ fn describe(reason: &InvalidModel, names: &Names) -> String {
                 names.states.get(*i).map(String::as_str).unwrap_or("?")
             )
         }
-        InvalidModel::Initial => "初期値が状態変数の型の範囲外です".to_string(),
+        InvalidModel::NoInitial => "初期状態がありません".to_string(),
+        InvalidModel::Initial(_) => "初期値が状態変数の型の範囲外です".to_string(),
         InvalidModel::Params(a) => format!("操作 {:?} の引数の個数が不正です", action(a)),
         InvalidModel::Domain(a, d) => {
             let act = &names.actions[*a];

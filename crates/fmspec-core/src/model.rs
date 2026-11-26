@@ -107,8 +107,8 @@ pub struct RawModel {
     /// 各列挙型のラベル数。
     pub enums: Vec<i64>,
     pub state_types: Vec<Type>,
-    /// 初期状態の符号化列。
-    pub init: Vec<i64>,
+    /// 初期状態の符号化列。1つ以上ある。
+    pub inits: Vec<Vec<i64>>,
     pub actions: Vec<Action>,
     pub invariants: Vec<Expr>,
     pub contracts: Vec<Contract>,

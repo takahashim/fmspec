@@ -45,9 +45,9 @@ pub open spec fn state_closed(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s
     &&& no_deadlock(m, c, s)
 }
 
-/// 証明書が帰納的である。初期状態を含み、どの状態も性質を満たし、遷移で閉じている。
+/// 証明書が帰納的である。初期状態をすべて含み、どの状態も性質を満たし、遷移で閉じている。
 pub open spec fn inductive(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>) -> bool {
-    &&& in_cert(cert, m.init@)
+    &&& forall|i: int| 0 <= i < m.inits@.len() ==> in_cert(cert, (#[trigger] m.inits@[i])@)
     &&& forall|i: int| 0 <= i < cert.len() ==> state_closed(m, c, cert, (#[trigger] cert[i])@)
 }
 
@@ -59,7 +59,10 @@ proof fn lemma_reach_in_cert(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s:
         in_cert(cert, s),
     decreases n,
 {
-    if n > 0 {
+    if n == 0 {
+        let i = choose|i: int| 0 <= i < m.inits@.len() && (#[trigger] m.inits@[i])@ == s;
+        assert(in_cert(cert, m.inits@[i]@));
+    } else {
         let (p, a, args, o) = choose|p: Seq<i64>, a: int, args: Seq<i64>, o: Option<i64>|
             reach(m, c, p, (n - 1) as nat) && #[trigger] is_edge(m, c, p, a, args, o, s);
         lemma_reach_in_cert(m, c, cert, p, (n - 1) as nat);
@@ -276,8 +279,17 @@ pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> 
     ensures
         r is None ==> inductive(*m, *c, cert@) && safe(*m, *c),
 {
-    if !find(cert, &m.init) {
-        return Some(Reject::MissingInitial);
+    let mut i: usize = 0;
+    while i < m.inits.len()
+        invariant
+            i <= m.inits@.len(),
+            forall|j: int| 0 <= j < i ==> in_cert(cert@, (#[trigger] m.inits@[j])@),
+        decreases m.inits@.len() - i,
+    {
+        if !find(cert, &m.inits[i]) {
+            return Some(Reject::MissingInitial(i));
+        }
+        i = i + 1;
     }
     let mut k: usize = 0;
     while k < cert.len()

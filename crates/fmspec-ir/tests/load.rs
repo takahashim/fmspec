@@ -65,7 +65,7 @@ fn invalid(change: impl FnOnce(&mut Value)) -> InvalidModel {
 fn the_base_model_loads() {
     let m = with(|_| {}).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(m.names.states, vec!["n", "on", "c"]);
-    assert_eq!(m.raw().init, vec![0, 0, 1]);
+    assert_eq!(m.raw().inits, vec![vec![0, 0, 1]]);
     assert_eq!(m.raw().actions[0].n_params, 1);
     assert_eq!(m.raw().actions[0].domains.len(), 2);
 }
@@ -119,7 +119,7 @@ fn type_errors_are_rejected() {
     assert!(schema_error(|ir| ir["states"][1]["initial"] = json!({"int": 0})).contains("初期値の型"));
     assert_eq!(
         invalid(|ir| ir["states"][0]["initial"] = json!({"int": 4})),
-        InvalidModel::Initial
+        InvalidModel::Initial(0)
     );
     assert_eq!(
         invalid(|ir| ir["states"][0]["type"] = json!({"int": {"min": 1, "max": 0}})),
@@ -220,6 +220,7 @@ fn traces_round_trip_through_json() {
     ] {
         let trace = Trace {
             conditions: default_conditions(&m, true),
+            start: vec![0, 0, 1],
             steps: steps.clone(),
             claim,
             seed: Some(42),
@@ -227,13 +228,14 @@ fn traces_round_trip_through_json() {
         let json = trace_to_json(&m, &trace);
         let back = trace_from_json(&m, &json.to_string()).unwrap_or_else(|e| panic!("{e}\n{json}"));
         assert_eq!(
-            (back.steps, back.claim, back.seed),
-            (trace.steps, trace.claim, trace.seed)
+            (back.start, back.steps, back.claim, back.seed),
+            (trace.start, trace.steps, trace.claim, trace.seed)
         );
         assert_eq!(back.conditions, trace.conditions);
     }
     let trace = Trace {
         conditions: default_conditions(&m, false),
+        start: vec![0, 0, 1],
         steps,
         claim: Claim::Deadlock,
         seed: None,
@@ -266,6 +268,7 @@ fn evidence_for_another_model_is_refused() {
     ));
     let trace = Trace {
         conditions: default_conditions(&m, false),
+        start: vec![0, 0, 1],
         steps: vec![],
         claim: Claim::Deadlock,
         seed: None,
@@ -276,4 +279,52 @@ fn evidence_for_another_model_is_refused() {
         Err(TraceError::DigestMismatch { .. })
     ));
     assert!(matches!(trace_from_json(&m, "[]"), Err(TraceError::Format(_))));
+}
+
+#[test]
+fn initial_states_are_the_filtered_product_of_candidates() {
+    let set_initial = |ir: &mut Value, i: usize, candidates: Value| {
+        let state = ir["states"][i].as_object_mut().unwrap();
+        state.remove("initial");
+        state.insert("initial_in".to_string(), candidates);
+    };
+    let m = with(|ir| {
+        set_initial(ir, 0, json!([{"int": 2}, {"int": 0}, {"int": 1}, {"int": 0}]));
+        set_initial(
+            ir,
+            2,
+            json!([{"enum": {"type": "color", "variant": "green"}}, {"enum": {"type": "color", "variant": "red"}}]),
+        );
+        ir["initial_constraint"] = json!({"ne": [{"var": 0}, {"int": 1}]});
+    })
+    .unwrap();
+    // 候補の重複を除き、符号化列の辞書順に並べる。
+    assert_eq!(
+        m.raw().inits,
+        vec![vec![0, 0, 0], vec![0, 0, 1], vec![2, 0, 0], vec![2, 0, 1]]
+    );
+
+    // 初期状態が複数あるモデルのトレースは、開始状態を initial に記録する。
+    let trace = Trace {
+        conditions: default_conditions(&m, false),
+        start: vec![2, 0, 0],
+        steps: vec![],
+        claim: Claim::Deadlock,
+        seed: None,
+    };
+    let mut json = trace_to_json(&m, &trace);
+    assert_eq!(json["initial"], json!({"n": 2, "on": false, "c": "red"}));
+    assert_eq!(trace_from_json(&m, &json.to_string()).unwrap().start, vec![2, 0, 0]);
+    json.as_object_mut().unwrap().remove("initial");
+    assert!(trace_from_json(&m, &json.to_string()).is_err());
+
+    assert!(schema_error(|ir| set_initial(ir, 0, json!([]))).contains("空でない"));
+    assert!(schema_error(|ir| ir["states"][0]["initial_in"] = json!([{"int": 0}])).contains("どちらか一方"));
+    assert!(schema_error(|ir| ir["initial_constraint"] = json!({"int": 0})).contains("初期条件"));
+    assert!(schema_error(|ir| ir["initial_constraint"] = json!({"bool": false})).contains("初期状態がありません"));
+    assert!(schema_error(|ir| ir["initial_constraint"] = json!({"param": 0})).contains("初期条件"));
+    assert_eq!(
+        invalid(|ir| set_initial(ir, 0, json!([{"int": 0}, {"int": 4}]))),
+        InvalidModel::Initial(1)
+    );
 }

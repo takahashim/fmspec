@@ -180,10 +180,18 @@ class CompositeGenerator
       @constants << { "name" => "k0", "type" => t, "value" => literal_of(t) }
       states.each_with_index { |s, i| s["initial"] = { "const" => "k0" } if @state_types[i] == t && chance(0.5) }
     end
+    # ときどき初期値の候補を増やす。候補は重複してもよい。
+    states.each_with_index do |s, i|
+      next unless chance(0.2)
+
+      candidates = [s.delete("initial")] + Array.new(1 + @rng.rand(2)) { literal_of(@state_types[i]) }
+      s["initial_in"] = candidates.shuffle(random: @rng)
+    end
     actions = Array.new(2 + @rng.rand(3)) { |i| action("a#{i}") }
     ir = { "ir_version" => 1, "name" => "composite", "enums" => @enums, "constants" => @constants,
            "states" => states, "actions" => actions }
     scope = { vars: @state_types }
+    initial_constraint(ir, scope)
     ir["invariants"] = Array.new(@rng.rand(3)) { |i| { "name" => "inv#{i}", "expr" => property(scope) } }
     ir["contracts"] = Array.new(@rng.rand(2)) do |i|
       act = pick(actions)
@@ -194,6 +202,16 @@ class CompositeGenerator
   end
 
   def bool = { "bool" => {} }
+
+  # 評価が失敗する初期条件や、どの候補も満たさない初期条件は、IRの読み込みで拒否されるので付けない。
+  def initial_constraint(ir, scope)
+    return unless ir["states"].any? { |s| s.key?("initial_in") } && chance(0.5)
+
+    ir["initial_constraint"] = chance(0.5) ? property(scope) : expr(bool, scope, 2)
+    ir.delete("initial_constraint") if FmspecReference::Model.new(ir).initials.empty?
+  rescue FmspecReference::EvalError
+    ir.delete("initial_constraint")
+  end
 
   # 不変条件と遷移契約。すぐには破れない、大きさの上限や禁止値の形を多めに作る。
   def property(scope)

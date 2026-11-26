@@ -85,8 +85,19 @@ module FmspecReference
       kind == "enum" ? EnumValue.new(body["type"], body["variant"]) : body
     end
 
-    def initial
-      @states.map { |s| ev(s["initial"], Env.new) }
+    # 初期状態の集合。状態変数ごとの候補（`initial` か `initial_in`）の直積から、
+    # `initial_constraint` を満たすものを残し、正規順に整列して重複を除く。
+    def initials
+      @initials ||= begin
+        candidates = @states.map do |s|
+          s.key?("initial_in") ? s["initial_in"].map { |e| ev(e, Env.new) } : [ev(s["initial"], Env.new)]
+        end
+        states = product(candidates)
+        if (constraint = @ir["initial_constraint"])
+          states = states.select { |state| prop(constraint, Env.new(state, nil, nil, nil, nil)) }
+        end
+        sort_states(states.uniq)
+      end
     end
 
     def product(lists)
@@ -628,26 +639,35 @@ module FmspecReference
 
     def check(max_states: nil, **options)
       cond = conditions(**options)
-      init = initial
-      parents = { init => nil }
+      parents = {}
+      # 開始状態と、そこからのステップ。
       path = lambda do |state|
         steps = []
         while (edge = parents[state])
           steps.unshift(edge[1])
           state = edge[0]
         end
-        steps
+        [state, steps]
       end
-      found = lambda do |prop, steps|
-        { "status" => prop.key?("violation") ? "violated" : "error", "property" => prop, "steps" => steps,
-          "visited_states" => parents.size }
-      end
-
-      if (bad = failing_invariant(init, cond))
-        return found.call(property("invariant", *bad), [])
+      found = lambda do |prop, (start, steps)|
+        { "status" => prop.key?("violation") ? "violated" : "error", "property" => prop,
+          "initial" => json_state(start), "steps" => steps, "visited_states" => parents.size }
       end
 
-      queue = [init]
+      queue = []
+      initials.each do |init|
+        next if parents.key?(init)
+        if max_states && parents.size >= max_states
+          return { "status" => "inconclusive", "reason" => "max_states", "visited_states" => parents.size }
+        end
+
+        parents[init] = nil
+        if (bad = failing_invariant(init, cond))
+          return found.call(property("invariant", *bad), [init, []])
+        end
+
+        queue << init
+      end
       until queue.empty?
         current = queue.shift
         enabled = false
@@ -663,7 +683,8 @@ module FmspecReference
             enabled = true
             edge = json_step(action, transition)
             if (bad = failing_contract(action, current, transition, cond))
-              return found.call(property("contract", *bad), path.call(current) + [edge])
+              start, steps = path.call(current)
+              return found.call(property("contract", *bad), [start, steps + [edge]])
             end
             nxt = transition["state"]
             next if parents.key?(nxt)
@@ -725,12 +746,15 @@ module FmspecReference
       rng = SplitMix64.new(seed)
       completed = 0
       total = 0
+      start = nil
       found = lambda do |prop, steps|
-        { "status" => prop.key?("violation") ? "violated" : "error", "property" => prop, "steps" => steps,
-          "completed_traces" => completed, "total_steps" => total }
+        { "status" => prop.key?("violation") ? "violated" : "error", "property" => prop,
+          "initial" => json_state(start), "steps" => steps, "completed_traces" => completed, "total_steps" => total }
       end
       traces.times do
-        state = initial
+        # 初期状態が1つなら乱数を消費しない。
+        start = initials.length > 1 ? initials[rng.below(initials.length)] : initials[0]
+        state = start
         steps = []
         if (bad = failing_invariant(state, cond))
           return found.call(property("invariant", *bad), steps)
@@ -819,7 +843,7 @@ module FmspecReference
     def reject_certificate(states, **options)
       cond = conditions(**options)
       members = states.to_set
-      return "missing_initial" unless members.include?(initial)
+      return "missing_initial" unless initials.all? { |init| members.include?(init) }
 
       sort_states(members.to_a).each do |state|
         typed = state.length == @states.length && state.each_with_index.all? { |v, i| member?(@states[i]["type"], v) }

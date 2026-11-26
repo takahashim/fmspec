@@ -78,7 +78,7 @@ impl Clone for RawModel {
         RawModel {
             enums: self.enums.clone(),
             state_types: self.state_types.clone(),
-            init: self.init.clone(),
+            inits: self.inits.clone(),
             actions: self.actions.clone(),
             invariants: self.invariants.clone(),
             contracts: self.contracts.clone(),
@@ -249,7 +249,7 @@ impl Clone for Evidence {
     fn clone(&self) -> Self {
         match self {
             Evidence::Certificate(c) => Evidence::Certificate(c.clone()),
-            Evidence::Trace(steps, claim) => Evidence::Trace(steps.clone(), claim.clone()),
+            Evidence::Trace(start, steps, claim) => Evidence::Trace(start.clone(), steps.clone(), claim.clone()),
             Evidence::Unavailable(limit) => Evidence::Unavailable(*limit),
         }
     }
@@ -259,7 +259,9 @@ impl fmt::Debug for Evidence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Evidence::Certificate(c) => f.debug_tuple("Certificate").field(c).finish(),
-            Evidence::Trace(steps, claim) => f.debug_tuple("Trace").field(steps).field(claim).finish(),
+            Evidence::Trace(start, steps, claim) => {
+                f.debug_tuple("Trace").field(start).field(steps).field(claim).finish()
+            }
             Evidence::Unavailable(limit) => f.debug_tuple("Unavailable").field(limit).finish(),
         }
     }

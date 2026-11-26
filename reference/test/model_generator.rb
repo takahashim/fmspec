@@ -19,7 +19,28 @@ class ModelGenerator
   end
 
   def model
-    chance(0.5) ? counters : free_form
+    ir = chance(0.5) ? counters : free_form
+    initial_constraint(ir)
+    ir
+  end
+
+  # 初期状態を複数にするなら、ときどき初期条件で絞る。
+  # 評価が失敗する初期条件や、どの候補も満たさない初期条件は、IRの読み込みで拒否されるので付けない。
+  def initial_constraint(ir)
+    return unless ir["states"].any? { |s| s.key?("initial_in") } && chance(0.5)
+
+    ir["initial_constraint"] = chance(0.5) ? comparison({ vars: @state_types }) : expr(BOOL, { vars: @state_types }, 2)
+    ir.delete("initial_constraint") if FmspecReference::Model.new(ir).initials.empty?
+  rescue FmspecReference::EvalError
+    ir.delete("initial_constraint")
+  end
+
+  # 初期値か、ときどき初期値の候補の配列。
+  def initial_of(state, value)
+    return state.merge("initial" => value) unless chance(0.3)
+
+    candidates = [value] + Array.new(@rng.rand(1..3)) { yield }
+    state.merge("initial_in" => candidates.shuffle(random: @rng))
   end
 
   # 整数のカウンタを少しずつ動かすモデル。状態空間が広く、違反があっても深い位置にある。
@@ -27,7 +48,7 @@ class ModelGenerator
     @enums = []
     @state_types = Array.new(1 + @rng.rand(3)) { { "int" => { "min" => 0, "max" => 2 + @rng.rand(4) } } }
     states = @state_types.each_with_index.map do |t, i|
-      { "id" => i, "name" => "s#{i}", "type" => t, "initial" => { "int" => 0 } }
+      initial_of({ "id" => i, "name" => "s#{i}", "type" => t }, { "int" => 0 }) { { "int" => @rng.rand(0..2) } }
     end
     actions = Array.new(1 + @rng.rand(3)) do |n|
       params = chance(0.4) ? [{ "name" => "p0", "type" => { "int" => { "min" => 1, "max" => 2 } } }] : []
@@ -81,7 +102,7 @@ class ModelGenerator
     @enums = chance(0.4) ? [{ "name" => "color", "variants" => %w[red green blue].take(2 + @rng.rand(2)) }] : []
     @state_types = Array.new(1 + @rng.rand(3)) { type }
     states = @state_types.each_with_index.map do |t, i|
-      { "id" => i, "name" => "s#{i}", "type" => t, "initial" => literal_of(t, initial: true) }
+      initial_of({ "id" => i, "name" => "s#{i}", "type" => t }, literal_of(t, initial: true)) { literal_of(t) }
     end
     actions = Array.new(@rng.rand(4)) { |i| action("a#{i}") }
     ir = { "ir_version" => 1, "name" => "random", "enums" => @enums, "states" => states, "actions" => actions }

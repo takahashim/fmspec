@@ -23,7 +23,7 @@ fn base() -> RawModel {
     RawModel {
         enums: vec![2],
         state_types: vec![Type::Int(0, 3)],
-        init: vec![0],
+        inits: vec![vec![0]],
         actions: vec![Action {
             n_params: 1,
             domains: vec![Type::Int(1, 2)],
@@ -84,9 +84,11 @@ fn validation_rejects_ill_formed_models() {
         invalid(|m| m.state_types[0] = Type::Enum(1)),
         InvalidModel::StateType(0)
     );
-    assert_eq!(invalid(|m| m.init[0] = 4), InvalidModel::Initial);
-    assert_eq!(invalid(|m| m.init.push(0)), InvalidModel::Initial);
-    assert_eq!(invalid(|m| m.state_types.clear()), InvalidModel::Initial);
+    assert_eq!(invalid(|m| m.inits[0][0] = 4), InvalidModel::Initial(0));
+    assert_eq!(invalid(|m| m.inits[0].push(0)), InvalidModel::Initial(0));
+    assert_eq!(invalid(|m| m.inits.push(vec![5])), InvalidModel::Initial(1));
+    assert_eq!(invalid(|m| m.inits.clear()), InvalidModel::NoInitial);
+    assert_eq!(invalid(|m| m.state_types.clear()), InvalidModel::Initial(0));
     assert_eq!(invalid(|m| m.actions[0].n_params = 2), InvalidModel::Params(0));
     assert_eq!(
         invalid(|m| m.actions[0].domains[0] = Type::Int(2, 1)),
@@ -166,7 +168,7 @@ fn certificates() {
     assert_eq!(decide_cert(full.clone()), (VerdictKind::Verified, None));
     assert_eq!(
         decide_cert(vec![]),
-        (VerdictKind::Rejected, Some(Reject::MissingInitial))
+        (VerdictKind::Rejected, Some(Reject::MissingInitial(0)))
     );
     assert_eq!(
         decide_cert(vec![vec![0], vec![1], vec![2]]),
@@ -262,7 +264,7 @@ fn step(d: i64, to: i64) -> TraceStep {
 
 fn decide_trace(steps: Vec<TraceStep>, claim: Claim) -> (VerdictKind, Option<Reject>) {
     let m = checked();
-    let v = decide(&m, &all(true), &Evidence::Trace(steps, claim));
+    let v = decide(&m, &all(true), &Evidence::Trace(vec![0], steps, claim));
     (v.kind(), v.reject())
 }
 
@@ -378,17 +380,25 @@ fn accepted_traces() {
     raw.terminal = None;
     let m = validate(raw).unwrap();
     let steps = vec![step(2, 2), step(1, 3)];
-    let v = decide(&m, &all(true), &Evidence::Trace(steps.clone(), Claim::Deadlock));
+    let v = decide(
+        &m,
+        &all(true),
+        &Evidence::Trace(vec![0], steps.clone(), Claim::Deadlock),
+    );
     assert_eq!(v.kind(), VerdictKind::Violated);
     // デッドロック検査が無効な検査条件では、デッドロックの主張を受理しない。
-    let v = decide(&m, &all(false), &Evidence::Trace(steps.clone(), Claim::Deadlock));
+    let v = decide(
+        &m,
+        &all(false),
+        &Evidence::Trace(vec![0], steps.clone(), Claim::Deadlock),
+    );
     assert_eq!(v.reject(), Some(Reject::ClaimNotReproduced));
     // 対象外の操作を含むトレースは受理しない。
     let no_actions = Conditions {
         actions: vec![false],
         ..all(true)
     };
-    let v = decide(&m, &no_actions, &Evidence::Trace(steps, Claim::Deadlock));
+    let v = decide(&m, &no_actions, &Evidence::Trace(vec![0], steps, Claim::Deadlock));
     assert_eq!(v.reject(), Some(Reject::BadStep(0)));
 
     // guard を外したモデルでは、状態2から2を足す更新が範囲外になる。
@@ -399,25 +409,66 @@ fn accepted_traces() {
     let v = decide(
         &m,
         &all(false),
-        &Evidence::Trace(vec![step(2, 2)], claim(ErrKind::OutOfRange(4))),
+        &Evidence::Trace(vec![0], vec![step(2, 2)], claim(ErrKind::OutOfRange(4))),
     );
     assert_eq!(v.kind(), VerdictKind::Error);
     // 評価エラーの種類や箇所が違う主張は受理しない。
     let v = decide(
         &m,
         &all(false),
-        &Evidence::Trace(vec![step(2, 2)], claim(ErrKind::OutOfRange(5))),
+        &Evidence::Trace(vec![0], vec![step(2, 2)], claim(ErrKind::OutOfRange(5))),
     );
     assert_eq!(v.reject(), Some(Reject::ClaimNotReproduced));
     let v = decide(
         &m,
         &all(false),
-        &Evidence::Trace(vec![step(2, 2)], claim(ErrKind::Overflow)),
+        &Evidence::Trace(vec![0], vec![step(2, 2)], claim(ErrKind::Overflow)),
     );
     assert_eq!(v.reject(), Some(Reject::ClaimNotReproduced));
     let guard = Claim::StepError(0, vec![2], Site::Guard, ErrKind::OutOfRange(4));
-    let v = decide(&m, &all(false), &Evidence::Trace(vec![step(2, 2)], guard));
+    let v = decide(&m, &all(false), &Evidence::Trace(vec![0], vec![step(2, 2)], guard));
     assert_eq!(v.reject(), Some(Reject::ClaimNotReproduced));
+}
+
+#[test]
+fn multiple_initial_states() {
+    // 初期状態を 0 と 2 にしたモデル。
+    let mut raw = base();
+    raw.inits = vec![vec![0], vec![2]];
+    raw.terminal = None;
+    let m = validate(raw).unwrap();
+    // 証明書は、初期状態をすべて含まなければならない。
+    let cert = |states| {
+        Evidence::Certificate(Certificate {
+            conditions: all(false),
+            states,
+        })
+    };
+    assert_eq!(
+        decide(&m, &all(false), &cert(vec![vec![0], vec![1], vec![2], vec![3]])).kind(),
+        VerdictKind::Verified
+    );
+    assert_eq!(
+        decide(&m, &all(false), &cert(vec![vec![0], vec![1], vec![3]])).reject(),
+        Some(Reject::MissingInitial(1))
+    );
+    // トレースは、どの初期状態からでも始められる。初期状態でない状態からは始められない。
+    let v = decide(
+        &m,
+        &all(true),
+        &Evidence::Trace(vec![2], vec![step(1, 3)], Claim::Deadlock),
+    );
+    assert_eq!(v.kind(), VerdictKind::Violated);
+    let v = decide(
+        &m,
+        &all(true),
+        &Evidence::Trace(vec![1], vec![step(2, 3)], Claim::Deadlock),
+    );
+    assert_eq!(v.reject(), Some(Reject::BadStart));
+    let v = decide(&m, &all(true), &Evidence::Trace(vec![3], vec![], Claim::Deadlock));
+    assert_eq!(v.reject(), Some(Reject::BadStart));
+    let v = decide(&m, &all(true), &Evidence::Trace(vec![], vec![], Claim::Deadlock));
+    assert_eq!(v.reject(), Some(Reject::BadStart));
 }
 
 #[test]

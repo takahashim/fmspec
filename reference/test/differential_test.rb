@@ -59,6 +59,7 @@ class DifferentialTest < Minitest::Test
       assert_equal expected["certificate"], JSON.parse(File.read(cert))["states"], context
     when "violated", "error"
       assert_equal expected["property"], actual["property"].except("source"), context
+      assert_equal expected["initial"], actual["trace"]["initial"], context
       assert_equal expected["steps"], actual["trace"]["steps"], context
     else
       assert_equal expected["reason"], actual["reason"], context
@@ -209,6 +210,7 @@ class DifferentialTest < Minitest::Test
     return if expected["status"] == "sampled"
 
     assert_equal expected["property"], actual["property"].except("source"), context
+    assert_equal expected["initial"], actual["trace"]["initial"], context
     assert_equal expected["steps"], actual["trace"]["steps"], context
   end
 

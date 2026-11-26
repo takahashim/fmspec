@@ -122,6 +122,7 @@ fn a_contract_violation_keeps_the_internal_choice_and_output() {
         &m,
         &fmspec_ir::Trace {
             conditions: conditions(&m, false),
+            start: vec![0],
             steps: steps.clone(),
             claim: claim.clone(),
             seed: None,
@@ -210,7 +211,7 @@ fn certificates_missing_states_or_made_for_other_conditions_are_rejected() {
     };
     assert_eq!(
         decide_cert(&cond, vec![vec![1]]),
-        (VerdictKind::Rejected, Some(Reject::MissingInitial))
+        (VerdictKind::Rejected, Some(Reject::MissingInitial(0)))
     );
     assert_eq!(
         decide_cert(&cond, vec![vec![0]]),
@@ -349,7 +350,7 @@ fn a_fabricated_counterexample_is_an_internal_error() {
     let o = check_evidence(
         m.checked(),
         &cond,
-        Evidence::Trace(steps, Claim::Invariant(0)),
+        Evidence::Trace(vec![0], steps, Claim::Invariant(0)),
         Stats::default(),
     );
     assert_eq!(o.status, Status::InternalError(Reject::StepMismatch(0)));
@@ -377,7 +378,7 @@ fn a_false_deadlock_report_is_an_internal_error() {
     let o = check_evidence(
         m.checked(),
         &cond,
-        Evidence::Trace(steps, Claim::Deadlock),
+        Evidence::Trace(vec![0], steps, Claim::Deadlock),
         Stats::default(),
     );
     assert_eq!(o.status, Status::InternalError(Reject::ClaimNotReproduced));
@@ -421,5 +422,5 @@ fn the_gate_rejects_a_model_that_skipped_validation() {
     });
     let v = decide_raw(&raw, &cond, &cert);
     assert_eq!(v.kind(), VerdictKind::InvalidModel);
-    assert_eq!(v.invalid(), Some(InvalidModel::Initial));
+    assert_eq!(v.invalid(), Some(InvalidModel::Initial(0)));
 }

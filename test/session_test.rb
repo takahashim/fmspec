@@ -276,9 +276,11 @@ class SessionTest < Minitest::Test
       session = Fmspec::Native::Session.start(
         native, JSON.generate("seed" => seed, "observe" => observed.map { |i| names[i] }, "inject" => inject)
       )
-      truth = reference.initial
-      candidates = [truth]
-      assert_equal "continue", ask(session.initial(JSON.generate(project.(truth))))["status"]
+      # 真の初期状態は、初期状態のどれか。候補は、観測と一致する初期状態すべて。
+      truth = reference.initials.sample(random: rng)
+      candidates = reference.initials.select { |s| observed.map { |i| s[i] } == observed.map { |i| truth[i] } }
+      started = ask(session.initial(JSON.generate(project.(truth))))
+      assert_equal ["continue", candidates.length], started.values_at("status", "candidates")
 
       6.times do
         context = -> { "seed #{seed}\n#{JSON.generate(ir)}\ninject: #{inject}\ncandidates: #{candidates.inspect}" }

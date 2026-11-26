@@ -110,7 +110,7 @@ pub fn run_with(m: &Model, deadlock: bool, max_states: Option<usize>) -> Outcome
 /// 不具合のある探索器。状態数が `limit` に達すると、新しい状態を黙って捨て、完走したものとして証明書を出す。
 pub fn truncating_search(m: &Model, limit: usize) -> Evidence {
     let cond = conditions(m, false);
-    let init = m.checked().initial();
+    let init = m.checked().initials()[0].clone();
     let mut visited: HashSet<Vec<i64>> = HashSet::from([init.clone()]);
     let mut queue = VecDeque::from([init]);
     while let Some(state) = queue.pop_front() {
@@ -143,7 +143,7 @@ pub fn forgetful_search(m: &Model, forgetful: &Model) -> Outcome {
 
 pub fn trace(o: &Outcome) -> (&Vec<TraceStep>, &Claim) {
     match &o.evidence {
-        Evidence::Trace(steps, claim) => (steps, claim),
+        Evidence::Trace(_, steps, claim) => (steps, claim),
         other => panic!("トレースではありません: {other:?}"),
     }
 }

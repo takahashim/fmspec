@@ -498,7 +498,8 @@ pub open spec fn terminal_wf(m: RawModel) -> bool {
 pub open spec fn wf(m: RawModel) -> bool {
     &&& forall|i: int| 0 <= i < m.enums@.len() ==> 1 <= #[trigger] m.enums@[i]
     &&& types_ok(m.enums@, m.state_types@)
-    &&& state_ok(m, m.init@)
+    &&& m.inits@.len() >= 1
+    &&& forall|i: int| 0 <= i < m.inits@.len() ==> state_ok(m, (#[trigger] m.inits@[i])@)
     &&& forall|a: int| 0 <= a < m.actions@.len() ==> #[trigger] action_wf(m, a)
     &&& forall|i: int| 0 <= i < m.invariants@.len() ==> #[trigger] invariant_wf(m, i)
     &&& forall|c: int| 0 <= c < m.contracts@.len() ==> #[trigger] contract_wf(m, c)
@@ -512,8 +513,10 @@ pub enum InvalidModel {
     EmptyEnum(usize),
     /// 状態変数の型が不正（空の整数範囲、未定義の列挙型）。
     StateType(usize),
-    /// 初期状態が状態型に従わない（個数の不一致、範囲外）。
-    Initial,
+    /// 初期状態がない。
+    NoInitial,
+    /// 初期状態（添字）が状態型に従わない（個数の不一致、範囲外）。
+    Initial(usize),
     /// 操作の公開引数の個数が引数の個数を超える。
     Params(usize),
     /// 操作の引数のドメインが不正。
@@ -671,8 +674,20 @@ pub fn validate_raw(m: &RawModel) -> (r: Result<(), InvalidModel>)
         },
         None => {},
     }
-    if !vals_ok_exec(&m.enums, &m.state_types, &m.init) {
-        return Err(InvalidModel::Initial);
+    if m.inits.len() == 0 {
+        return Err(InvalidModel::NoInitial);
+    }
+    let mut i: usize = 0;
+    while i < m.inits.len()
+        invariant
+            i <= m.inits@.len(),
+            forall|j: int| 0 <= j < i ==> state_ok(*m, (#[trigger] m.inits@[j])@),
+        decreases m.inits@.len() - i,
+    {
+        if !vals_ok_exec(&m.enums, &m.state_types, &m.inits[i]) {
+            return Err(InvalidModel::Initial(i));
+        }
+        i = i + 1;
     }
     let mut a: usize = 0;
     while a < m.actions.len()

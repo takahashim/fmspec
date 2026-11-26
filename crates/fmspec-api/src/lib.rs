@@ -188,7 +188,7 @@ pub fn replay(model: &Model, trace: &str) -> Value {
         Err(e) => return report::unreadable_evidence(model, &e.to_string()),
     };
     let cond = trace.conditions.clone();
-    let evidence = Evidence::Trace(trace.steps, trace.claim);
+    let evidence = Evidence::Trace(trace.start, trace.steps, trace.claim);
     let verdict = decide(model.checked(), &cond, &evidence);
     report::evidence_report(model, &cond, &evidence, &verdict)
 }
@@ -213,16 +213,17 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
     };
     let cond = trace.conditions.clone();
     let original = trace.steps.len();
-    let evidence = Evidence::Trace(trace.steps, trace.claim);
+    let evidence = Evidence::Trace(trace.start, trace.steps, trace.claim);
     let verdict = decide(model.checked(), &cond, &evidence);
     if !matches!(verdict.kind(), VerdictKind::Violated | VerdictKind::Error) {
         return Ok(report::evidence_report(model, &cond, &evidence, &verdict));
     }
-    let Evidence::Trace(steps, claim) = evidence else {
+    let Evidence::Trace(start, steps, claim) = evidence else {
         return Err("トレースではありません".to_string());
     };
     let attempts = usize::try_from(attempts).unwrap_or(usize::MAX);
-    let shrunk = Evidence::Trace(search_shrink(model.checked(), &cond, &steps, &claim, attempts), claim);
+    let shrunk_steps = search_shrink(model.checked(), &cond, &start, &steps, &claim, attempts);
+    let shrunk = Evidence::Trace(start, shrunk_steps, claim);
     let verdict = decide(model.checked(), &cond, &shrunk);
     let mut body = report::evidence_report(model, &cond, &shrunk, &verdict);
     body["original_steps"] = json!(original);

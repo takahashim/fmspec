@@ -65,7 +65,10 @@ fn reject_json(model: &Model, evidence: &Evidence, reject: Reject) -> Value {
         Reject::ConditionMismatch => {
             json!({"reason": "condition_mismatch", "message": "証明書の検査条件が、要求された検査条件と一致しません"})
         }
-        Reject::MissingInitial => json!({"reason": "missing_initial", "message": "証明書が初期状態を含みません"}),
+        Reject::MissingInitial(_) => json!({"reason": "missing_initial", "message": "証明書が初期状態を含みません"}),
+        Reject::BadStart => {
+            json!({"reason": "bad_start", "message": "トレースの開始状態がモデルの初期状態ではありません"})
+        }
         Reject::IllTypedState(k) => {
             json!({"reason": "ill_typed_state", "state": state(k), "message": "証明書の状態が状態型に従いません"})
         }
@@ -111,9 +114,10 @@ fn attach_evidence(body: &mut Value, model: &Model, cond: &Conditions, evidence:
         Evidence::Certificate(cert) => {
             body["certificate_states"] = json!(cert.states.len());
         }
-        Evidence::Trace(steps, claim) => {
+        Evidence::Trace(start, steps, claim) => {
             let trace = Trace {
                 conditions: cond.clone(),
+                start: start.clone(),
                 steps: steps.clone(),
                 claim: claim.clone(),
                 seed,

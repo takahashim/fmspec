@@ -51,7 +51,8 @@ pub enum Limit {
 
 pub enum Evidence {
     Certificate(Certificate),
-    Trace(Vec<TraceStep>, Claim),
+    /// 開始状態、ステップ、末尾の事象の主張。
+    Trace(Vec<i64>, Vec<TraceStep>, Claim),
     Unavailable(Limit),
 }
 
@@ -60,8 +61,8 @@ pub enum Evidence {
 pub enum Reject {
     /// 証明書の検査条件が、要求された検査条件と一致しない。
     ConditionMismatch,
-    /// 証明書が初期状態を含まない。
-    MissingInitial,
+    /// 証明書が初期状態（添字）を含まない。
+    MissingInitial(usize),
     /// 証明書の状態（添字）が状態型に従わない。
     IllTypedState(usize),
     /// 証明書の状態で、不変条件が真に評価されない。
@@ -74,6 +75,8 @@ pub enum Reject {
     ContractNotHeld(usize, usize),
     /// 証明書の状態が非終端のデッドロックである。
     Deadlock(usize),
+    /// トレースの開始状態が初期状態でない。
+    BadStart,
     /// トレースのステップ（添字）の操作が未定義か対象外、または引数がドメインに従わない。
     BadStep(usize),
     /// トレースのステップ（添字）が、モデルの遷移と一致しない。

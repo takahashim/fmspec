@@ -250,15 +250,24 @@ impl Session {
         if self.inner.start(self.model.checked(), &seen) {
             return Ok(json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0}));
         }
-        let init = self.model.raw().init.clone();
-        let possible = [PossibleOutcome {
-            output: None,
-            state: init.clone(),
-        }];
+        let possible: Vec<PossibleOutcome> = self
+            .model
+            .checked()
+            .initials()
+            .iter()
+            .map(|init| PossibleOutcome {
+                output: None,
+                state: init.clone(),
+            })
+            .collect();
+        let expected: Vec<Value> = possible
+            .iter()
+            .map(|p| json!({"state": self.projected(&p.state)}))
+            .collect();
         Ok(json!({
             "status": "conformance_failure",
             "step": 0,
-            "expected": [{"state": self.projected(&init)}],
+            "expected": expected,
             "observed": {"state": observation},
             "mismatch": self.mismatch(&possible, SeenOutput::Unchecked, &seen),
         }))

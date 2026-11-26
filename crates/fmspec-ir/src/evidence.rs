@@ -131,10 +131,11 @@ pub fn certificate_from_json(model: &Model, json: &str) -> Result<Certificate, T
     Ok(Certificate { conditions, states })
 }
 
-/// トレース。操作列、各ステップの出力と状態、末尾で起きる事象の主張、検査条件を持つ。
+/// トレース。開始状態、操作列、各ステップの出力と状態、末尾で起きる事象の主張、検査条件を持つ。
 #[derive(Clone, Debug)]
 pub struct Trace {
     pub conditions: Conditions,
+    pub start: Vec<i64>,
     pub steps: Vec<TraceStep>,
     pub claim: Claim,
     pub seed: Option<u64>,
@@ -336,7 +337,7 @@ pub fn trace_to_json(model: &Model, trace: &Trace) -> Value {
         "engine_version": ENGINE_VERSION,
         "seed": trace.seed,
         "conditions": conditions_to_json(&model.names, &trace.conditions),
-        "initial": state_to_json(model, &model.raw().init),
+        "initial": state_to_json(model, &trace.start),
         "steps": steps,
         "claim": claim_to_json(model, &trace.claim),
     })
@@ -346,12 +347,14 @@ pub fn trace_from_json(model: &Model, json: &str) -> Result<Trace, TraceError> {
     let root: Value = serde_json::from_str(json).map_err(|e| TraceError::Json(e.to_string()))?;
     let map = header(&root, model, "trace_version", TRACE_VERSION)?;
     let conditions = conditions_of(map, model)?;
-    if let Some(initial) = map.get("initial") {
-        let state = state_from_json(model, initial).map_err(|e| TraceError::Format(format!("initial: {e}")))?;
-        if state != model.raw().init {
-            return format("initial がモデルの初期状態と一致しません");
-        }
-    }
+    // 開始状態が初期状態の1つであることは、判定ゲートが検査する。
+    // 初期状態が1つのモデルでは、initial を省略できる。
+    let inits = model.checked().initials();
+    let start = match map.get("initial") {
+        Some(initial) => state_from_json(model, initial).map_err(|e| TraceError::Format(format!("initial: {e}")))?,
+        None if inits.len() == 1 => inits[0].clone(),
+        None => return format("初期状態が複数あるモデルでは initial が必要です"),
+    };
     let Some(rows) = map.get("steps").and_then(Value::as_array) else {
         return format("steps はステップの配列です");
     };
@@ -392,6 +395,7 @@ pub fn trace_from_json(model: &Model, json: &str) -> Result<Trace, TraceError> {
     let seed = map.get("seed").and_then(Value::as_u64);
     Ok(Trace {
         conditions,
+        start,
         steps,
         claim,
         seed,

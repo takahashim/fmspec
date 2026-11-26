@@ -1,6 +1,6 @@
 //! 幅優先探索（仕様書 §8.1）。
 //!
-//! 操作は定義順、引数は辞書順に列挙する。したがって、状態不変条件の違反は遷移回数が最小の
+//! 初期状態は与えられた順に起点とし、操作は定義順、引数は辞書順に列挙する。したがって、状態不変条件の違反は遷移回数が最小の
 //! トレースで見つかり、同じ長さのトレースのうちでは、この列挙順で最初に見つかるものを返す。
 
 use fmspec_core::eval::ErrKind;
@@ -40,8 +40,14 @@ struct Node {
     parent: Option<(usize, usize, Vec<i64>, Option<i64>)>,
 }
 
-/// 初期状態から `id` の状態までのトレースを復元する。
-fn path(nodes: &[Node], mut id: usize) -> Vec<TraceStep> {
+/// 初期状態から `id` の状態までのトレースを復元し、主張を付けて証拠にする。
+fn trace(nodes: &[Node], id: usize, claim: Claim) -> Evidence {
+    let (start, steps) = path(nodes, id);
+    Evidence::Trace(start, steps, claim)
+}
+
+/// 初期状態から `id` の状態までの開始状態とステップを復元する。
+fn path(nodes: &[Node], mut id: usize) -> (Vec<i64>, Vec<TraceStep>) {
     let mut steps = Vec::new();
     while let Some((parent, action, args, output)) = &nodes[id].parent {
         steps.push(TraceStep {
@@ -53,7 +59,7 @@ fn path(nodes: &[Node], mut id: usize) -> Vec<TraceStep> {
         id = *parent;
     }
     steps.reverse();
-    steps
+    (nodes[id].state.clone(), steps)
 }
 
 fn property_claim(
@@ -72,28 +78,33 @@ fn property_claim(
 pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> SearchResult {
     let n_actions = model.raw().actions.len();
     let mut stats = Stats::default();
-    let init = model.initial();
-    let mut nodes: Vec<Node> = vec![Node {
-        state: init.clone(),
-        parent: None,
-    }];
+    let mut nodes: Vec<Node> = Vec::new();
     let mut visited: HashMap<Vec<i64>, usize> = HashMap::new();
-    visited.insert(init.clone(), 0);
-    stats.visited_states = 1;
+    let mut queue: VecDeque<usize> = VecDeque::new();
 
     let finish = |evidence: Evidence, stats: Stats| SearchResult { evidence, stats };
 
-    if let Some((i, v)) = model.invariants(cond, &init) {
-        return finish(
-            Evidence::Trace(
-                Vec::new(),
-                property_claim(i, v, Claim::Invariant, Claim::InvariantError),
-            ),
-            stats,
-        );
+    // 初期状態は、与えられた順に探索の起点にする。
+    for init in model.initials() {
+        if visited.contains_key(init) {
+            continue;
+        }
+        if opts.max_states.is_some_and(|max| visited.len() >= max) {
+            return finish(Evidence::Unavailable(Limit::MaxStates), stats);
+        }
+        visited.insert(init.clone(), nodes.len());
+        stats.visited_states = visited.len();
+        if let Some((i, v)) = model.invariants(cond, init) {
+            let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+            return finish(Evidence::Trace(init.clone(), Vec::new(), claim), stats);
+        }
+        queue.push_back(nodes.len());
+        nodes.push(Node {
+            state: init.clone(),
+            parent: None,
+        });
     }
 
-    let mut queue: VecDeque<usize> = VecDeque::from([0]);
     while let Some(cur) = queue.pop_front() {
         if opts.interrupt.is_some_and(|requested| requested()) {
             return finish(Evidence::Unavailable(Limit::Interrupted), stats);
@@ -108,10 +119,7 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                 // 訪問済みの状態は型に従い、操作の添字は範囲内なので、ここには来ない。
                 None => return finish(Evidence::Unavailable(Limit::Interrupted), stats),
                 Some(Enumerated::Fail(args, site, kind)) => {
-                    return finish(
-                        Evidence::Trace(path(&nodes, cur), Claim::StepError(a, args, site, kind)),
-                        stats,
-                    );
+                    return finish(trace(&nodes, cur, Claim::StepError(a, args, site, kind)), stats);
                 }
                 Some(Enumerated::Ok(ts)) => ts,
             };
@@ -119,17 +127,15 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                 enabled = true;
                 stats.transitions += 1;
                 if let Some((k, v)) = model.contracts(cond, a, &state, &t.args, &t.state, &t.output) {
-                    let mut steps = path(&nodes, cur);
+                    let (start, mut steps) = path(&nodes, cur);
                     steps.push(TraceStep {
                         action: a,
                         args: t.args,
                         output: t.output,
                         state: t.state,
                     });
-                    return finish(
-                        Evidence::Trace(steps, property_claim(k, v, Claim::Contract, Claim::ContractError)),
-                        stats,
-                    );
+                    let claim = property_claim(k, v, Claim::Contract, Claim::ContractError);
+                    return finish(Evidence::Trace(start, steps, claim), stats);
                 }
                 if visited.contains_key(&t.state) {
                     continue;
@@ -146,13 +152,8 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                     parent: Some((cur, a, t.args, t.output)),
                 });
                 if let Some((i, v)) = violation {
-                    return finish(
-                        Evidence::Trace(
-                            path(&nodes, id),
-                            property_claim(i, v, Claim::Invariant, Claim::InvariantError),
-                        ),
-                        stats,
-                    );
+                    let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+                    return finish(trace(&nodes, id, claim), stats);
                 }
                 queue.push_back(id);
             }
@@ -160,8 +161,8 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
         if cond.deadlock && !enabled {
             match model.terminal(&state) {
                 Ok(true) => {}
-                Ok(false) => return finish(Evidence::Trace(path(&nodes, cur), Claim::Deadlock), stats),
-                Err(e) => return finish(Evidence::Trace(path(&nodes, cur), Claim::TerminalError(e)), stats),
+                Ok(false) => return finish(trace(&nodes, cur, Claim::Deadlock), stats),
+                Err(e) => return finish(trace(&nodes, cur, Claim::TerminalError(e)), stats),
             }
         }
     }

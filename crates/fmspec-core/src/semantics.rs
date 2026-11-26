@@ -109,12 +109,17 @@ pub open spec fn is_edge(
     act_on(m, c, a) && args_ok(m, a, args) && step_spec(m, a, args, p) == Step::To(s, o)
 }
 
+/// `s` は初期状態の1つである。
+pub open spec fn is_init(m: RawModel, s: Seq<i64>) -> bool {
+    exists|i: int| 0 <= i < m.inits@.len() && (#[trigger] m.inits@[i])@ == s
+}
+
 /// `s` は初期状態から対象の操作の遷移 `n` 回で到達できる。
 pub open spec fn reach(m: RawModel, c: Conditions, s: Seq<i64>, n: nat) -> bool
     decreases n,
 {
     if n == 0 {
-        s == m.init@
+        is_init(m, s)
     } else {
         exists|p: Seq<i64>, a: int, args: Seq<i64>, o: Option<i64>|
             reach(m, c, p, (n - 1) as nat) && #[trigger] is_edge(m, c, p, a, args, o, s)

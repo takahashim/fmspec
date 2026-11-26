@@ -43,7 +43,7 @@ fn graph(n: i64, edges: &[(i64, i64)], bad: &[i64]) -> CheckedModel {
     let raw = RawModel {
         enums: vec![],
         state_types: vec![Type::Int(0, n - 1)],
-        init: vec![0],
+        inits: vec![vec![0]],
         actions,
         invariants,
         contracts: vec![],
@@ -141,7 +141,7 @@ fn counterexamples_to_state_invariants_are_shortest() {
             None => assert_eq!(o.status, Status::Verified, "seed {seed}"),
             Some(d) => {
                 assert_eq!(o.status, Status::Violated, "seed {seed}");
-                let Evidence::Trace(steps, claim) = &o.evidence else {
+                let Evidence::Trace(_, steps, claim) = &o.evidence else {
                     panic!("seed {seed}")
                 };
                 assert_eq!(steps.len(), d, "seed {seed}");
@@ -165,7 +165,7 @@ fn a_known_shortest_path_is_found_among_longer_ones() {
     // 0 → 1 → 2 → 3 → 4 の長い道と、0 → 5 → 4 の短い道。定義順は長い道が先。
     let edges = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 4)];
     let o = run(&graph(6, &edges, &[4]), false, None);
-    let Evidence::Trace(steps, _) = &o.evidence else {
+    let Evidence::Trace(_, steps, _) = &o.evidence else {
         panic!()
     };
     assert_eq!(steps.iter().map(|s| s.state[0]).collect::<Vec<_>>(), vec![5, 4]);
@@ -176,7 +176,7 @@ fn ties_between_shortest_counterexamples_follow_the_definition_order() {
     // 長さ2の反例が2つある。操作の定義順で先に見つかるほうを返す。
     let edges = [(0, 2), (0, 1), (1, 3), (2, 3)];
     let o = run(&graph(4, &edges, &[3]), false, None);
-    let Evidence::Trace(steps, _) = &o.evidence else {
+    let Evidence::Trace(_, steps, _) = &o.evidence else {
         panic!()
     };
     assert_eq!(steps.iter().map(|s| s.state[0]).collect::<Vec<_>>(), vec![2, 3]);
@@ -212,7 +212,7 @@ fn a_violation_on_an_edge_to_a_visited_state_is_found_at_the_state_limit() {
     let m = validate(raw).unwrap();
     let o = run(&m, false, Some(1));
     assert_eq!(o.status, Status::Violated);
-    let Evidence::Trace(steps, claim) = &o.evidence else {
+    let Evidence::Trace(_, steps, claim) = &o.evidence else {
         panic!()
     };
     assert_eq!((steps.len(), claim), (1, &Claim::Contract(0)));
@@ -222,7 +222,7 @@ fn a_violation_on_an_edge_to_a_visited_state_is_found_at_the_state_limit() {
 fn violations_in_the_initial_state_midway_on_an_edge_and_deadlocks_are_distinguished() {
     let edges = [(0, 1), (1, 2)];
     let claim_of = |o: &Outcome| match &o.evidence {
-        Evidence::Trace(steps, claim) => (steps.len(), claim.clone()),
+        Evidence::Trace(_, steps, claim) => (steps.len(), claim.clone()),
         other => panic!("{other:?}"),
     };
     // 初期状態の違反。
@@ -281,7 +281,7 @@ fn a_larger_state_space_is_explored_completely() {
     let raw = RawModel {
         enums: vec![],
         state_types: vec![Type::Int(0, 19); 3],
-        init: vec![0, 0, 0],
+        inits: vec![vec![0, 0, 0]],
         actions: vec![inc(0), inc(1), inc(2)],
         invariants: vec![],
         contracts: vec![],
