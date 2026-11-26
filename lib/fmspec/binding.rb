@@ -12,9 +12,16 @@ module Fmspec
   #
   # command と observe のブロックは実装を操作する普通の Ruby で、仕様の記号式とは別のものである。
   class Binding
-    Handler = Struct.new(:name, :callable, :source, :inject)
+    # `worker` は、プロセスのステップなら [プロセス名, インスタンスの番号]。
+    Handler = Struct.new(:name, :callable, :source, :inject, :worker)
 
-    attr_reader :model, :commands, :observers
+    # プロセスの実装。setup と teardown は、インスタンスのスレッドで実行する。
+    ProcessSpec = Struct.new(:name, :setup, :teardown, :timeout)
+
+    # 既定の、ステップの実行を待つ秒数。
+    DEFAULT_TIMEOUT = 5
+
+    attr_reader :model, :commands, :observers, :processes
 
     def initialize(model, &block)
       raise BuildError, "bind にはブロックが必要です" unless block
@@ -24,6 +31,7 @@ module Fmspec
       @teardown = nil
       @commands = {}
       @observers = {}
+      @processes = {}
       instance_eval(&block)
       validate!
       freeze
@@ -64,6 +72,80 @@ module Fmspec
       register(@observers, name, "observe", method, block) { |m| ->(context) { context.public_send(m) } }
     end
 
+    # 並行するプロセスの実装（仕様書 §12.4）。ブロックの中の語彙（setup、teardown、step）は Binding::Process にある。
+    # インスタンスごとに専用のスレッドを立て、ステップをテストが選んだ順に1つずつ実行する（Fmspec::Scheduler）。
+    # ステップが `timeout:` 秒以内に終わらなければ、そのケースは :inconclusive（理由は :step_timeout）になる。
+    #
+    #   process :incr do
+    #     setup { |counter, id| counter.client(id) }
+    #     step(:load) { |client| client.load }
+    #     step(:store) { |client| client.store }
+    #   end
+    def process(name, timeout: DEFAULT_TIMEOUT, &block)
+      raise BuildError, "process #{name} にはブロックが必要です" unless block
+
+      name = name.to_sym
+      declared = @model.processes[name]
+      raise BuildError, "仕様にないプロセスです: #{name}" unless declared
+      raise BuildError, "process #{name} の登録が重複しています" if @processes.key?(name)
+      raise BuildError, "process #{name} の timeout: は正の数です: #{timeout.inspect}" unless timeout.is_a?(Numeric) && timeout.positive?
+
+      body = Process.new(name, declared[:steps])
+      body.instance_eval(&block)
+      @processes[name] = ProcessSpec.new(name, body.setup_block, body.teardown_block, timeout).freeze
+      body.steps.each do |step, (callable, source, inject)|
+        declared[:count].times do |id|
+          action = :"#{name}[#{id}].#{step}"
+          raise BuildError, "command #{action} の登録が重複しています" if @commands.key?(action)
+
+          @commands[action] = Handler.new(action, callable, source, inject, [name, id].freeze)
+        end
+      end
+    end
+
+    # `process` のブロックの中の語彙。
+    class Process
+      attr_reader :steps, :setup_block, :teardown_block
+
+      def initialize(name, declared)
+        @name = name
+        @declared = declared
+        @steps = {}
+        @setup_block = nil
+        @teardown_block = nil
+      end
+
+      # インスタンスのスレッドで最初に呼ばれる。ブロックはテストケースのコンテキストとインスタンスの番号を受け取り、
+      # ステップに渡すインスタンスのコンテキスト（DBの接続など）を返す。省略すると、テストケースのコンテキストを渡す。
+      def setup(&block)
+        raise BuildError, "process #{@name} の setup にはブロックが必要です" unless block
+        raise BuildError, "process #{@name} の setup は1つだけ書けます" if @setup_block
+
+        @setup_block = block
+      end
+
+      # インスタンスのスレッドで最後に呼ばれる。失敗したときも呼ばれる。
+      def teardown(&block)
+        raise BuildError, "process #{@name} の teardown にはブロックが必要です" unless block
+        raise BuildError, "process #{@name} の teardown は1つだけ書けます" if @teardown_block
+
+        @teardown_block = block
+      end
+
+      # ステップのハンドラ。ブロックはインスタンスのコンテキストと、注入する選択（キーワード）を受け取る。
+      def step(name, method: nil, inject: [], &block)
+        name = name.to_sym
+        raise BuildError, "プロセス #{@name} にステップ #{name} はありません" unless @declared.include?(name)
+        raise BuildError, "process #{@name} の step #{name} の登録が重複しています" if @steps.key?(name)
+        raise BuildError, "step #{name} には、ブロックか method: のどちらか一方を渡します" unless method.nil? ^ block.nil?
+
+        location = caller_locations(1, 1)&.first
+        source = block ? block.source_location&.join(":") : location && "#{location.path}:#{location.lineno}"
+        callable = block || ->(local, **args) { args.empty? ? local.public_send(method) : local.public_send(method, **args) }
+        @steps[name] = [callable, source, Array(inject).map(&:to_sym).freeze]
+      end
+    end
+
     def setup_block = @setup
     def teardown_block = @teardown
 
@@ -76,7 +158,7 @@ module Fmspec
 
       location = caller_locations(2, 1)&.first
       source = block ? block.source_location&.join(":") : location && "#{location.path}:#{location.lineno}"
-      table[name] = Handler.new(name, block || yield(method.to_sym), source, [].freeze)
+      table[name] = Handler.new(name, block || yield(method.to_sym), source, [].freeze, nil)
     end
 
     # 登録を、実行の前に仕様と照合する。

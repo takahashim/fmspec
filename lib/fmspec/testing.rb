@@ -223,6 +223,14 @@ module Fmspec
       @binding.commands.reject { |_, h| h.inject.empty? }.to_h { |name, h| [name.to_s, h.inject.map(&:to_s)] }
     end
 
+    # モデル検査のトレースを、再実行する操作列にする。内部選択は、binding が注入するものだけを入力に含める。
+    def trace_inputs(trace)
+      trace.steps.map do |step|
+        handler = @binding.commands.fetch(step.action) { raise ArgumentError, "トレースの操作 #{step.action} の command がありません" }
+        decode(step.action, step.args.merge(step.choices.slice(*handler.inject.map(&:to_s))))
+      end
+    end
+
     # エンジンが返した入力（`{"action", "args", "choices"}`）を、[操作名, キーワード引数] にする。
     def decode_input(input) = decode(input["action"], input["args"].merge(input["choices"]))
 
@@ -252,12 +260,27 @@ module Fmspec
       rescue StandardError => e
         return Outcome.new(:setup_error, [], 0, nil, e)
       end
+      scheduler = Scheduler.new(@binding, context) unless @binding.processes.empty?
       result = begin
-        catch(:finished) { drive(context, seed, collector, &next_input) }
+        start(scheduler) || catch(:finished) { drive(context, scheduler, seed, collector, &next_input) }
       ensure
-        failed = teardown(context)
+        failed = [stop(scheduler), teardown(context)].compact.first
       end
       failed || result
+    end
+
+    # プロセスのスレッドの setup を待つ。失敗は setup の失敗として報告する。
+    def start(scheduler)
+      scheduler&.start
+      nil
+    rescue StandardError => e
+      Outcome.new(:setup_error, [], 0, nil, e)
+    end
+
+    # プロセスのスレッドを終える。teardown の失敗は、隔離の失敗として報告する。
+    def stop(scheduler)
+      error = scheduler&.stop
+      error && Outcome.new(:setup_error, [], 0, nil, error)
     end
 
     # teardown の失敗は、隔離の失敗として報告する。成功として扱わない。
@@ -268,7 +291,7 @@ module Fmspec
       Outcome.new(:setup_error, [], 0, nil, e)
     end
 
-    def drive(context, seed, collector)
+    def drive(context, scheduler, seed, collector)
       options = @options.merge("seed" => seed, "observe" => @binding.observers.keys.map(&:to_s), "inject" => inject)
       session = Native::Session.start(@native, JSON.generate(options))
       raise ArgumentError, JSON.parse(session)["message"] if session.is_a?(String)
@@ -282,7 +305,10 @@ module Fmspec
       while (input = yield(session, steps))
         action, args = input
         output = begin
-          @binding.commands.fetch(action).callable.call(context, **args)
+          execute(context, scheduler, action, args)
+        rescue Scheduler::StepTimeout => e
+          steps << TestResult::Step.new(action, args, nil, nil)
+          return Outcome.new(:inconclusive, steps, steps.length - 1, { "reason" => "step_timeout", "action" => action.to_s }, e)
         rescue StandardError => e
           steps << TestResult::Step.new(action, args, nil, nil)
           return Outcome.new(:execution_error, steps, steps.length - 1, nil, e)
@@ -297,6 +323,14 @@ module Fmspec
         collector&.step(action, answer["covered"])
       end
       Outcome.new(:passed, steps, steps.length, nil, nil)
+    end
+
+    # command を実行する。プロセスのステップは、そのインスタンスのスレッドで実行する。
+    def execute(context, scheduler, action, args)
+      handler = @binding.commands.fetch(action)
+      return scheduler.run(handler, args) if handler.worker
+
+      handler.callable.call(context, **args)
     end
 
     def observe(context, steps)
@@ -379,6 +413,7 @@ module Fmspec
 
     # 記録した操作列を1回だけ再実行する。
     def replay(inputs)
+      inputs = @case.trace_inputs(inputs) if inputs.is_a?(Trace)
       outcome = invalid_as_inconclusive(@case.replay(inputs, @collector))
       result(outcome, @seed, 1, outcome.matched)
     end

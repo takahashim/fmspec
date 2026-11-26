@@ -37,6 +37,7 @@ module Fmspec
       @terminal = nil
       @initially = nil
       @names = {}
+      @processes = {}
     end
 
     # ---- 型 ----
@@ -124,6 +125,41 @@ module Fmspec
       nil
     end
 
+    # 並行するプロセス（仕様書 §12.4）。`count` 個のインスタンスを持つ。
+    # ブロックはインスタンスごとに、インスタンスの番号（0から）を受け取って実行する普通の Ruby で、
+    # 中の語彙（local、step）は Fmspec::Process::Body にある。
+    #
+    #   process :incr, count: 2 do
+    #     local :seen, int(0..2), initial: 0
+    #     step(:load) { |s| update seen: s.count }
+    #     step(:store) { |s| update count: s.seen + 1 }
+    #   end
+    #
+    # 記号的な状態からは、`s.incr[0].seen`、`s.incr[0].pc`、`s.incr[0].done` で各インスタンスの状態を参照する。
+    def process(name, count: 1, &body)
+      raise BuildError, "プロセス #{name} にはブロックが必要です" unless body
+
+      claim(name, "プロセス")
+      raise BuildError, "プロセス #{name} の count: は1以上の整数です: #{count.inspect}" unless count.is_a?(Integer) && count >= 1
+
+      name = name.to_sym
+      bodies = Array.new(count) { |id| Process::Body.new(self, name).tap { |b| b.instance_exec(id, &body) } }
+      labels = bodies.first.steps.map(&:first)
+      raise BuildError, "プロセス #{name} にステップがありません" if labels.empty?
+      unless bodies.all? { |b| b.steps.map(&:first) == labels }
+        raise BuildError, "プロセス #{name} のステップの名前と順序は、インスタンスごとに同じにします"
+      end
+
+      pc = enum(:"#{name}.pc", *labels, :done)
+      bodies.each_with_index do |b, id|
+        state(:"#{name}[#{id}].pc", pc, initial: labels.first)
+        b.locals.each { |local, type, initial, _| state(:"#{name}[#{id}].#{local}", type, **initial) }
+      end
+      @processes[name] = { count: count, steps: labels }
+      bodies.each_with_index { |b, id| process_steps(name, id, b, pc) }
+      nil
+    end
+
     # 状態不変条件。ブロックは記号的な状態を受け取り、Bool の式を返す。
     def invariant(name, &block)
       raise BuildError, "不変条件 #{name} にはブロックが必要です" unless block
@@ -152,9 +188,13 @@ module Fmspec
       index = @states.index { |s| s[:name] == name }
       return Expr.new({ ref => index }, @states[index][:type].kind) if index
       return @constants[name] if @constants.key?(name)
+      return Process::Ref.new(self, name, @processes[name][:count], ref) if @processes.key?(name)
 
       raise BuildError, "未定義の状態変数または定数です: #{name}"
     end
+
+    # 状態変数か定数の名前か。
+    def defined?(name) = @states.any? { |s| s[:name] == name.to_sym } || @constants.key?(name.to_sym)
 
     def state_index(name)
       @states.index { |s| s[:name] == name.to_sym } or raise BuildError, "未定義の状態変数です: #{name}"
@@ -165,7 +205,8 @@ module Fmspec
     end
 
     def build
-      Model.new(@name.to_sym, to_ir, ghosts: @states.select { |s| s[:ghost] }.map { |s| s[:name] })
+      Model.new(@name.to_sym, to_ir, ghosts: @states.select { |s| s[:ghost] }.map { |s| s[:name] },
+                                     processes: @processes)
     end
 
     def declared_enums = @enums.values
@@ -214,9 +255,37 @@ module Fmspec
         "invariants" => @invariants,
         "contracts" => @contracts
       }
-      ir["terminal"] = @terminal if @terminal
+      terminal = @terminal || processes_done
+      ir["terminal"] = terminal if terminal
       ir["initial_constraint"] = @initially if @initially
       ir
+    end
+
+    # プロセスのインスタンス `id` のステップを、操作に展開する。
+    def process_steps(name, id, body, pc)
+      prefix = "#{name}[#{id}]"
+      scope = Process::Scope.new(self, prefix, body.locals.map(&:first))
+      index = state_index(:"#{prefix}.pc")
+      labels = pc.labels
+      body.steps.each_with_index do |(label, block, location), k|
+        action = :"#{prefix}.#{label}"
+        claim(action, "操作", :action)
+        builder = Process::StepBuilder.new(scope, action, source_of([location]),
+                                           { index: index, type: pc, label: label }, pc[labels[k + 1]])
+        built, contracts = builder.build(&block)
+        @actions << built
+        @contracts.concat(contracts)
+      end
+    end
+
+    # 終端条件の既定。プロセスがあれば、すべてのインスタンスがプロセスを終えたこと。
+    def processes_done
+      return nil if @processes.empty?
+
+      done = @processes.flat_map do |name, p|
+        Array.new(p[:count]) { |id| reference(:"#{name}[#{id}].pc", "var").eq(:done).node }
+      end
+      done.length == 1 ? done[0] : { "all" => done }
     end
 
     # 名前の重複を拒否する。状態変数と定数は同じ名前空間で、操作、不変条件、遷移契約はそれぞれ別。

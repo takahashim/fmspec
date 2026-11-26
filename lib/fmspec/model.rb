@@ -7,10 +7,14 @@ module Fmspec
     # Ghost State として宣言した状態変数の名前。
     attr_reader :ghosts
 
-    def initialize(name, ir, ghosts: [])
+    # 並行するプロセス。プロセス名から、インスタンスの数（:count）とステップの名前の配列（:steps）への Hash。
+    attr_reader :processes
+
+    def initialize(name, ir, ghosts: [], processes: {})
       @name = name
       @ir = Model.deep_freeze(ir)
       @ghosts = ghosts.dup.freeze
+      @processes = Model.deep_freeze(processes.transform_values(&:dup))
       @native = nil
     end
 
@@ -75,7 +79,8 @@ module Fmspec
     #   cases    テストケースの数
     #   steps    1ケースの最大ステップ数
     #   seed     省略すると無作為に選び、結果に記録する
-    #   replay   操作列（`TestResult#inputs`）。指定すると、生成せずにその操作列を1回だけ再実行する
+    #   replay   操作列（`TestResult#inputs`）か、モデル検査のトレース（`Result#trace`）。
+    #            指定すると、生成せずにその操作列を1回だけ再実行する。並行するプロセスでは、反例のスケジュールの再現になる
     #   paths    操作列の配列。指定すると、生成せずに各操作列を1ケースとして再実行する。
     #            true なら `test_paths` で作る（steps が1経路の最大ステップ数）
     #   shrink   失敗した操作列を縮小する

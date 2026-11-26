@@ -256,7 +256,7 @@ invariant(:no_milk_alone) { |s| s.items.include?(:milk).implies(s.items.any? { |
 
 ## 記号ブロックで使えない構文
 
-記号ブロック（`action`、`invariant`、`terminal`、`ensures`、`on_accept`、`on_reject` のブロック）の中で、次の構文は使えない。
+記号ブロック（`action`、`step`、`invariant`、`terminal`、`ensures`、`on_accept`、`on_reject` のブロック）の中で、次の構文は使えない。
 
 | 構文 | 代わりに使うもの |
 |---|---|
@@ -331,6 +331,50 @@ guardは各操作のguardの連言、更新は各操作の更新の連結であ�
 上の例から `sync :cancel` を除くと、`stock` と `payment` はそれぞれ検証できる。
 しかし合成した仕様では、`release` と `refund` を片方だけ実行でき、不変条件 `charged_for_reserved` が破れる。
 仕様をまたぐ性質は、合成した仕様で検査する。
+
+## 並行するプロセス
+
+`process` は、並行して動く有限のプロセスを宣言する（仕様書 §12.4）。
+プロセスは**ステップ**の列で、各ステップは atomic である。
+検査では、すべてのインスタンスのステップのインターリーブを列挙する。
+
+```ruby
+Counter = Fmspec.define(:counter) do
+  state :count, int(0..2), initial: 0
+
+  process :incr, count: 2 do
+    local :seen, int(0..2), initial: 0
+    step(:load) { |s| update seen: s.count }
+    step(:store) { |s| update count: s.seen + 1 }
+  end
+
+  invariant(:no_lost_update) { |s| implies(s.incr[0].done & s.incr[1].done, s.count.eq(2)) }
+end
+
+Counter.check.trace.steps.map(&:action)
+# => [:"incr[0].load", :"incr[1].load", :"incr[0].store", :"incr[1].store"]
+```
+
+`process(名前, count: n)` のブロックは、インスタンスごとに、インスタンスの番号（0から）を受け取って実行する普通のRubyである。
+番号でローカル変数の初期値やステップの中身を変えてよいが、ステップの名前と順序はインスタンスごとに同じにする。
+
+| 語彙 | 内容 |
+|---|---|
+| `local(名前, 型, initial: 値)` | ローカル変数。`initial_in:` も書ける。状態変数や定数と同じ名前は使えない |
+| `step(名前) { \|s\| ... }` | ステップ。ブロックは記号ブロックで、`action` のブロックと同じ語彙（`guard`、`update`、`choose`、`returns`、`accept_if`、`ensures` など）に加えて `goto` を使える。公開引数は持たない |
+| `goto(ステップ, 条件)` | 次に実行するステップを変える。条件を省略すると常に変える。`goto :done` でプロセスを終える |
+
+仕様は、基本のIRに次のように展開する（仕様書 §12.6）。
+
+- インスタンスごとに、**プログラムカウンタ** `incr[0].pc` とローカル変数 `incr[0].seen` を状態変数として加える。プログラムカウンタは、ステップの名前と `:done` をラベルに持つ列挙型 `incr.pc` の値で、最初のステップから始まる。
+- ステップを、インスタンスごとの操作 `incr[0].load` にする。操作は、プログラムカウンタがそのステップのときだけ有効である。実行すると、プログラムカウンタは `goto` の行き先、または次のステップ（最後のステップなら `:done`）になる。
+- ステップの中では、ローカル変数を名前で参照、更新できる。プログラムカウンタは `update` では変えられない。
+- `terminal` を書かなければ、終端条件は「すべてのインスタンスが `:done`」になる。
+
+不変条件などの記号ブロックでは、`s.incr[0].seen`、`s.incr[0].pc`、`s.incr[0].done`（`pc` が `:done`）で、各インスタンスの状態を参照する。
+
+read、write、commit などのどこでステップを区切るかは、仕様を書く人が決める。
+DBの分離レベル、ロック、制約は、ステップのguardと更新で表す仕様の仮定であり、エンジンがDBの意味を保証するものではない。
 
 ## 検査
 
@@ -451,7 +495,7 @@ result.assert_passed!
 | `seed:` | 省略すると無作為に選び、結果に記録する |
 | `actions:` | 対象の操作の名前の配列 |
 | `shrink:`、`shrink_runs:` | 失敗した操作列を縮小するか、縮小で再実行する回数の上限 |
-| `replay:` | 操作列。生成せずに、その操作列を1回だけ再実行する |
+| `replay:` | 操作列（`TestResult#inputs`）か、モデル検査のトレース（`Result#trace`）。生成せずに、その操作列を1回だけ再実行する |
 | `paths:` | 操作列の配列。生成せずに、各操作列を1ケースとして再実行する。`true` なら `test_paths` で作る（`steps:` が1経路の最大ステップ数） |
 | `max_candidates:` | 候補状態の数の上限 |
 
@@ -468,6 +512,54 @@ result.assert_passed!
 - 候補が `max_candidates:` を超えた時点で、そのケースは未完了（`:inconclusive`、理由は `:max_candidates`）で終わる。最初の観測で一致する初期状態が上限を超えた場合も同じである。
 - 有効な入力を持つ候補があるのに、全候補に共通する入力がなければ、そのケースは未完了（`:inconclusive`、理由は `:no_common_input`）で終わる。
 
+### 並行するプロセスの実装
+
+プロセスのステップは、`process` で実装に結合する。
+
+```ruby
+binding = Counter.bind do
+  setup { Store.new }
+
+  process :incr, timeout: 2 do
+    setup { |store, id| store.client(id) }
+    teardown { |client| client.close }
+    step(:load) { |client| client.load }
+    step(:store, method: :store)
+  end
+
+  observe(:count) { |store| store.count }
+end
+```
+
+| 語彙 | 意味 |
+|---|---|
+| `setup { \|context, id\| ... }` | インスタンスのコンテキスト（DBの接続など）を返す。省略すると、テストケースのコンテキストを使う |
+| `teardown { \|instance\| ... }` | インスタンスの終わりに呼ばれる。失敗したケースでも呼ばれる |
+| `step(:ステップ) { \|instance\| ... }` | ステップのハンドラ。`method:` と `inject:` は `command` と同じ |
+
+テストは、ケースごとにインスタンスごとの専用のスレッドを立て、そのスレッドで `setup`、各ステップ、`teardown` を実行する。
+ステップは、テストが選んだ順に1つずつ実行する。
+1つのステップの実行中、他のスレッドは次のステップを待って止まっている。
+そのため、DBの接続のようにスレッドに結び付く資源も、インスタンスごとに分けて持てる。
+これは、スケジュールを固定した検査である。
+スレッドを自由に走らせるストレステストではない。
+
+ステップが `timeout:` 秒（既定は5秒）以内に終わらなければ、テストはそのスケジュールを実装で再現できなかったとして、ケースを未完了（`:inconclusive`、理由は `:step_timeout`）で終える。
+実装のロックで待たされたステップが典型である。
+待たされているスレッドは、他のスレッドの `teardown` がロックを解放すれば終わることがあるので、最後に終える。
+それでも終わらなければ、スレッドを止める。
+
+モデル検査の反例のトレースを `replay:` に渡すと、反例のスケジュールを実装で再現する。
+
+```ruby
+trace = Counter.check.trace
+Counter.test(binding, replay: trace)
+# 実装が反例のとおりに振る舞えば :model_violation（仕様の不変条件の違反に、実装も至った）
+# 実装が反例のスケジュールをたどれなければ :inconclusive（:step_timeout）
+```
+
+トレースの内部選択のうち、入力に含めるのは binding が注入するものだけである。
+
 ### 結果
 
 `test` は `Fmspec::TestResult` を返す。
@@ -477,7 +569,7 @@ result.assert_passed!
 | `:passed` | すべてのケースで、戻り値と観測が仕様と一致した |
 | `:conformance_failure` | 戻り値または観測が、仕様の許すどの結果とも一致しない |
 | `:execution_error` | `command` または `observe` が例外を上げた |
-| `:setup_error` | `setup` または `teardown` が例外を上げた |
+| `:setup_error` | `setup` または `teardown`（プロセスのものを含む）が例外を上げた |
 | `:model_error` | 仕様の評価エラーに行き当たった |
 | `:model_violation` | 仕様の不変条件または遷移契約の違反に行き当たった |
 | `:inconclusive` | 未完了のケースがあった |

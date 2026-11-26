@@ -30,7 +30,7 @@ module Fmspec
     end
 
     # 合成に加えるモデル。`offset` は、合成したモデルでの最初の状態変数の添字。
-    Part = Struct.new(:prefix, :ir, :offset, :ghosts)
+    Part = Struct.new(:prefix, :ir, :offset, :ghosts, :processes)
 
     def initialize(name, components)
       raise BuildError, "Fmspec.compose には1つ以上のモデルが必要です" if components.empty?
@@ -49,7 +49,7 @@ module Fmspec
 
         ir = model.to_ir
         merge_enums(prefix, ir)
-        @parts << Part.new(prefix, ir, offset, model.ghosts)
+        @parts << Part.new(prefix, ir, offset, model.ghosts, model.processes)
         offset += ir["states"].length
       end
       @state_types = composed_states.to_h { |s| [s["name"], Types.from_ir(s["type"], @enums)] }
@@ -131,7 +131,8 @@ module Fmspec
 
     def build
       ghosts = @parts.flat_map { |p| p.ghosts.map { |g| :"#{p.prefix}.#{g}" } }
-      Model.new(@name.to_sym, to_ir, ghosts: ghosts)
+      processes = @parts.flat_map { |p| p.processes.map { |name, v| [:"#{p.prefix}.#{name}", v] } }.to_h
+      Model.new(@name.to_sym, to_ir, ghosts: ghosts, processes: processes)
     end
 
     private
