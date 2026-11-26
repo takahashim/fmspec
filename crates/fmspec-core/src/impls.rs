@@ -24,6 +24,12 @@ impl Clone for Expr {
             Expr::Or(a, b) => Expr::Or(a.clone(), b.clone()),
             Expr::Implies(a, b) => Expr::Implies(a.clone(), b.clone()),
             Expr::Ite(c, a, b) => Expr::Ite(c.clone(), a.clone(), b.clone()),
+            Expr::Local(i) => Expr::Local(*i),
+            Expr::Let(a, b) => Expr::Let(a.clone(), b.clone()),
+            Expr::Forall(ty, lo, hi, body) => Expr::Forall(*ty, *lo, *hi, body.clone()),
+            Expr::Exists(ty, lo, hi, body) => Expr::Exists(*ty, *lo, *hi, body.clone()),
+            Expr::Code(a) => Expr::Code(a.clone()),
+            Expr::Fail(ty, k) => Expr::Fail(*ty, *k),
         }
     }
 }

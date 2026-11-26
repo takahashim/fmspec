@@ -36,6 +36,10 @@ pub enum BinOp {
     Ge,
     Eq,
     Ne,
+    /// 床除算（商を負の無限大の方向に丸める）。
+    Div,
+    /// 床除算の余り。符号は除数と同じ。
+    Mod,
 }
 
 pub enum Expr {
@@ -59,6 +63,19 @@ pub enum Expr {
     Implies(Box<Expr>, Box<Expr>),
     /// 条件に続いて、選ばれた枝だけを評価する。
     Ite(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// 局所変数。外側から数えた添字で指す。
+    Local(usize),
+    /// 左の値を局所変数に束縛して、右を評価する。
+    Let(Box<Expr>, Box<Expr>),
+    /// 型の符号 `lo..=hi` を昇順にたどり、値を局所変数に束縛して本体を評価する。
+    /// 本体が偽になった時点で打ち切る。範囲が空なら真。
+    Forall(Type, i64, i64, Box<Expr>),
+    /// `Forall` と同じ順にたどり、本体が真になった時点で打ち切る。範囲が空なら偽。
+    Exists(Type, i64, i64, Box<Expr>),
+    /// 値の符号を整数として返す。Bool は0と1、列挙型はラベルの添字。
+    Code(Box<Expr>),
+    /// 失敗の番号 `code` で評価に失敗する。型は `Type` の型とする。
+    Fail(Type, i64),
 }
 
 pub struct Update {

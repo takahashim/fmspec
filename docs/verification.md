@@ -33,8 +33,8 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | 証明義務 | 定理 | ファイル |
 |---|---|---|
 | IR Validation | `validate_raw` は、モデルが整形式（`wf`）であるとき、かつそのときに限り受理する | `typing.rs` |
-| Type Soundness | `lemma_type_sound`：型の付いた式の評価は、型どおりの値になるか、オーバーフローで失敗する。`lemma_step_typed`：整形式なモデルでは、型に従う状態からの遷移先は型に従い、失敗はオーバーフローか範囲外更新である | `typing.rs` |
-| Evaluation Correctness | `eval` の結果は、意味論 `eval_spec` と一致する | `eval.rs` |
+| Type Soundness | `lemma_type_sound`：型の付いた式の評価は、型どおりの値になるか、オーバーフロー、0による除算、明示的な失敗（`Fail`）のいずれかで失敗する。局所変数と量化を含む式は `lemma_type_sound_l` が扱う。`lemma_step_typed`：整形式なモデルでは、型に従う状態からの遷移先は型に従い、失敗は式の評価の失敗か範囲外更新である | `typing.rs` |
+| Evaluation Correctness | `eval` の結果は、意味論 `eval_spec` と一致する。除算と剰余は床除算で、絶対値の符号なし除算で計算した結果が意味論の `floor_div`、`floor_mod` と一致する | `eval.rs` |
 | Transition Soundness / Completeness | `step` の結果は `step_spec` と一致する。`enumerate` は、有効な遷移だけを、ドメイン内のすべての引数について漏れなく返すか、評価エラーになる引数を1つ返す | `step.rs` |
 | State Equality | 状態は符号化列そのもので、等価性は列の一致である。`lemma_decode_injective`：型に属する符号は値と一対一に対応する | `step.rs` |
 | Certificate Soundness | `check_certificate` が受理したなら、証明書は帰納的で、`safe` が成り立つ | `cert.rs` |
@@ -57,8 +57,8 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 - 信頼する項目（`assume`、`admit`、`external_body`、`assume_specification` など）が `fmspec-core` に1つもない。
 - 証明の対象外のコードは `impls.rs`（標準トレイトの手書き実装）だけで、判定の経路から呼ばれない。
 - 公開関数が `requires` を持たない。
-- 検査を1つ壊した変異33件が、すべて証明に失敗する。たとえば、証明書の検査で遷移先の所属を調べない、トレースの状態を照合しない、拒否した証明書で `Verified` を返す、といった変異である。
-- 到達点に置いた `assert(false)` 18件が、すべて証明に失敗する。
+- 検査を1つ壊した変異44件が、すべて証明に失敗する。たとえば、証明書の検査で遷移先の所属を調べない、トレースの状態を照合しない、拒否した証明書で `Verified` を返す、といった変異である。
+- 到達点に置いた `assert(false)` 23件が、すべて証明に失敗する。
 
 変異と `assert(false)` の一覧は `rakelib/verus.rake` にある。
 

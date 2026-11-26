@@ -151,7 +151,25 @@ pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::mod
             Some(ty) => json!({"kind": "out_of_range", "value": x, "type": type_to_json(&model.names, ty)}),
             None => json!({"kind": "out_of_range", "value": x}),
         },
+        ErrKind::DivByZero => json!({"kind": "division_by_zero"}),
+        ErrKind::Failed(code) => match failure_name(*code) {
+            Some(name) => json!({"kind": name}),
+            None => json!({"kind": "failed", "code": code}),
+        },
     }
+}
+
+/// `Expr::Fail` の番号と、その名前。番号はIRの下ろし方が決める。
+const FAILURES: [(i64, &str); 5] = [
+    (1, "none"),
+    (2, "missing_key"),
+    (3, "index_out_of_range"),
+    (4, "full"),
+    (5, "empty"),
+];
+
+fn failure_name(code: i64) -> Option<&'static str> {
+    FAILURES.iter().find(|(c, _)| *c == code).map(|(_, n)| *n)
 }
 
 fn error_from_json(v: Option<&Value>) -> Result<ErrKind, TraceError> {
@@ -166,7 +184,16 @@ fn error_from_json(v: Option<&Value>) -> Result<ErrKind, TraceError> {
             Some(x) => Ok(ErrKind::OutOfRange(x)),
             None => format("claim.error.value は整数です"),
         },
-        _ => format("claim.error.kind が不正です"),
+        Some("division_by_zero") => Ok(ErrKind::DivByZero),
+        Some("failed") => match map.get("code").and_then(Value::as_i64) {
+            Some(code) => Ok(ErrKind::Failed(code)),
+            None => format("claim.error.code は整数です"),
+        },
+        Some(name) => match FAILURES.iter().find(|(_, n)| *n == name) {
+            Some((code, _)) => Ok(ErrKind::Failed(*code)),
+            None => format("claim.error.kind が不正です"),
+        },
+        None => format("claim.error.kind が不正です"),
     }
 }
 

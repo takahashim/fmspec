@@ -69,12 +69,20 @@ pub open spec fn binop_ety(op: BinOp, x: ETy, y: ETy) -> Option<ETy> {
                 BinOp::Add => Some(ETy::Int),
                 BinOp::Sub => Some(ETy::Int),
                 BinOp::Mul => Some(ETy::Int),
+                BinOp::Div => Some(ETy::Int),
+                BinOp::Mod => Some(ETy::Int),
                 _ => Some(ETy::Bool),
             }
         } else {
             None
         },
     }
+}
+
+/// 量化の範囲 `lo..=hi` が型 `ty` の符号に収まる。空の範囲はどの型でもよい。
+pub open spec fn quant_dom_ok(enums: Seq<i64>, ty: Type, lo: i64, hi: i64) -> bool {
+    &&& type_ok(enums, ty)
+    &&& lo > hi || (type_range(enums, ty).0 <= lo && hi <= type_range(enums, ty).1)
 }
 
 pub open spec fn var_ety(tys: Seq<Type>, i: usize) -> Option<ETy> {
@@ -93,8 +101,8 @@ pub open spec fn both_bool(x: Option<ETy>, y: Option<ETy>) -> Option<ETy> {
     }
 }
 
-/// 型規則。すべての枝を検査する。型が付かなければ `None`。
-pub open spec fn type_of_spec(e: Expr, t: TyEnv) -> Option<ETy>
+/// 型規則。すべての枝を検査する。型が付かなければ `None`。`lt` は局所変数の型。
+pub open spec fn type_l(e: Expr, t: TyEnv, lt: Seq<ETy>) -> Option<ETy>
     decreases e,
 {
     match e {
@@ -107,15 +115,15 @@ pub open spec fn type_of_spec(e: Expr, t: TyEnv) -> Option<ETy>
             None
         },
         Expr::Out => t.out,
-        Expr::Bin(op, a, b) => match (type_of_spec(*a, t), type_of_spec(*b, t)) {
+        Expr::Bin(op, a, b) => match (type_l(*a, t, lt), type_l(*b, t, lt)) {
             (Some(x), Some(y)) => binop_ety(op, x, y),
             _ => None,
         },
-        Expr::Not(a) => both_bool(type_of_spec(*a, t), Some(ETy::Bool)),
-        Expr::And(a, b) => both_bool(type_of_spec(*a, t), type_of_spec(*b, t)),
-        Expr::Or(a, b) => both_bool(type_of_spec(*a, t), type_of_spec(*b, t)),
-        Expr::Implies(a, b) => both_bool(type_of_spec(*a, t), type_of_spec(*b, t)),
-        Expr::Ite(c, a, b) => match (type_of_spec(*c, t), type_of_spec(*a, t), type_of_spec(*b, t)) {
+        Expr::Not(a) => both_bool(type_l(*a, t, lt), Some(ETy::Bool)),
+        Expr::And(a, b) => both_bool(type_l(*a, t, lt), type_l(*b, t, lt)),
+        Expr::Or(a, b) => both_bool(type_l(*a, t, lt), type_l(*b, t, lt)),
+        Expr::Implies(a, b) => both_bool(type_l(*a, t, lt), type_l(*b, t, lt)),
+        Expr::Ite(c, a, b) => match (type_l(*c, t, lt), type_l(*a, t, lt), type_l(*b, t, lt)) {
             (Some(ETy::Bool), Some(x), Some(y)) => if x == y {
                 Some(x)
             } else {
@@ -123,8 +131,51 @@ pub open spec fn type_of_spec(e: Expr, t: TyEnv) -> Option<ETy>
             },
             _ => None,
         },
+        Expr::Local(i) => if i < lt.len() {
+            Some(lt[i as int])
+        } else {
+            None
+        },
+        Expr::Let(a, b) => match type_l(*a, t, lt) {
+            Some(x) => type_l(*b, t, lt.push(x)),
+            None => None,
+        },
+        Expr::Forall(ty, lo, hi, body) => if quant_dom_ok(t.enums, ty, lo, hi) && type_l(
+            *body,
+            t,
+            lt.push(ety_of(ty)),
+        ) == Some(ETy::Bool) {
+            Some(ETy::Bool)
+        } else {
+            None
+        },
+        Expr::Exists(ty, lo, hi, body) => if quant_dom_ok(t.enums, ty, lo, hi) && type_l(
+            *body,
+            t,
+            lt.push(ety_of(ty)),
+        ) == Some(ETy::Bool) {
+            Some(ETy::Bool)
+        } else {
+            None
+        },
+        Expr::Code(a) => match type_l(*a, t, lt) {
+            Some(_) => Some(ETy::Int),
+            None => None,
+        },
+        Expr::Fail(ty, _) => if type_ok(t.enums, ty) {
+            Some(ety_of(ty))
+        } else {
+            None
+        },
     }
 }
+
+/// 局所変数のない文脈での型規則。
+pub open spec fn type_of_spec(e: Expr, t: TyEnv) -> Option<ETy> {
+    type_l(e, t, Seq::empty())
+}
+
+
 
 // ---- 型検査の実装 ----
 
@@ -200,12 +251,22 @@ fn binop_ety_exec(op: &BinOp, x: &ETy, y: &ETy) -> (r: Option<ETy>)
                 BinOp::Add => Some(ETy::Int),
                 BinOp::Sub => Some(ETy::Int),
                 BinOp::Mul => Some(ETy::Int),
+                BinOp::Div => Some(ETy::Int),
+                BinOp::Mod => Some(ETy::Int),
                 _ => Some(ETy::Bool),
             }
         } else {
             None
         },
     }
+}
+
+fn quant_dom_ok_exec(enums: &Vec<i64>, ty: &Type, lo: i64, hi: i64) -> (r: bool)
+    ensures
+        r == quant_dom_ok(enums@, *ty, lo, hi),
+{
+    let (tlo, thi) = type_range_exec(enums, ty);
+    type_ok_exec(enums, ty) && (lo > hi || (tlo <= lo as i128 && hi as i128 <= thi))
 }
 
 fn var_ety_exec(tys: &Vec<Type>, i: usize) -> (r: Option<ETy>)
@@ -240,10 +301,49 @@ fn both_bool_exec(x: &Option<ETy>, y: &Option<ETy>) -> (r: Option<ETy>)
     }
 }
 
+fn copy_etys(v: &Vec<ETy>) -> (r: Vec<ETy>)
+    ensures
+        r@ == v@,
+{
+    let mut r: Vec<ETy> = Vec::new();
+    let mut i: usize = 0;
+    while i < v.len()
+        invariant
+            i <= v@.len(),
+            r@ == v@.subrange(0, i as int),
+        decreases v@.len() - i,
+    {
+        r.push(v[i]);
+        i = i + 1;
+        assert(r@ =~= v@.subrange(0, i as int));
+    }
+    assert(v@.subrange(0, v@.len() as int) =~= v@);
+    r
+}
+
 /// 式の型を求める。結果は型規則 `type_of_spec` と一致する。
 pub fn type_of(e: &Expr, t: &TyCtx) -> (r: Option<ETy>)
     ensures
         r == type_of_spec(*e, t@),
+{
+    let lt: Vec<ETy> = Vec::new();
+    assert(lt@ =~= Seq::<ETy>::empty());
+    type_in(e, t, &lt)
+}
+
+fn with_ety(lt: &Vec<ETy>, x: ETy) -> (r: Vec<ETy>)
+    ensures
+        r@ == lt@.push(x),
+{
+    let mut r = copy_etys(lt);
+    r.push(x);
+    r
+}
+
+/// 局所変数の型 `lt` の下で式の型を求める。結果は型規則 `type_l` と一致する。
+fn type_in(e: &Expr, t: &TyCtx, lt: &Vec<ETy>) -> (r: Option<ETy>)
+    ensures
+        r == type_l(*e, t@, lt@),
     decreases e,
 {
     match e {
@@ -256,21 +356,53 @@ pub fn type_of(e: &Expr, t: &TyCtx) -> (r: Option<ETy>)
             None
         },
         Expr::Out => t.out,
-        Expr::Bin(op, a, b) => match (type_of(a, t), type_of(b, t)) {
+        Expr::Bin(op, a, b) => match (type_in(a, t, lt), type_in(b, t, lt)) {
             (Some(x), Some(y)) => binop_ety_exec(op, &x, &y),
             _ => None,
         },
-        Expr::Not(a) => both_bool_exec(&type_of(a, t), &Some(ETy::Bool)),
-        Expr::And(a, b) => both_bool_exec(&type_of(a, t), &type_of(b, t)),
-        Expr::Or(a, b) => both_bool_exec(&type_of(a, t), &type_of(b, t)),
-        Expr::Implies(a, b) => both_bool_exec(&type_of(a, t), &type_of(b, t)),
-        Expr::Ite(c, a, b) => match (type_of(c, t), type_of(a, t), type_of(b, t)) {
+        Expr::Not(a) => both_bool_exec(&type_in(a, t, lt), &Some(ETy::Bool)),
+        Expr::And(a, b) => both_bool_exec(&type_in(a, t, lt), &type_in(b, t, lt)),
+        Expr::Or(a, b) => both_bool_exec(&type_in(a, t, lt), &type_in(b, t, lt)),
+        Expr::Implies(a, b) => both_bool_exec(&type_in(a, t, lt), &type_in(b, t, lt)),
+        Expr::Ite(c, a, b) => match (type_in(c, t, lt), type_in(a, t, lt), type_in(b, t, lt)) {
             (Some(ETy::Bool), Some(x), Some(y)) => if ety_eq(&x, &y) {
                 Some(x)
             } else {
                 None
             },
             _ => None,
+        },
+        Expr::Local(i) => if *i < lt.len() {
+            Some(lt[*i])
+        } else {
+            None
+        },
+        Expr::Let(a, b) => match type_in(a, t, lt) {
+            Some(x) => type_in(b, t, &with_ety(lt, x)),
+            None => None,
+        },
+        Expr::Forall(ty, lo, hi, body) => if quant_dom_ok_exec(t.enums, ty, *lo, *hi) && is_bool(
+            &type_in(body, t, &with_ety(lt, ety_of_exec(ty))),
+        ) {
+            Some(ETy::Bool)
+        } else {
+            None
+        },
+        Expr::Exists(ty, lo, hi, body) => if quant_dom_ok_exec(t.enums, ty, *lo, *hi) && is_bool(
+            &type_in(body, t, &with_ety(lt, ety_of_exec(ty))),
+        ) {
+            Some(ETy::Bool)
+        } else {
+            None
+        },
+        Expr::Code(a) => match type_in(a, t, lt) {
+            Some(_) => Some(ETy::Int),
+            None => None,
+        },
+        Expr::Fail(ty, _) => if type_ok_exec(t.enums, ty) {
+            Some(ety_of_exec(ty))
+        } else {
+            None
         },
     }
 }
@@ -635,12 +767,48 @@ pub open spec fn env_ok(env: Env, t: TyEnv) -> bool {
     }
 }
 
-/// 型の付いた式の評価結果。成功なら型 `ty` の値で、失敗はオーバーフローだけである。
+/// 型の付いた式の評価で起きうる失敗。オーバーフロー、0による除算、`Expr::Fail` の失敗である。
+pub open spec fn eval_failure(k: ErrKind) -> bool {
+    k is Overflow || k is DivByZero || k is Failed
+}
+
+/// 型の付いた式の評価結果。成功なら型 `ty` の値で、失敗は `eval_failure` である。
 pub open spec fn typed_result(enums: Seq<i64>, r: Result<Value, ErrKind>, ty: ETy) -> bool {
     match r {
         Ok(v) => val_has(enums, v, ty),
-        Err(k) => k == ErrKind::Overflow,
+        Err(k) => eval_failure(k),
     }
+}
+
+/// 局所変数の値が、局所変数の型に従う。
+pub open spec fn locals_ok(enums: Seq<i64>, ls: Seq<Value>, lt: Seq<ETy>) -> bool {
+    &&& ls.len() == lt.len()
+    &&& forall|i: int| 0 <= i < ls.len() ==> val_has(enums, #[trigger] ls[i], lt[i])
+}
+
+proof fn lemma_locals_push(enums: Seq<i64>, ls: Seq<Value>, lt: Seq<ETy>, v: Value, x: ETy)
+    requires
+        locals_ok(enums, ls, lt),
+        val_has(enums, v, x),
+    ensures
+        locals_ok(enums, ls.push(v), lt.push(x)),
+{
+    assert forall|i: int| 0 <= i < ls.push(v).len() implies val_has(enums, #[trigger] ls.push(v)[i], lt.push(x)[i]) by {
+        if i < ls.len() {
+            assert(ls.push(v)[i] == ls[i]);
+            assert(lt.push(x)[i] == lt[i]);
+        }
+    }
+}
+
+/// 型に属する符号を値に戻すと、その型の値になる。
+proof fn lemma_decode_typed(enums: Seq<i64>, ty: Type, x: i64)
+    requires
+        type_ok(enums, ty),
+        in_type(enums, ty, x),
+    ensures
+        val_has(enums, decode(ty, x), ety_of(ty)),
+{
 }
 
 proof fn lemma_lookup_typed(enums: Seq<i64>, tys: Seq<Type>, xs: Seq<i64>, i: usize)
@@ -653,7 +821,7 @@ proof fn lemma_lookup_typed(enums: Seq<i64>, tys: Seq<Type>, xs: Seq<i64>, i: us
     assert(in_type(enums, tys[i as int], xs[i as int]));
 }
 
-/// 型健全性。型の付いた式を文脈に従う環境で評価すると、型どおりの値になるか、オーバーフローで失敗する。
+/// 型健全性。型の付いた式を文脈に従う環境で評価すると、型どおりの値になるか、`eval_failure` の失敗になる。
 /// 型エラーと未束縛の参照は起きない。
 pub proof fn lemma_type_sound(e: Expr, t: TyEnv, env: Env)
     requires
@@ -661,7 +829,19 @@ pub proof fn lemma_type_sound(e: Expr, t: TyEnv, env: Env)
         type_of_spec(e, t) is Some,
     ensures
         typed_result(t.enums, eval_spec(e, env), type_of_spec(e, t).unwrap()),
-    decreases e,
+{
+    lemma_type_sound_l(e, t, env, Seq::empty(), Seq::empty());
+}
+
+/// 局所変数を持つ文脈での型健全性。
+pub proof fn lemma_type_sound_l(e: Expr, t: TyEnv, env: Env, ls: Seq<Value>, lt: Seq<ETy>)
+    requires
+        env_ok(env, t),
+        locals_ok(t.enums, ls, lt),
+        type_l(e, t, lt) is Some,
+    ensures
+        typed_result(t.enums, eval_l(e, env, ls), type_l(e, t, lt).unwrap()),
+    decreases e, 0int,
 {
     match e {
         Expr::Const(v) => {},
@@ -676,29 +856,84 @@ pub proof fn lemma_type_sound(e: Expr, t: TyEnv, env: Env)
         },
         Expr::Out => {},
         Expr::Bin(op, a, b) => {
-            lemma_type_sound(*a, t, env);
-            lemma_type_sound(*b, t, env);
+            lemma_type_sound_l(*a, t, env, ls, lt);
+            lemma_type_sound_l(*b, t, env, ls, lt);
         },
         Expr::Not(a) => {
-            lemma_type_sound(*a, t, env);
+            lemma_type_sound_l(*a, t, env, ls, lt);
         },
         Expr::And(a, b) => {
-            lemma_type_sound(*a, t, env);
-            lemma_type_sound(*b, t, env);
+            lemma_type_sound_l(*a, t, env, ls, lt);
+            lemma_type_sound_l(*b, t, env, ls, lt);
         },
         Expr::Or(a, b) => {
-            lemma_type_sound(*a, t, env);
-            lemma_type_sound(*b, t, env);
+            lemma_type_sound_l(*a, t, env, ls, lt);
+            lemma_type_sound_l(*b, t, env, ls, lt);
         },
         Expr::Implies(a, b) => {
-            lemma_type_sound(*a, t, env);
-            lemma_type_sound(*b, t, env);
+            lemma_type_sound_l(*a, t, env, ls, lt);
+            lemma_type_sound_l(*b, t, env, ls, lt);
         },
         Expr::Ite(c, a, b) => {
-            lemma_type_sound(*c, t, env);
-            lemma_type_sound(*a, t, env);
-            lemma_type_sound(*b, t, env);
+            lemma_type_sound_l(*c, t, env, ls, lt);
+            lemma_type_sound_l(*a, t, env, ls, lt);
+            lemma_type_sound_l(*b, t, env, ls, lt);
         },
+        Expr::Local(i) => {},
+        Expr::Let(a, b) => {
+            lemma_type_sound_l(*a, t, env, ls, lt);
+            match eval_l(*a, env, ls) {
+                Err(_) => {},
+                Ok(v) => {
+                    let x = type_l(*a, t, lt).unwrap();
+                    lemma_locals_push(t.enums, ls, lt, v, x);
+                    lemma_type_sound_l(*b, t, env, ls.push(v), lt.push(x));
+                },
+            }
+        },
+        Expr::Forall(ty, lo, hi, body) => {
+            lemma_quant_sound(true, ty, lo, hi, *body, t, env, ls, lt, lo as int);
+        },
+        Expr::Exists(ty, lo, hi, body) => {
+            lemma_quant_sound(false, ty, lo, hi, *body, t, env, ls, lt, lo as int);
+        },
+        Expr::Code(a) => {
+            lemma_type_sound_l(*a, t, env, ls, lt);
+        },
+        Expr::Fail(_, _) => {},
+    }
+}
+
+/// 量化の型健全性。範囲の各符号を束縛した本体は型どおりに評価されるので、結果は Bool 値か `eval_failure` である。
+proof fn lemma_quant_sound(
+    all: bool,
+    ty: Type,
+    lo: i64,
+    hi: i64,
+    body: Expr,
+    t: TyEnv,
+    env: Env,
+    ls: Seq<Value>,
+    lt: Seq<ETy>,
+    x: int,
+)
+    requires
+        env_ok(env, t),
+        locals_ok(t.enums, ls, lt),
+        quant_dom_ok(t.enums, ty, lo, hi),
+        type_l(body, t, lt.push(ety_of(ty))) == Some(ETy::Bool),
+        lo <= x,
+    ensures
+        typed_result(t.enums, quant_l(all, ty, body, env, ls, x, hi as int), ETy::Bool),
+    decreases body, hi - x + 1,
+{
+    if x <= hi {
+        let d = decode(ty, x as i64);
+        assert(in_type(t.enums, ty, x as i64));
+        lemma_decode_typed(t.enums, ty, x as i64);
+        lemma_locals_push(t.enums, ls, lt, d, ety_of(ty));
+        lemma_type_sound_l(body, t, env, ls.push(d), lt.push(ety_of(ty)));
+        lemma_quant_sound(all, ty, lo, hi, body, t, env, ls, lt, x + 1);
     }
 }
 
@@ -710,15 +945,15 @@ pub proof fn lemma_prop_typed(e: Expr, t: TyEnv, env: Env)
     ensures
         match prop_spec(e, env) {
             Ok(_) => true,
-            Err(k) => k == ErrKind::Overflow,
+            Err(k) => eval_failure(k),
         },
 {
     lemma_type_sound(e, t, env);
 }
 
-/// 遷移の失敗として起きうるのは、オーバーフローと範囲外更新だけである。
+/// 遷移の失敗として起きうるのは、式の評価の失敗（`eval_failure`）と範囲外更新だけである。
 pub open spec fn range_error(k: ErrKind) -> bool {
-    k is Overflow || k is OutOfRange
+    eval_failure(k) || k is OutOfRange
 }
 
 proof fn lemma_encode_typed(enums: Seq<i64>, ty: Type, v: Value)
@@ -778,7 +1013,7 @@ proof fn lemma_updates_typed(m: RawModel, a: int, env: Env, k: nat, acc: Seq<i64
     }
 }
 
-/// 遷移の結果が型に従う。次状態は状態型に、出力は宣言した出力型に属し、失敗はオーバーフローか範囲外更新である。
+/// 遷移の結果が型に従う。次状態は状態型に、出力は宣言した出力型に属し、失敗は `range_error` である。
 pub open spec fn step_typed(m: RawModel, a: int, r: Step) -> bool {
     match r {
         Step::Disabled => true,
