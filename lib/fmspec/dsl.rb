@@ -11,6 +11,8 @@ require_relative "lint"
 require_relative "builder"
 require_relative "model"
 require_relative "result"
+require_relative "binding"
+require_relative "testing"
 
 # Ruby で書く実行可能な形式仕様と、モデル検査。
 #

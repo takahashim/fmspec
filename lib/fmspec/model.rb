@@ -53,6 +53,38 @@ module Fmspec
       result(native.replay(trace))
     end
 
+    # モデル違反のトレースを、同じ違反を保ったまま短くする（仕様書 §10）。結果は局所最小である。
+    def shrink(trace, attempts: nil)
+      trace = trace.to_h if trace.is_a?(Trace)
+      trace = JSON.generate(trace) unless trace.is_a?(String)
+      result(native.shrink(trace, JSON.generate(attempts ? { "attempts" => attempts } : {})))
+    end
+
+    # 実装との結合を宣言する（仕様書 §11.1）。ブロックの中の語彙は Fmspec::Binding にある。
+    def bind(&block) = Binding.new(self, &block)
+
+    # Model-Based Testing（仕様書 §11）。仕様から操作列を生成して実装に適用し、戻り値と観測を照合する。
+    #
+    #   cases    テストケースの数
+    #   steps    1ケースの最大ステップ数
+    #   seed     省略すると無作為に選び、結果に記録する
+    #   replay   操作列（`TestResult#inputs`）。指定すると、生成せずにその操作列を1回だけ再実行する
+    #   shrink   失敗した操作列を縮小する
+    #   actions  対象の操作の名前の配列。省略時はすべて
+    #   max_candidates  候補状態の数の上限。超える場合は :inconclusive
+    def test(binding, cases: 100, steps: 20, seed: nil, replay: nil, shrink: true, shrink_runs: 200, actions: nil,
+             max_candidates: nil)
+      raise ArgumentError, "この仕様の binding ではありません" unless binding.is_a?(Binding) && binding.model.equal?(self)
+      raise ArgumentError, "cases と steps は0以上の整数です" unless [cases, steps].all? { |n| n.is_a?(Integer) && n >= 0 }
+
+      options = {}
+      options["actions"] = Array(actions).map(&:to_s) if actions
+      options["max_candidates"] = max_candidates if max_candidates
+      run = TestRun.new(self, native, binding, cases: cases, steps: steps, seed: seed || Random.new_seed % (2**64),
+                                               shrink: shrink, shrink_runs: shrink_runs, options: options)
+      replay ? run.replay(replay.map { |action, args| [action.to_sym, (args || {}).transform_keys(&:to_sym)] }) : run.run
+    end
+
     def inspect = "#<Fmspec::Model #{name}>"
 
     def self.deep_freeze(value)

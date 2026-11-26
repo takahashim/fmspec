@@ -212,5 +212,128 @@ guard (s.sold > 0) & (s.sold < 3)
 `:verified`、`:violated`、`:error` は、エンジンの判定ゲートが証拠を検査してから返した判定である。
 `:sampled` は指定したサンプルの検査を完了しただけで、網羅性の主張はない。
 
+`Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くする。
+シミュレーションで見つけたトレースに使う。
+幅優先探索の反例は、不変条件の違反については最初から最短である。
+
 エンジン内部のpanicは `Fmspec::InternalError` になる。
 これは `Exception` の子で、`rescue => e` では捕まらない。
+
+## 実装との適合性検査
+
+仕様から操作列を生成して実装に適用し、戻り値と観測値を仕様と照合する。
+これは有限回のテストであり、成功しても実装の正しさの証明にはならない。
+モデル検査の `:verified` とは別の結果である。
+
+### Binding
+
+```ruby
+binding = Tickets.bind do
+  setup { BoxOffice.new(capacity: 3) }
+
+  command(:purchase) { |office, quantity:| office.sell(quantity) }
+  command(:cancel, method: :refund)
+
+  observe(:sold) { |office| office.sold }
+end
+```
+
+| 語彙 | 意味 |
+|---|---|
+| `setup { ... }` | 各テストケースで、新しい実装のコンテキストを返す |
+| `teardown { \|context\| ... }` | 各テストケースの終わりに呼ばれる。失敗したケースでも呼ばれる |
+| `command(:操作) { \|context, 引数:\| ... }` | 操作のハンドラ。操作の公開引数をキーワードで受け取る |
+| `observe(:状態変数) { \|context\| ... }` | 実装の状態を、仕様上の値に射影する |
+
+`command :cancel, method: :refund` と `observe :sold, method: :sold` は、コンテキストのメソッドを呼ぶ短縮形である。
+メソッド名を暗黙に推測することはない。
+
+`command` と `observe` のブロックは実装を操作する普通のRubyで、記号ブロックではない。
+
+`bind` は、登録を実行の前に仕様と照合する。
+`command` のない操作、仕様にない操作や状態変数の登録、操作の引数と合わないキーワード引数は `Fmspec::BuildError` になる。
+
+値の対応は次のとおりである。
+仕様の値にならない値（別の型の値、`nil`、範囲外の整数、未定義のラベル）は、仕様のどの値とも一致しない。
+
+| 仕様の型 | 実装の値 |
+|---|---|
+| 整数 | Integer |
+| bool | `true`、`false` |
+| 列挙型 | ラベルと同じ名前のSymbolまたはString |
+
+### テストの実行
+
+```ruby
+result = Tickets.test(binding, cases: 100, steps: 20, seed: 42)
+result.assert_passed!
+```
+
+各ケースで、`setup` のあとに初期状態を観測し、以後は1ステップずつ、入力の選択、`command` の実行、観測、照合を繰り返す。
+入力は仕様から選ぶ。
+仕様で無効な入力を実装に適用することはない。
+
+照合するのは次の2つである。
+
+- 操作が `returns` で出力を宣言していれば、`command` の戻り値と出力。宣言していなければ、戻り値は見ない。
+- `observe` を登録した状態変数の値。登録していない状態変数は、観測できないものとして扱う。
+
+`test` のオプションは次のとおりである。
+
+| オプション | 内容 |
+|---|---|
+| `cases:`、`steps:` | テストケースの数と、1ケースの最大ステップ数 |
+| `seed:` | 省略すると無作為に選び、結果に記録する |
+| `actions:` | 対象の操作の名前の配列 |
+| `shrink:`、`shrink_runs:` | 失敗した操作列を縮小するか、縮小で再実行する回数の上限 |
+| `replay:` | 操作列。生成せずに、その操作列を1回だけ再実行する |
+| `max_candidates:` | 候補状態の数の上限 |
+
+### 非決定性と部分観測
+
+内部選択のある仕様や、観測しない状態変数のある仕様では、実装がいまどの状態にあるかが一意に決まらない。
+テストは、これまでの入力、戻り値、観測と矛盾しない仕様の状態を、**候補**としてすべて持つ。
+応答を受け取るたびに、その応答を生じうる遷移の遷移先だけを残す。
+
+- 候補が空になれば、不適合である。複数の候補が残ることは失敗ではない。
+- 次の入力は、全候補で有効な入力から選ぶ。
+- どの候補にも有効な入力がなければ、そのケースはそこで終わる。
+- 有効な入力を持つ候補があるのに、全候補に共通する入力がなければ、そのケースは未完了（`:inconclusive`、理由は `:no_common_input`）で終わる。
+
+### 結果
+
+`test` は `Fmspec::TestResult` を返す。
+
+| `status` | 意味 |
+|---|---|
+| `:passed` | すべてのケースで、戻り値と観測が仕様と一致した |
+| `:conformance_failure` | 戻り値または観測が、仕様の許すどの結果とも一致しない |
+| `:execution_error` | `command` または `observe` が例外を上げた |
+| `:setup_error` | `setup` または `teardown` が例外を上げた |
+| `:model_error` | 仕様の評価エラーに行き当たった |
+| `:model_violation` | 仕様の不変条件または遷移契約の違反に行き当たった |
+| `:inconclusive` | 未完了のケースがあった |
+
+`assert_passed!` は、`:passed` でなければ `Fmspec::TestFailed` を上げる。
+未完了のケースを含む実行は成功として扱わない。
+
+失敗した結果は、次の報告になる。
+
+```text
+Conformance failure: tickets / sold
+  seed: 42
+  1. purchase(quantity: 2)
+  2. cancel()
+  expected sold: 1
+  observed sold: 0
+  specification: spec/models/tickets.rb:12
+  binding: spec/models/tickets_binding.rb:8
+```
+
+`:conformance_failure` と `:execution_error` の操作列は、報告の前に縮小する。
+縮小は、操作列からステップを削った候補を、新しいコンテキストで再実行し、同じ操作で同じ項目の不一致（または同じクラスの例外）が起きる候補を採用する。
+削ったために後続の入力が仕様で無効になる候補は、実装に適用せずに捨てる。
+結果は局所最小である。
+
+`TestResult#inputs` は失敗に至る操作列で、`Tickets.test(binding, replay: result.inputs)` でそのまま再実行できる。
+`matched_steps` は、`command` を実行して戻り値と状態の照合まで完了した回数である。

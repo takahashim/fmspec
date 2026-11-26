@@ -140,6 +140,21 @@ class CheckTest < Minitest::Test
     assert_raises(ArgumentError) { model.simulate(traces: 0) }
   end
 
+  def test_model_traces_can_be_shrunk
+    model = TestModels.tickets(guarded: false)
+    long = (0..200).lazy.map { |seed| model.simulate(seed: seed, invariants: [:capacity_respected]) }
+                   .find { |r| r.violated? && r.trace.length > 2 }
+    shrunk = model.shrink(long.trace)
+    assert_equal :violated, shrunk.status
+    assert_equal "capacity_respected", shrunk.property["name"]
+    assert_equal [2, long.trace.length], [shrunk.trace.length, shrunk.to_h["original_steps"]]
+    assert_equal long.trace.seed, shrunk.trace.seed
+    assert_equal :violated, model.replay(shrunk.trace).status
+    # BFS の反例は最短なので、それ以上は縮まない。
+    shortest = model.check.trace
+    assert_equal shortest.to_h["steps"], model.shrink(shortest).trace.to_h["steps"]
+  end
+
   def test_digest_identifies_the_model
     assert_equal TestModels.tickets.digest, TestModels.tickets.digest
     refute_equal TestModels.tickets.digest, TestModels.tickets(guarded: false).digest

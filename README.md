@@ -3,9 +3,9 @@
 Rubyで書く実行可能な形式仕様と、Rust製の検証エンジンによるモデル検査。
 
 設計は [docs/ruby_model_checker_spec.md](docs/ruby_model_checker_spec.md) にある。
-現在の実装は、ロードマップの段階1〜4である。
-Rubyで仕様を書いてモデル検査とシミュレーションができる。
-実装との適合性検査（Binding、Model-Based Testing）はまだない。
+現在の実装は、ロードマップの段階1〜5（Ruby向けMVP）である。
+Rubyで仕様を書いて、モデル検査、シミュレーション、実装との適合性検査（Model-Based Testing）ができる。
+Rails統合、障害注入、並行処理はまだない。
 
 ```ruby
 require "fmspec"
@@ -29,6 +29,15 @@ end
 
 result = Tickets.check(max_states: 10_000)
 result.status # => :verified
+
+binding = Tickets.bind do
+  setup { BoxOffice.new(capacity: 3) }
+  command(:purchase) { |office, quantity:| office.sell(quantity) }
+  command(:cancel, method: :refund)
+  observe(:sold) { |office| office.sold }
+end
+
+Tickets.test(binding, cases: 100, steps: 20).assert_passed!
 ```
 
 DSLの説明は [docs/dsl.md](docs/dsl.md) にある。
@@ -58,6 +67,7 @@ target/debug/fmspec simulate examples/models/tickets.json --traces 100 --max-ste
 target/debug/fmspec check MODEL.json --json --certificate-out CERT.json --trace-out TRACE.json
 target/debug/fmspec verify-certificate MODEL.json CERT.json
 target/debug/fmspec replay MODEL.json TRACE.json
+target/debug/fmspec shrink MODEL.json TRACE.json --trace-out SHORT.json
 ```
 
 IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
