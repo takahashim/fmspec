@@ -9,6 +9,8 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq, keys, keys_or_zero};
 #[cfg(verus_keep_ghost)]
+use crate::encoding::{has_xtype, has_xtypes, lemma_default_len, models, models_seq};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len};
@@ -547,6 +549,172 @@ pub proof fn lemma_lits_pure(vs: Seq<Value>, n: nat)
 {
     assert forall|j: int| 0 <= j < lits(vs).len() implies pure_below(#[trigger] lits(vs)[j], n) by {
         assert(lits(vs)[j] == Expr::Const(vs[j]));
+    }
+}
+
+// ---- 型に属さない値の符号化 ----
+
+/// 式の型 `t` を格納の型 `st` の場所に置けるなら、`t` は `st` の式の型である。
+pub proof fn lemma_fits_to(t: XTy, st: STy)
+    requires
+        fits_s(t, st),
+    ensures
+        t == to_xty(st),
+    decreases t,
+{
+    match (t, st) {
+        (XTy::Tuple(xs), STy::Tuple(ts)) => lemma_fits_to_seq(xs, ts),
+        (XTy::Record(_, xs), STy::Record(_, ts)) => lemma_fits_to_seq(xs, ts),
+        (XTy::Option(x), STy::Option(u)) => lemma_fits_to(*x, *u),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_fits_to_seq(xs: Seq<XTy>, ts: Seq<STy>)
+    requires
+        fits_all_s(xs, ts),
+    ensures
+        xs == to_xtys(ts),
+    decreases xs,
+{
+    if xs.len() > 0 {
+        lemma_fits_to_seq(xs.drop_last(), ts.drop_last());
+        lemma_fits_to(xs.last(), ts.last());
+        assert(xs =~= xs.drop_last().push(xs.last()));
+    } else {
+        assert(xs =~= Seq::<XTy>::empty());
+    }
+}
+
+/// スロットの値の列が値を表すなら、値はその式の型を持つ。
+pub proof fn lemma_models_has(s: Seq<Value>, v: SVal, t: XTy, enums: Seq<i64>)
+    requires
+        models(s, v, t, enums),
+    ensures
+        has_xtype(v, t, enums),
+    decreases t,
+{
+    match t {
+        XTy::Tuple(ts) => lemma_models_has_seq(s, v->Tuple_0, ts, enums),
+        XTy::Record(_, ts) => lemma_models_has_seq(s, v->Tuple_0, ts, enums),
+        XTy::Option(x) => match v {
+            SVal::Some(w) => lemma_models_has(s.drop_first(), *w, *x, enums),
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_models_has_seq(s: Seq<Value>, vs: Seq<SVal>, ts: Seq<XTy>, enums: Seq<i64>)
+    requires
+        models_seq(s, vs, ts, enums),
+    ensures
+        has_xtypes(vs, ts, enums),
+    decreases ts,
+{
+    if ts.len() > 0 {
+        let w = xwidth(ts.last(), enums);
+        let cut = s.len() - w;
+        lemma_models_has_seq(s.take(cut), vs.drop_last(), ts.drop_last(), enums);
+        lemma_models_has(s.skip(cut), vs.last(), ts.last(), enums);
+    }
+}
+
+/// 格納の型の式の型を持つ値の符号化の長さは、型の幅である。
+pub proof fn lemma_shaped_len(v: SVal, t: STy, enums: Seq<i64>)
+    requires
+        has_xtype(v, to_xty(t), enums),
+    ensures
+        enc(v, t, enums).len() == width(t, enums),
+    decreases t,
+{
+    match t {
+        STy::Tuple(ts) => lemma_shaped_seq_len(v->Tuple_0, ts, enums),
+        STy::Record(_, ts) => lemma_shaped_seq_len(v->Tuple_0, ts, enums),
+        STy::Option(x) => match v {
+            SVal::Some(w) => lemma_shaped_len(*w, *x, enums),
+            _ => lemma_default_len(*x, enums),
+        },
+        STy::Set(_) => lemma_enc_len(v, t, enums),
+        STy::Map(_, _) => lemma_enc_len(v, t, enums),
+        STy::List(_, _) => lemma_enc_len(v, t, enums),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_shaped_seq_len(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        has_xtypes(vs, to_xtys(ts), enums),
+    ensures
+        enc_seq(vs, ts, enums).len() == width_sum(ts, enums),
+    decreases ts,
+{
+    if ts.len() > 0 {
+        let xs = to_xtys(ts);
+        assert(xs.drop_last() == to_xtys(ts.drop_last()));
+        assert(xs.last() == to_xty(ts.last()));
+        lemma_shaped_seq_len(vs.drop_last(), ts.drop_last(), enums);
+        lemma_shaped_len(vs.last(), ts.last(), enums);
+    } else {
+        lemma_to_xtys(ts);
+    }
+}
+
+/// 格納の型の式の型を持つ値の符号化の各スロットが、スロットの型の値なら、値は型に属する。
+/// 型に属さない値は、どれかのスロットが、スロットの型の値でない（整数の範囲外）。
+pub proof fn lemma_in_member(v: SVal, t: STy, enums: Seq<i64>)
+    requires
+        has_xtype(v, to_xty(t), enums),
+        in_slots(enc(v, t, enums), slot_tys(t, enums), enums),
+    ensures
+        member(v, t, enums),
+    decreases t,
+{
+    let s = enc(v, t, enums);
+    let tys = slot_tys(t, enums);
+    match t {
+        STy::Int(_, _) => assert(in_slot(tys[0], s[0], enums)),
+        STy::Enum(_) => assert(in_slot(tys[0], s[0], enums)),
+        STy::Tuple(ts) => lemma_in_members(v->Tuple_0, ts, enums),
+        STy::Record(_, ts) => lemma_in_members(v->Tuple_0, ts, enums),
+        STy::Option(x) => match v {
+            SVal::Some(w) => {
+                lemma_slot_tys_len(*x, enums);
+                lemma_in_slots_concat(seq![Value::Bool(true)], seq![Type::Bool], enc(*w, *x, enums), slot_tys(*x, enums), enums);
+                lemma_in_member(*w, *x, enums);
+            },
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_in_members(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        has_xtypes(vs, to_xtys(ts), enums),
+        in_slots(enc_seq(vs, ts, enums), slot_tys_seq(ts, enums), enums),
+    ensures
+        members(vs, ts, enums),
+    decreases ts,
+{
+    if ts.len() > 0 {
+        let xs = to_xtys(ts);
+        assert(xs.drop_last() == to_xtys(ts.drop_last()));
+        assert(xs.last() == to_xty(ts.last()));
+        let a = vs.drop_last();
+        lemma_shaped_seq_len(a, ts.drop_last(), enums);
+        lemma_slot_tys_seq_len(ts.drop_last(), enums);
+        lemma_in_slots_concat(
+            enc_seq(a, ts.drop_last(), enums),
+            slot_tys_seq(ts.drop_last(), enums),
+            enc(vs.last(), ts.last(), enums),
+            slot_tys(ts.last(), enums),
+            enums,
+        );
+        lemma_in_members(a, ts.drop_last(), enums);
+        lemma_in_member(vs.last(), ts.last(), enums);
+    } else {
+        lemma_to_xtys(ts);
     }
 }
 

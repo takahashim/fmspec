@@ -1418,10 +1418,8 @@ fn store_option(_parent: &XType, x: &XType, slots: &Vec<Expr>, _st: &SType, inne
                     assert(sv.subrange(1, sv.len() as int) =~= sv.drop_first());
                     assert(denotes(rest@, env, ls, *w, xty(*x), enums@));
                     assert(store_ok(c, payload@, env, ls, *w, sty(*inner), enums@));
-                    if member(*w, sty(*inner), enums@) {
-                        lemma_option_out(tag, payload@, defs@, out@, env, ls, true);
-                        assert(slot_vals(out@, env, ls) =~= enc(v, sty(*_st), enums@));
-                    }
+                    lemma_option_out(tag, payload@, defs@, out@, env, ls, true);
+                    assert(slot_vals(out@, env, ls) =~= enc(v, sty(*_st), enums@));
                 },
                 _ => {
                     assert(all_pure(payload@, m));
@@ -1512,11 +1510,8 @@ fn store_parts(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Ex
                 enums@,
             ) implies {
             &&& eval_l(c, env, ls) == Ok::<Value, ErrKind>(Value::Bool(members(vs, stys(ts@), enums@)))
-            &&& members(vs, stys(ts@), enums@) ==> clean(out@, env, ls) && slot_vals(out@, env, ls) == enc_seq(
-                vs,
-                stys(ts@),
-                enums@,
-            )
+            &&& clean(out@, env, ls)
+            &&& slot_vals(out@, env, ls) == enc_seq(vs, stys(ts@), enums@)
         } by {
             let xt = xtys(xs@);
             let st = stys(ts@);
@@ -1547,16 +1542,12 @@ fn store_parts(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Ex
                     assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
                     assert(member(vs[k], st[k], enums@));
                 }
-                assert forall|k: int| 0 <= k < outs.len() implies #[trigger] clean(outs[k], env, ls) && slot_vals(
-                    outs[k],
-                    env,
-                    ls,
-                ) == enc(vs[k], st[k], enums@) by {
-                    assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
-                    assert(member(vs[k], st[k], enums@));
-                }
-                lemma_concat_enc(outs, vs, st, env, ls, enums@);
             }
+            assert forall|k: int| 0 <= k < outs.len() implies #[trigger] clean(outs[k], env, ls) && slot_vals(outs[k], env, ls)
+                == enc(vs[k], st[k], enums@) by {
+                assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
+            }
+            lemma_concat_enc(outs, vs, st, env, ls, enums@);
         }
     }
     Some((c, out))

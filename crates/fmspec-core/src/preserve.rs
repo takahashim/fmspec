@@ -14,6 +14,8 @@
 #[cfg(verus_keep_ghost)]
 use crate::bindings::{eval_bindings, eval_bound_body};
 #[cfg(verus_keep_ghost)]
+use crate::canon::{in_slots, slot_tys};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_rows, enc_seq, keys, keys_product, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, models, models_seq, sty, width, xty};
@@ -954,7 +956,8 @@ pub proof fn lemma_option_out(tag: Expr, payload: Seq<Expr>, defs: Seq<Expr>, ou
 /// 値を格納の型の場所に置く条件とスロットの意味。
 pub open spec fn store_ok(c: Expr, out: Seq<Expr>, env: Env, ls: Seq<Value>, v: SVal, st: STy, enums: Seq<i64>) -> bool {
     &&& eval_l(c, env, ls) == Ok::<Value, ErrKind>(Value::Bool(member(v, st, enums)))
-    &&& member(v, st, enums) ==> clean(out, env, ls) && slot_vals(out, env, ls) == enc(v, st, enums)
+    &&& clean(out, env, ls)
+    &&& slot_vals(out, env, ls) == enc(v, st, enums)
 }
 
 /// [`crate::slots::store`] の結果 `(c, out)` の性質。
@@ -971,7 +974,8 @@ pub open spec fn store_parts_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, 
         fits_all_s(xs, ts) && clean(slots, env, ls) && #[trigger] models_seq(slot_vals(slots, env, ls), vs, xs, enums)
             ==> {
             &&& eval_l(c, env, ls) == Ok::<Value, ErrKind>(Value::Bool(members(vs, ts, enums)))
-            &&& members(vs, ts, enums) ==> clean(out, env, ls) && slot_vals(out, env, ls) == enc_seq(vs, ts, enums)
+            &&& clean(out, env, ls)
+            &&& slot_vals(out, env, ls) == enc_seq(vs, ts, enums)
         }
 }
 
@@ -1413,12 +1417,17 @@ pub open spec fn prop_result(src: Result<SVal, ErrKind>, core: Result<Value, Err
     }
 }
 
-/// 格納する値の下ろしの正しさ。値が型に属するとき、各スロットは正規形の符号化になる。
+/// 格納する値の下ろしの正しさ。各スロットは値の符号化になる。
+/// 符号化の各スロットがスロットの型の値なら、値は型に属する（属さない値は、どれかのスロットが範囲外になる）。
 pub open spec fn stored_result(src: Result<SVal, ErrKind>, out: Seq<Expr>, env: Env, ls: Seq<Value>, st: STy, enums: Seq<i64>) -> bool {
     match src {
         Err(k) => forall|j: int| 0 <= j < out.len() ==> #[trigger] eval_l(out[j], env, ls) == Err::<Value, ErrKind>(k),
-        Ok(v) => member(v, st, enums) ==> out.len() == width(st, enums) && forall|j: int|
-            0 <= j < out.len() ==> #[trigger] eval_l(out[j], env, ls) == Ok::<Value, ErrKind>(enc(v, st, enums)[j]),
+        Ok(v) => {
+            &&& out.len() == width(st, enums)
+            &&& forall|j: int|
+                0 <= j < out.len() ==> #[trigger] eval_l(out[j], env, ls) == Ok::<Value, ErrKind>(enc(v, st, enums)[j])
+            &&& in_slots(enc(v, st, enums), slot_tys(st, enums), enums) ==> member(v, st, enums)
+        },
     }
 }
 

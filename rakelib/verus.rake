@@ -339,7 +339,10 @@ VERUS_CANARIES = [
   ["canon.rs", "        lemma_concat_split(slots, parts, xts, enums);", "lemma_canon_tuple_eval の正規形の組み立て"],
   ["canon.rs", "        let v = SVal::Some(Box::new(w));", "lemma_canon_option_vals の中身のある値"],
   ["canon.rs", "        lemma_flat_split(t, a, w);", "lemma_flat_split の帰納"],
-  ["canon.rs", "            lemma_ty_repeat_add(et, n, m);", "lemma_member_in のList"]
+  ["canon.rs", "            lemma_ty_repeat_add(et, n, m);", "lemma_member_in のList"],
+  ["canon.rs", "                lemma_in_member(*w, *x, enums);", "lemma_in_member のOption"],
+  ["canon.rs", "        lemma_in_member(vs.last(), ts.last(), enums);", "lemma_in_members の帰納"],
+  ["lowering.rs", "                            lemma_in_member(v, sty(*st), se.enums);", "lower_stored の型に属する値"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

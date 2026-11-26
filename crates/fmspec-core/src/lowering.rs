@@ -16,6 +16,8 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::bindings::eval_bound_body;
+#[cfg(verus_keep_ghost)]
+use crate::canon::{in_slots, lemma_fits_to, lemma_in_member, lemma_models_has, lemma_shaped_len, slot_tys};
 use crate::encoding::{copy_stype, copy_xtype, keys_exec, stype_eq, to_xtype, usizes_eq, xtype_eq, SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_rows, keys, keys_or_zero, member, sty, stys, width, STy, SVal};
@@ -7507,15 +7509,18 @@ pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: O
                         let l = run(blk.binds@, env, ls)->Ok_0;
                         assert(denotes(slots@, env, l, v, xty(t), se.enums));
                         assert(store_ok(_c, stored@, env, l, v, sty(*st), se.enums));
-                        if member(v, sty(*st), se.enums) {
-                            lemma_enc_len(v, sty(*st), se.enums);
-                            assert forall|j: int| 0 <= j < out@.len() implies #[trigger] eval_l(out@[j], env, ls) == Ok::<
-                                Value,
-                                ErrKind,
-                            >(enc(v, sty(*st), se.enums)[j]) by {
-                                assert(wraps(out@[j], blk.binds@, stored@[j]));
-                                assert(eval_l(stored@[j], env, l) == Ok::<Value, ErrKind>(slot_vals(stored@, env, l)[j]));
-                            }
+                        lemma_models_has(slot_vals(slots@, env, l), v, xty(t), se.enums);
+                        lemma_fits_to(xty(t), sty(*st));
+                        lemma_shaped_len(v, sty(*st), se.enums);
+                        if in_slots(enc(v, sty(*st), se.enums), slot_tys(sty(*st), se.enums), se.enums) {
+                            lemma_in_member(v, sty(*st), se.enums);
+                        }
+                        assert forall|j: int| 0 <= j < out@.len() implies #[trigger] eval_l(out@[j], env, ls) == Ok::<
+                            Value,
+                            ErrKind,
+                        >(enc(v, sty(*st), se.enums)[j]) by {
+                            assert(wraps(out@[j], blk.binds@, stored@[j]));
+                            assert(eval_l(stored@[j], env, l) == Ok::<Value, ErrKind>(slot_vals(stored@, env, l)[j]));
                         }
                     },
                     Err(_) => {
