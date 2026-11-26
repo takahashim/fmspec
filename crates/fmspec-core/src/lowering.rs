@@ -20,7 +20,9 @@ use crate::encoding::{copy_stype, copy_xtype, keys_exec, stype_eq, to_xtype, usi
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_rows, keys, keys_or_zero, member, sty, stys, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_len, lemma_models_enc, lemma_stys, lemma_xtys, to_xty, xty, xtys, XTy};
+use crate::encoding::{lemma_enc_len, lemma_models_enc, lemma_stys, lemma_xtys, models};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{to_xty, xty, xtys, xwidth, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
 use crate::expr_copy::copy_expr;
@@ -30,11 +32,12 @@ use crate::keys::{lemma_rank_in_domain, rank};
 use crate::map_lookup::{flat_slot, flat_slot_int, key_rank, MISSING_KEY};
 use crate::map_lookup::{put_map_rows_exec, select_flat_map_lookup};
 use crate::model::{BinOp, Expr, Type, Value};
+use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, SEnv};
+use crate::source::{eval_fold, eval_src, src_bool, SEnv};
 use crate::source::{Over, SetOp, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
 use vstd::prelude::*;
 
@@ -193,25 +196,37 @@ fn atoms(xs: Vec<Expr>, blk: &mut Block) -> (r: Option<Vec<Expr>>)
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r matches Some(out) ==> atoms_ok(xs@, out@, *old(blk), *final(blk)),
 {
-    let mut xs = xs;
-    let mut rev: Vec<Expr> = Vec::new();
-    while xs.len() > 0
-        decreases xs.len(),
-    {
-        rev.push(xs.pop().unwrap());
-    }
+    let ghost b0 = *blk;
     let mut out: Vec<Expr> = Vec::new();
     proof {
         lemma_extends_refl(*blk);
+        lemma_atoms_empty(*blk);
+        assert(xs@.take(0) =~= Seq::<Expr>::empty());
     }
-    while rev.len() > 0
+    let mut i = 0;
+    while i < xs.len()
         invariant
-            extends(*old(blk), *blk),
-        decreases rev.len(),
+            i <= xs@.len(),
+            extends(b0, *blk),
+            atoms_ok(xs@.take(i as int), out@, b0, *blk),
+            b0 == *old(blk),
+        decreases xs.len() - i,
     {
-        let x = rev.pop().unwrap();
-        out.push(atom(blk, x)?);
+        let ghost b1 = *blk;
+        let ghost o1 = out@;
+        let x = copy_expr(&xs[i]);
+        let y = atom(blk, x)?;
+        out.push(y);
+        proof {
+            lemma_atoms_step(xs@.take(i as int), x, o1, y, b0, b1, *blk);
+            assert(xs@.take(i as int).push(x) =~= xs@.take(i + 1));
+        }
+        i += 1;
+    }
+    proof {
+        assert(xs@.take(xs.len() as int) =~= xs@);
     }
     Some(out)
 }
@@ -300,33 +315,82 @@ fn sub_scalar(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block, wa
     ensures
         extends(*old(blk), *final(blk)),
         r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some(x) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(*want), seq![x]),
     decreases e, 3nat,
 {
-    let (t, mut slots) = low(e, cx, sc, blk)?;
-    if !xtype_eq(&t, want) {
+    let (t, slots) = low(e, cx, sc, blk)?;
+    if !xtype_eq(&t, want) || slots.len() != 1 {
         return None;
     }
-    match slots.pop() {
-        Some(x) => Some(x),
-        None => Some(cb(false)),
+    let x = copy_expr(&slots[0]);
+    proof {
+        assert(slots@ =~= seq![x]);
     }
+    Some(x)
 }
 
 /// 深さ `depth` で単独に評価できるように下ろす。スロットごとに、束縛を含む式を返す。
 fn closed_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize) -> (r: Option<(XType, Vec<Expr>)>)
     ensures
         r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some((t, xs)) ==> frag(*e) ==> closed_slots(*e, *cx, old(sc)@, depth as nat, xty(t), xs@),
     decreases e, 4nat,
 {
     let mut blk = new_block(depth)?;
+    let ghost b0 = blk;
     let (t, slots) = low(e, cx, sc, &mut blk)?;
     let mut out: Vec<Expr> = Vec::new();
     let mut i = 0;
     while i < slots.len()
+        invariant
+            i <= slots@.len(),
+            out@.len() == i,
+            forall|j: int| 0 <= j < i ==> #[trigger] wraps(out@[j], blk.binds@, slots@[j]),
         decreases slots.len() - i,
     {
-        out.push(wrap(&blk.binds, copy_expr(&slots[i])));
+        let x = wrap(&blk.binds, copy_expr(&slots[i]));
+        out.push(x);
+        proof {
+            assert(wraps(out@[i as int], blk.binds@, slots@[i as int]));
+        }
         i += 1;
+    }
+    proof {
+        assert(fresh(b0, blk) =~= blk.binds@);
+        if frag(*e) {
+            assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+                #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == depth as nat implies slots_result(
+                eval_src(*e, se, sls),
+                out@,
+                env,
+                ls,
+                xty(t),
+                se.enums,
+            ) by {
+                match eval_src(*e, se, sls) {
+                    Ok(v) => {
+                        let l = run(blk.binds@, env, ls)->Ok_0;
+                        assert(denotes(slots@, env, l, v, xty(t), se.enums));
+                        lemma_models_len(slot_vals(slots@, env, l), v, xty(t), se.enums);
+                        assert forall|j: int| 0 <= j < out@.len() implies #[trigger] eval_l(out@[j], env, ls) == Ok::<
+                            Value,
+                            ErrKind,
+                        >(slot_vals(slots@, env, l)[j]) by {
+                            assert(wraps(out@[j], blk.binds@, slots@[j]));
+                        }
+                        assert(slot_vals(out@, env, ls) =~= slot_vals(slots@, env, l));
+                    },
+                    Err(_) => {
+                        assert forall|j: int| 0 <= j < out@.len() implies #[trigger] eval_l(out@[j], env, ls) == Err::<
+                            Value,
+                            ErrKind,
+                        >(eval_src(*e, se, sls)->Err_0) by {
+                            assert(wraps(out@[j], blk.binds@, slots@[j]));
+                        }
+                    },
+                }
+            }
+        }
     }
     Some((t, out))
 }
@@ -762,16 +826,31 @@ fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             low_leaf(e, cx, sc, blk)
         },
         TExpr::Bin(op, a, b) => {
+            let ghost b0 = *blk;
             let x = sub_scalar(a, cx, sc, blk, &XType::Int)?;
+            let ghost b1 = *blk;
             let y = sub_scalar(b, cx, sc, blk, &XType::Int)?;
+            let ghost b2 = *blk;
+            let ghost z = Expr::Bin(*op, Box::new(x), Box::new(y));
             let mut out: Vec<Expr> = Vec::new();
             match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                    out.push(keep(blk, bin(*op, x, y))?);
+                    out.push(bind(blk, bin(*op, x, y))?);
+                    proof {
+                        if frag(*e) {
+                            lemma_bin(*e, *cx, sc@, b0, b1, b2, *blk, x, y, XTy::Int, out@);
+                        }
+                    }
                     Some((XType::Int, out))
                 },
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                     out.push(bin(*op, x, y));
+                    proof {
+                        lemma_extends_refl(*blk);
+                        if frag(*e) {
+                            lemma_bin(*e, *cx, sc@, b0, b1, b2, *blk, x, y, XTy::Bool, out@);
+                        }
+                    }
                     Some((XType::Bool, out))
                 },
                 _ => None,
@@ -795,152 +874,45 @@ fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             Some((XType::Bool, out))
         },
         TExpr::Not(a) => {
+            let ghost b0 = *blk;
             let x = sub_scalar(a, cx, sc, blk, &XType::Bool)?;
             let mut out: Vec<Expr> = Vec::new();
             out.push(not(x));
+            proof {
+                if frag(*e) {
+                    lemma_not(*e, *cx, sc@, b0, *blk, x);
+                }
+            }
             Some((XType::Bool, out))
         },
-        TExpr::Fold(all, es) => {
-            proof {
-                assert(decreases_to!(*e => *es));
-            }
-            let mut out: Vec<Expr> = Vec::new();
-            if es.len() == 0 {
-                proof {
-                    lemma_extends_refl(*blk);
-                }
-                out.push(cb(*all));
-                return Some((XType::Bool, out));
-            }
-            proof {
-                vstd::std_specs::vec::axiom_vec_index_decreases(*es, 0);
-            }
-            let x = sub_scalar(&es[0], cx, sc, blk, &XType::Bool)?;
-            let d = depth(blk);
-            let mut terms: Vec<Expr> = Vec::new();
-            terms.push(x);
-            let ghost sc0 = sc@;
-            let mut i = 1;
-            while i < es.len()
-                invariant
-                    decreases_to!(*e => *es),
-                    sc@ == sc0,
-                    extends(*old(blk), *blk),
-                decreases es.len() - i,
-            {
-                proof {
-                    vstd::std_specs::vec::axiom_vec_index_decreases(*es, i as int);
-                }
-                terms.push(bool_in(&es[i], cx, sc, d)?);
-                i += 1;
-            }
-            let joined = tree(
-                &terms,
-                cb(*all),
-                if *all {
-                    Join::RawAnd
-                } else {
-                    Join::RawOr
-                },
-            );
-            out.push(keep(blk, joined)?);
-            Some((XType::Bool, out))
-        },
+        TExpr::Fold(_, _) => low_fold(e, cx, sc, blk),
         TExpr::Implies(a, b) => {
+            let ghost b0 = *blk;
             let p = sub_scalar(a, cx, sc, blk, &XType::Bool)?;
+            let ghost b1 = *blk;
             let q = bool_in(b, cx, sc, depth(blk))?;
             let mut out: Vec<Expr> = Vec::new();
-            out.push(keep(blk, Expr::Implies(Box::new(p), Box::new(q)))?);
+            let ghost z = Expr::Implies(Box::new(p), Box::new(q));
+            out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);
+            proof {
+                if frag(*e) {
+                    lemma_implies(*e, *cx, sc@, b0, b1, *blk, p, q);
+                }
+            }
             Some((XType::Bool, out))
         },
-        TExpr::Ite(p, a, b) => {
-            let c = sub_scalar(p, cx, sc, blk, &XType::Bool)?;
-            let d = depth(blk);
-            let (tx, xs) = closed_in(a, cx, sc, d)?;
-            let (ty, ys) = closed_in(b, cx, sc, d)?;
-            if !xtype_eq(&ty, &tx) {
-                return None;
-            }
-            if is_scalar(&tx) {
-                if xs.len() == 0 || ys.len() == 0 {
-                    return None;
-                }
-                let mut out: Vec<Expr> = Vec::new();
-                out.push(keep(blk, ite(c, copy_expr(&xs[0]), copy_expr(&ys[0])))?);
-                return Some((tx, out));
-            }
-            let mut simple = true;
-            let mut i = 0;
-            while i < xs.len()
-                decreases xs.len() - i,
-            {
-                if may_fail(&xs[i]) || binds(&xs[i]) {
-                    simple = false;
-                }
-                i += 1;
-            }
-            let mut i = 0;
-            while i < ys.len()
-                decreases ys.len() - i,
-            {
-                if may_fail(&ys[i]) || binds(&ys[i]) {
-                    simple = false;
-                }
-                i += 1;
-            }
-            let c = atom(blk, c)?;
-            let mut out: Vec<Expr> = Vec::new();
-            if simple {
-                let n = if xs.len() < ys.len() {
-                    xs.len()
-                } else {
-                    ys.len()
-                };
-                let mut j = 0;
-                while j < n
-                    invariant
-                        n <= xs.len(),
-                        n <= ys.len(),
-                    decreases n - j,
-                {
-                    out.push(ite(copy_expr(&c), copy_expr(&xs[j]), copy_expr(&ys[j])));
-                    j += 1;
-                }
-                return Some((tx, out));
-            }
-            // 枝が失敗しうるなら、スロットごとに、その位置の深さで枝を下ろし直して束縛する。
-            // 式は純粋なので、同じ枝を何度評価しても結果は同じで、最初の失敗も同じになる。
-            let w = xtype_width(&tx, enums)?;
-            let ghost sc0 = sc@;
-            let mut j = 0;
-            proof {
-                assert(decreases_to!(*e => **a));
-                assert(decreases_to!(*e => **b));
-            }
-            while j < w
-                invariant
-                    sc@ == sc0,
-                    extends(*old(blk), *blk),
-                    decreases_to!(*e => **a),
-                    decreases_to!(*e => **b),
-                decreases w - j,
-            {
-                let d = depth(blk);
-                let (_, xs) = closed_in(a, cx, sc, d)?;
-                let (_, ys) = closed_in(b, cx, sc, d)?;
-                if j >= xs.len() || j >= ys.len() {
-                    return None;
-                }
-                out.push(keep(blk, ite(copy_expr(&c), copy_expr(&xs[j]), copy_expr(&ys[j])))?);
-                j += 1;
-            }
-            Some((tx, out))
-        },
+        TExpr::Ite(_, _, _) => low_ite(e, cx, sc, blk),
         TExpr::Let(a, b) => {
+            let ghost b0 = *blk;
             let (t, slots) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
+            let ghost s0 = slots@;
             let slots = atoms(slots, blk)?;
+            let ghost b2 = *blk;
             let ghost before = sc@;
+            let ghost bound = Bound { ty: t, slots };
             sc.push(Bound { ty: t, slots });
+            let ghost sc1 = sc@;
             let r = low(b, cx, sc, blk);
             if r.is_none() {
                 return None;
@@ -948,10 +920,1061 @@ fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             sc.pop();
             proof {
                 assert(sc@ =~= before);
+                assert(sc1 == before.push(bound));
+                if frag(*e) {
+                    let (tb, out) = r->Some_0;
+                    lemma_let(*e, *cx, before, b0, b1, b2, *blk, s0, bound, xty(tb), out@);
+                }
             }
             r
         },
         _ => None,
+    }
+}
+
+/// `all` と `any`。先頭の項はスロットにし、残りの項は単独に評価する式にして、短絡する木にたたむ。
+fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
+    requires
+        old(blk).wf(),
+    ensures
+        extends(*old(blk), *final(blk)),
+        r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+    decreases e, 0nat,
+{
+    let (all, es) = match e {
+        TExpr::Fold(all, es) => (*all, es),
+        _ => {
+            proof {
+                lemma_extends_refl(*blk);
+            }
+            return None;
+        },
+    };
+    proof {
+        assert(decreases_to!(*e => *es));
+    }
+    let ghost b0 = *blk;
+    let mut out: Vec<Expr> = Vec::new();
+    if es.len() == 0 {
+        proof {
+            lemma_extends_refl(*blk);
+        }
+        out.push(cb(all));
+        proof {
+            if frag(*e) {
+                lemma_fold_empty(*e, *cx, sc@, *blk, out@);
+            }
+        }
+        return Some((XType::Bool, out));
+    }
+    proof {
+        vstd::std_specs::vec::axiom_vec_index_decreases(*es, 0);
+    }
+    let x = sub_scalar(&es[0], cx, sc, blk, &XType::Bool)?;
+    let ghost b1 = *blk;
+    let d = depth(blk);
+    let mut terms: Vec<Expr> = Vec::new();
+    terms.push(x);
+    let ghost sc0 = sc@;
+    let mut i = 1;
+    while i < es.len()
+        invariant
+            decreases_to!(*e => *es),
+            *e == TExpr::Fold(all, *es),
+            1 <= i <= es@.len(),
+            sc@ == sc0,
+            *blk == b1,
+            b0 == *old(blk),
+            extends(b0, b1),
+            d == b1.depth_s(),
+            frag(es@[0]) ==> lowers(es@[0], *cx, sc0, b0, b1, XTy::Bool, seq![x]),
+            terms@.len() == i,
+            terms@[0] == x,
+            frag(*e) ==> forall|j: int|
+                1 <= j < i ==> #[trigger] closed_lowers(es@[j], *cx, sc0, d as nat, XTy::Bool, terms@[j]),
+        decreases es.len() - i,
+    {
+        proof {
+            vstd::std_specs::vec::axiom_vec_index_decreases(*es, i as int);
+        }
+        let q = bool_in(&es[i], cx, sc, d)?;
+        let ghost t0 = terms@;
+        terms.push(q);
+        proof {
+            if frag(*e) {
+                lemma_frag_seq(es@, i as int);
+                assert forall|j: int| 1 <= j < i + 1 implies #[trigger] closed_lowers(
+                    es@[j],
+                    *cx,
+                    sc0,
+                    d as nat,
+                    XTy::Bool,
+                    terms@[j],
+                ) by {
+                    if j < i {
+                        assert(terms@[j] == t0[j]);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    let joined = tree(&terms, cb(all), if all { Join::RawAnd } else { Join::RawOr });
+    out.push(bind(blk, joined)?);
+    proof {
+        if frag(*e) {
+            lemma_frag_seq(es@, 0);
+            lemma_fold(*e, *cx, sc0, b0, b1, *blk, terms@);
+        }
+    }
+    Some((XType::Bool, out))
+}
+
+/// 条件式のスロット。枝のスロットが局所変数 `n` 個のもとで純粋でなければ `None`。
+fn ite_slots(c: &Expr, xs: &Vec<Expr>, ys: &Vec<Expr>, n: usize) -> (r: Option<Vec<Expr>>)
+    ensures
+        r matches Some(out) ==> xs@.len() == ys@.len() && out@.len() == xs@.len() && (forall|i: int|
+            0 <= i < out@.len() ==> #[trigger] out@[i] == ite_s(*c, xs@[i], ys@[i])) && (forall|i: int|
+            0 <= i < xs@.len() ==> pure_below(#[trigger] xs@[i], n as nat) && pure_below(ys@[i], n as nat)),
+{
+    if xs.len() != ys.len() {
+        return None;
+    }
+    let mut out: Vec<Expr> = Vec::new();
+    let mut j = 0;
+    while j < xs.len()
+        invariant
+            xs@.len() == ys@.len(),
+            j <= xs@.len(),
+            out@.len() == j,
+            forall|i: int| 0 <= i < j ==> #[trigger] out@[i] == ite_s(*c, xs@[i], ys@[i]),
+            forall|i: int| 0 <= i < j ==> pure_below(#[trigger] xs@[i], n as nat) && pure_below(ys@[i], n as nat),
+        decreases xs.len() - j,
+    {
+        if !pure_exec(&xs[j], n) || !pure_exec(&ys[j], n) {
+            return None;
+        }
+        let ghost px = pure_below(xs@[j as int], n as nat) && pure_below(ys@[j as int], n as nat);
+        out.push(ite(copy_expr(c), copy_expr(&xs[j]), copy_expr(&ys[j])));
+        proof {
+            assert(px);
+            assert forall|i: int| 0 <= i < j + 1 implies pure_below(#[trigger] xs@[i], n as nat) && pure_below(
+                ys@[i],
+                n as nat,
+            ) by {}
+        }
+        j += 1;
+    }
+    Some(out)
+}
+
+/// 条件式。条件を束縛する。枝が束縛を持たなければ、スロットごとに `ite` で選ぶ。
+/// 束縛を持つなら、スロットごとに、その位置の深さで枝を単独に評価する式に下ろし直して束縛する。
+/// 中核の `ite` は2つの枝が同じ型でなければならないので、枝の束縛を条件で守って並べることはしない。
+fn low_ite(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
+    requires
+        old(blk).wf(),
+    ensures
+        extends(*old(blk), *final(blk)),
+        r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+    decreases e, 0nat,
+{
+    let (p, a, b) = match e {
+        TExpr::Ite(p, a, b) => (p, a, b),
+        _ => {
+            proof {
+                lemma_extends_refl(*blk);
+            }
+            return None;
+        },
+    };
+    let ghost b0 = *blk;
+    let c0 = sub_scalar(p, cx, sc, blk, &XType::Bool)?;
+    let ghost b1 = *blk;
+    let c = atom(blk, c0)?;
+    let ghost b2 = *blk;
+    let d = depth(blk);
+    let mut ba = new_block(d)?;
+    let ghost ba0 = ba;
+    let (tx, xs) = low(a, cx, sc, &mut ba)?;
+    let mut bb = new_block(d)?;
+    let ghost bb0 = bb;
+    let (ty, ys) = low(b, cx, sc, &mut bb)?;
+    if !xtype_eq(&ty, &tx) {
+        return None;
+    }
+    if ba.binds.len() == 0 && bb.binds.len() == 0 {
+        let out = ite_slots(&c, &xs, &ys, d)?;
+        proof {
+            lemma_extends_refl(*blk);
+            if frag(*e) {
+                lemma_ite_simple(*e, *cx, sc@, b0, b1, b2, c0, c, ba0, ba, bb0, bb, xty(tx), xs@, ys@, out@);
+            }
+        }
+        return Some((tx, out));
+    }
+    if xs.len() == 0 || xs.len() != ys.len() {
+        return None;
+    }
+    let w = xs.len();
+    let ghost sc0 = sc@;
+    let ghost mut fa: Seq<Seq<Expr>> = Seq::empty();
+    let ghost mut fb: Seq<Seq<Expr>> = Seq::empty();
+    let mut out: Vec<Expr> = Vec::new();
+    proof {
+        lemma_extends_refl(*blk);
+        lemma_extends_trans(b0, b1, b2);
+        assert(decreases_to!(*e => **a));
+        assert(decreases_to!(*e => **b));
+    }
+    let mut j = 0;
+    while j < w
+        invariant
+            decreases_to!(*e => **a),
+            decreases_to!(*e => **b),
+            sc@ == sc0,
+            j <= w,
+            b2.wf(),
+            d == b2.depth_s(),
+            b0 == *old(blk),
+            extends(b0, *blk),
+            extends(b2, *blk),
+            blk.base == b2.base,
+            blk.binds@ == b2.binds@ + ite_binds(c, fa, fb, j as nat),
+            fa.len() == j,
+            fb.len() == j,
+            out@ == Seq::new(j as nat, |i: int| Expr::Local((d + i) as usize)),
+            frag(**a) ==> forall|i: int|
+                0 <= i < j ==> #[trigger] closed_slots(**a, *cx, sc0, (d + i) as nat, xty(tx), fa[i]),
+            frag(**b) ==> forall|i: int|
+                0 <= i < j ==> #[trigger] closed_slots(**b, *cx, sc0, (d + i) as nat, xty(tx), fb[i]),
+            forall|i: int| 0 <= i < j ==> i < (#[trigger] fa[i]).len() && i < fb[i].len(),
+        decreases w - j,
+    {
+        let dj = depth(blk);
+        let (ta, xa) = closed_in(a, cx, sc, dj)?;
+        let (tb, yb) = closed_in(b, cx, sc, dj)?;
+        if !xtype_eq(&ta, &tx) || !xtype_eq(&tb, &tx) || j >= xa.len() || j >= yb.len() {
+            return None;
+        }
+        let ghost bj = *blk;
+        let o = bind(blk, ite(copy_expr(&c), copy_expr(&xa[j]), copy_expr(&yb[j])))?;
+        out.push(o);
+        proof {
+            lemma_extends_trans(b0, bj, *blk);
+            lemma_extends_trans(b2, bj, *blk);
+            let fa0 = fa;
+            let fb0 = fb;
+            fa = fa.push(xa@);
+            fb = fb.push(yb@);
+            lemma_ite_binds_push(c, fa0, fb0, xa@, yb@, j as nat);
+            assert(blk.binds@ == b2.binds@ + ite_binds(c, fa, fb, (j + 1) as nat));
+            assert(out@ =~= Seq::new((j + 1) as nat, |i: int| Expr::Local((d + i) as usize)));
+            assert(fa[j as int] == xa@ && fb[j as int] == yb@);
+            assert(j < xa@.len() && j < yb@.len());
+            assert forall|i: int| 0 <= i < j + 1 implies i < (#[trigger] fa[i]).len() && i < fb[i].len() by {
+                if i < j {
+                    assert(fa[i] == fa0[i] && fb[i] == fb0[i]);
+                }
+            }
+            if frag(**a) {
+                assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
+                    **a,
+                    *cx,
+                    sc0,
+                    (d + i) as nat,
+                    xty(tx),
+                    fa[i],
+                ) by {
+                    if i < j {
+                        assert(fa[i] == fa0[i]);
+                    }
+                }
+            }
+            if frag(**b) {
+                assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
+                    **b,
+                    *cx,
+                    sc0,
+                    (d + i) as nat,
+                    xty(tx),
+                    fb[i],
+                ) by {
+                    if i < j {
+                        assert(fb[i] == fb0[i]);
+                    }
+                }
+            }
+        }
+        j += 1;
+    }
+    proof {
+        if frag(*e) {
+            lemma_ite_bound(*e, *cx, sc0, b0, b1, b2, *blk, c0, c, ba0, ba, bb0, bb, xty(tx), xs@, ys@, fa, fb, out@);
+        }
+    }
+    Some((tx, out))
+}
+
+/// 空の `all` と `any` は、単位元になる。
+proof fn lemma_fold_empty(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b: Block, out: Seq<Expr>)
+    requires
+        e matches TExpr::Fold(all, es) && es@.len() == 0 && out == seq![bool_lit(all)],
+    ensures
+        lowers(e, cx, sc, b, b, XTy::Bool, out),
+{
+    let all = e->Fold_0;
+    let es = e->Fold_1;
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b, b), env, ls),
+        out,
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        assert(fresh(b, b) =~= Seq::<Expr>::empty());
+        assert(eval_fold(all, es@, se, sls) == Ok::<bool, ErrKind>(all));
+        assert(eval_l(bool_lit(all), env, ls) == Ok::<Value, ErrKind>(Value::Bool(all)));
+        lemma_one_denotes(bool_lit(all), env, ls, Value::Bool(all), XTy::Bool, se.enums);
+    }
+}
+
+/// `let` の下ろし。束縛する値のスロットを局所変数の対応に加えて、本体を下ろす。
+proof fn lemma_let(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    s0: Seq<Expr>,
+    bound: Bound,
+    tb: XTy,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Let(a, b) && lowers(*a, cx, sc, b0, b1, xty(bound.ty), s0) && lowers(
+            *b,
+            cx,
+            sc.push(bound),
+            b2,
+            b3,
+            tb,
+            out,
+        ),
+        atoms_ok(s0, bound.slots@, b1, b2),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+    ensures
+        lowers(e, cx, sc, b0, b3, tb, out),
+{
+    let a = e->Let_0;
+    let b = e->Let_1;
+    lemma_extends_trans(b1, b2, b3);
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b3), env, ls),
+        out,
+        env,
+        tb,
+        se.enums,
+    ) by {
+        lemma_one(*a, cx, sc, b0, b1, xty(bound.ty), s0, env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b3, env, ls);
+        lemma_run_fresh(b1, b2, b3, env, run(fresh(b0, b1), env, ls)->Ok_0);
+        if let Ok(v) = eval_src(*a, se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(clean(s0, env, l1));
+            assert(atoms_run(s0, bound.slots@, b1, b2, env, l1));
+            let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+            lemma_ctx_weaken(cx, sc, env, se, l1, l2, sls);
+            let sc2 = sc.push(bound);
+            let sls2 = sls.push(v);
+            assert(denotes(bound.slots@, env, l2, v, xty(bound.ty), se.enums));
+            assert forall|i: int| 0 <= i < sc2.len() implies #[trigger] denotes(
+                sc2[i].slots@,
+                env,
+                l2,
+                sls2[i],
+                xty(sc2[i].ty),
+                se.enums,
+            ) by {
+                if i < sc.len() {
+                    assert(sc2[i] == sc[i]);
+                    assert(sls2[i] == sls[i]);
+                }
+            }
+            assert(ctx_ok(cx, sc2, env, se, l2, sls2));
+        }
+    }
+}
+
+/// `all` と `any` の下ろし。先頭の項はスロットで、残りの項は単独に評価する式である。
+proof fn lemma_fold(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, b2: Block, terms: Seq<Expr>)
+    requires
+        e matches TExpr::Fold(all, es) && es@.len() >= 1 && terms.len() == es@.len() && lowers(
+            es@[0],
+            cx,
+            sc,
+            b0,
+            b1,
+            XTy::Bool,
+            seq![terms[0]],
+        ) && (forall|j: int|
+            1 <= j < es@.len() ==> #[trigger] closed_lowers(es@[j], cx, sc, b1.depth_s(), XTy::Bool, terms[j]))
+            && b2.binds@ == b1.binds@.push(tree_s(terms, bool_lit(all), raw_join(all))),
+        extends(b0, b1),
+        extends(b1, b2),
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Bool, seq![Expr::Local(b1.depth_s() as usize)]),
+{
+    let all = e->Fold_0;
+    let es = e->Fold_1;
+    let joined = tree_s(terms, bool_lit(all), raw_join(all));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        seq![Expr::Local(b1.depth_s() as usize)],
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        lemma_one(es@[0], cx, sc, b0, b1, XTy::Bool, seq![terms[0]], env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        match eval_src(es@[0], se, sls) {
+            Err(k) => {
+                lemma_fold_first_err(all, es@, se, sls, k);
+            },
+            Ok(v0) => {
+                let l = run(fresh(b0, b1), env, ls)->Ok_0;
+                lemma_denotes_one(terms[0], env, l, v0, XTy::Bool, se.enums);
+                assert forall|j: int| 0 <= j < terms.len() implies #[trigger] as_bool(eval_l(terms[j], env, l)) == src_bool(
+                    eval_src(es@[j], se, sls),
+                ) && lift_bool(as_bool(eval_l(terms[j], env, l))) == eval_l(terms[j], env, l) by {
+                    if j > 0 {
+                        assert(closed_lowers(es@[j], cx, sc, b1.depth_s(), XTy::Bool, terms[j]));
+                        lemma_scalar_bool(eval_src(es@[j], se, sls), eval_l(terms[j], env, l), se.enums);
+                    }
+                }
+                assert(bool_or_err(terms, env, l));
+                lemma_fold_eq(all, es@, terms, se, sls, env, l);
+                lemma_tree_sc(all, terms, env, l);
+                lemma_run_one(b1, b2, joined, env, l);
+                if let Ok(r) = eval_l(joined, env, l) {
+                    lemma_one_denotes(Expr::Local(l.len() as usize), env, l.push(r), r, XTy::Bool, se.enums);
+                }
+            },
+        }
+    }
+}
+
+/// 条件式のスロットは、条件の真偽に応じて、片方の枝のスロットの値になる。
+proof fn lemma_ite_slots(c: Expr, xs: Seq<Expr>, ys: Seq<Expr>, out: Seq<Expr>, env: Env, l: Seq<Value>, pos: bool)
+    requires
+        pure_below(c, l.len()),
+        eval_l(c, env, l) == Ok::<Value, ErrKind>(Value::Bool(pos)),
+        xs.len() == ys.len(),
+        out.len() == xs.len(),
+        forall|j: int| 0 <= j < out.len() ==> #[trigger] out[j] == ite_s(c, xs[j], ys[j]),
+        forall|j: int| 0 <= j < xs.len() ==> pure_below(#[trigger] xs[j], l.len()) && pure_below(ys[j], l.len()),
+        pos ==> clean(xs, env, l),
+        !pos ==> clean(ys, env, l),
+    ensures
+        clean(out, env, l),
+        slot_vals(out, env, l) == if pos {
+            slot_vals(xs, env, l)
+        } else {
+            slot_vals(ys, env, l)
+        },
+{
+    assert forall|j: int| 0 <= j < out.len() implies pure_below(#[trigger] out[j], l.len()) && eval_l(out[j], env, l)
+        == if pos {
+        eval_l(xs[j], env, l)
+    } else {
+        eval_l(ys[j], env, l)
+    } by {
+        assert(pure_below(xs[j], l.len()));
+    }
+    if pos {
+        assert(slot_vals(out, env, l) =~= slot_vals(xs, env, l));
+    } else {
+        assert(slot_vals(out, env, l) =~= slot_vals(ys, env, l));
+    }
+}
+
+/// 条件式のスロットごとの束縛。`i` 番目は、条件で枝の `i` 番目のスロットを選ぶ。
+spec fn ite_binds(c: Expr, fa: Seq<Seq<Expr>>, fb: Seq<Seq<Expr>>, n: nat) -> Seq<Expr> {
+    Seq::new(n, |i: int| ite_s(c, fa[i][i], fb[i][i]))
+}
+
+proof fn lemma_ite_binds_push(c: Expr, fa: Seq<Seq<Expr>>, fb: Seq<Seq<Expr>>, xa: Seq<Expr>, yb: Seq<Expr>, j: nat)
+    requires
+        fa.len() == j,
+        fb.len() == j,
+    ensures
+        ite_binds(c, fa.push(xa), fb.push(yb), j + 1) =~= ite_binds(c, fa, fb, j).push(ite_s(c, xa[j as int], yb[j as int])),
+{
+    assert forall|i: int| 0 <= i < j implies #[trigger] fa.push(xa)[i] == fa[i] && fb.push(yb)[i] == fb[i] by {}
+}
+
+/// 枝が束縛を持たない条件式の下ろし。
+proof fn lemma_ite_simple(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    c0: Expr,
+    c: Expr,
+    ba0: Block,
+    ba1: Block,
+    bb0: Block,
+    bb1: Block,
+    t: XTy,
+    xs: Seq<Expr>,
+    ys: Seq<Expr>,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Ite(p, a, b) && lowers(*p, cx, sc, b0, b1, XTy::Bool, seq![c0]) && lowers(
+            *a,
+            cx,
+            sc,
+            ba0,
+            ba1,
+            t,
+            xs,
+        ) && lowers(*b, cx, sc, bb0, bb1, t, ys),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(ba0, ba1),
+        extends(bb0, bb1),
+        added(b1, b2, c0, c),
+        ba0.binds@.len() == 0,
+        ba0.base == b2.depth_s(),
+        ba1.binds@.len() == 0,
+        bb0.binds@.len() == 0,
+        bb0.base == b2.depth_s(),
+        bb1.binds@.len() == 0,
+        xs.len() == ys.len(),
+        out.len() == xs.len(),
+        forall|i: int| 0 <= i < out.len() ==> #[trigger] out[i] == ite_s(c, xs[i], ys[i]),
+        forall|i: int|
+            0 <= i < xs.len() ==> pure_below(#[trigger] xs[i], b2.depth_s()) && pure_below(ys[i], b2.depth_s()),
+    ensures
+        lowers(e, cx, sc, b0, b2, t, out),
+{
+    let p = e->Ite_0;
+    let a = e->Ite_1;
+    let b = e->Ite_2;
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        out,
+        env,
+        t,
+        se.enums,
+    ) by {
+        lemma_one(*p, cx, sc, b0, b1, XTy::Bool, seq![c0], env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(v) = eval_src(*p, se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            lemma_denotes_one(c0, env, l1, v, XTy::Bool, se.enums);
+            let bv = v->Bool_0;
+            lemma_added(b1, b2, c0, c, env, l1, Value::Bool(bv));
+            let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+            lemma_ctx_weaken(cx, sc, env, se, l1, l2, sls);
+            assert(fresh(ba0, ba1) =~= Seq::<Expr>::empty());
+            assert(fresh(bb0, bb1) =~= Seq::<Expr>::empty());
+            assert(run(Seq::<Expr>::empty(), env, l2) == Ok::<Seq<Value>, ErrKind>(l2));
+            if bv {
+                lemma_one(*a, cx, sc, ba0, ba1, t, xs, env, se, l2, sls);
+                if let Ok(va) = eval_src(*a, se, sls) {
+                    lemma_ite_slots(c, xs, ys, out, env, l2, true);
+                }
+            } else {
+                lemma_one(*b, cx, sc, bb0, bb1, t, ys, env, se, l2, sls);
+                if let Ok(vb) = eval_src(*b, se, sls) {
+                    lemma_ite_slots(c, xs, ys, out, env, l2, false);
+                }
+            }
+        }
+    }
+}
+
+/// スロットごとの束縛の、先頭 `k` 個の評価。
+proof fn lemma_ite_prefix(
+    br: TExpr,
+    f: Seq<Seq<Expr>>,
+    c: Expr,
+    fa: Seq<Seq<Expr>>,
+    fb: Seq<Seq<Expr>>,
+    bv: bool,
+    d: nat,
+    w: nat,
+    k: nat,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    t: XTy,
+    env: Env,
+    se: SEnv,
+    l2: Seq<Value>,
+    sls: Seq<SVal>,
+)
+    requires
+        ctx_ok(cx, sc, env, se, l2, sls),
+        l2.len() == d,
+        pure_below(c, d),
+        eval_l(c, env, l2) == Ok::<Value, ErrKind>(Value::Bool(bv)),
+        f == if bv {
+            fa
+        } else {
+            fb
+        },
+        fa.len() == w,
+        fb.len() == w,
+        k <= w,
+        forall|i: int| 0 <= i < w ==> #[trigger] closed_slots(br, cx, sc, (d + i) as nat, t, f[i]),
+        forall|i: int| 0 <= i < w ==> i < (#[trigger] fa[i]).len() && i < fb[i].len(),
+    ensures
+        match eval_src(br, se, sls) {
+            Err(kk) => k > 0 ==> run(ite_binds(c, fa, fb, k), env, l2) == Err::<Seq<Value>, ErrKind>(kk),
+            Ok(v) => run(ite_binds(c, fa, fb, k), env, l2) matches Ok(lk) && lk.len() == d + k && prefix(l2, lk)
+                && forall|i: int|
+                0 <= i < k ==> #[trigger] lk[d + i] == slot_vals(f[i], env, lk.take(d + i))[i] && models(
+                    slot_vals(f[i], env, lk.take(d + i)),
+                    v,
+                    t,
+                    se.enums,
+                ),
+        },
+    decreases k,
+{
+    if k == 0 {
+        assert(ite_binds(c, fa, fb, 0) =~= Seq::<Expr>::empty());
+        lemma_prefix_refl(l2);
+    } else {
+        let j = (k - 1) as nat;
+        lemma_ite_prefix(br, f, c, fa, fb, bv, d, w, j, cx, sc, t, env, se, l2, sls);
+        let x = ite_s(c, fa[j as int][j as int], fb[j as int][j as int]);
+        assert(ite_binds(c, fa, fb, k) =~= ite_binds(c, fa, fb, j).push(x));
+        lemma_run_push(ite_binds(c, fa, fb, j), x, env, l2);
+        let r = run(ite_binds(c, fa, fb, j), env, l2);
+        if r is Ok {
+            let lj = r->Ok_0;
+            lemma_run_len(ite_binds(c, fa, fb, j), env, l2);
+            lemma_weaken(c, env, l2, lj);
+            lemma_ctx_weaken(cx, sc, env, se, l2, lj, sls);
+            assert(closed_slots(br, cx, sc, (d + j) as nat, t, f[j as int]));
+            assert(ctx_ok(cx, sc, env, se, lj, sls));
+            assert(j < f[j as int].len());
+            match eval_src(br, se, sls) {
+                Ok(v) => {
+                    let val = eval_l(f[j as int][j as int], env, lj)->Ok_0;
+                    let lk = lj.push(val);
+                    assert(lk.take((d + j) as int) =~= lj);
+                    assert forall|i: int| 0 <= i < k implies #[trigger] lk[d + i] == slot_vals(
+                        f[i],
+                        env,
+                        lk.take(d + i),
+                    )[i] && models(slot_vals(f[i], env, lk.take(d + i)), v, t, se.enums) by {
+                        if i < j {
+                            assert(lk.take((d + i) as int) =~= lj.take((d + i) as int));
+                            assert(lk[d + i] == lj[d + i]);
+                        }
+                    }
+                    lemma_prefix_trans(l2, lj, lk);
+                },
+                Err(_) => {},
+            }
+        }
+    }
+}
+
+/// 枝が束縛を持つ条件式の、1つの環境での評価。
+proof fn lemma_ite_bound_at(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    c0: Expr,
+    c: Expr,
+    ba0: Block,
+    ba1: Block,
+    bb0: Block,
+    bb1: Block,
+    t: XTy,
+    xs: Seq<Expr>,
+    ys: Seq<Expr>,
+    fa: Seq<Seq<Expr>>,
+    fb: Seq<Seq<Expr>>,
+    out: Seq<Expr>,
+    env: Env,
+    se: SEnv,
+    ls: Seq<Value>,
+    sls: Seq<SVal>,
+)
+    requires
+        e matches TExpr::Ite(p, a, b) && lowers(*p, cx, sc, b0, b1, XTy::Bool, seq![c0]) && lowers(
+            *a,
+            cx,
+            sc,
+            ba0,
+            ba1,
+            t,
+            xs,
+        ) && lowers(*b, cx, sc, bb0, bb1, t, ys) && (forall|i: int|
+            0 <= i < xs.len() ==> #[trigger] closed_slots(*a, cx, sc, (b2.depth_s() + i) as nat, t, fa[i])) && (forall|
+            i: int,
+        | 0 <= i < xs.len() ==> #[trigger] closed_slots(*b, cx, sc, (b2.depth_s() + i) as nat, t, fb[i])),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        extends(ba0, ba1),
+        extends(bb0, bb1),
+        added(b1, b2, c0, c),
+        ba0.binds@.len() == 0,
+        ba0.base == b2.depth_s(),
+        bb0.binds@.len() == 0,
+        bb0.base == b2.depth_s(),
+        xs.len() > 0,
+        xs.len() == ys.len(),
+        fa.len() == xs.len(),
+        fb.len() == xs.len(),
+        forall|i: int| 0 <= i < xs.len() ==> i < (#[trigger] fa[i]).len() && i < fb[i].len(),
+        b3.binds@ == b2.binds@ + ite_binds(c, fa, fb, xs.len()),
+        out == Seq::new(xs.len(), |i: int| Expr::Local((b2.depth_s() + i) as usize)),
+        ctx_ok(cx, sc, env, se, ls, sls),
+        ls.len() == b0.depth_s(),
+    ensures
+        result_ok(eval_src(e, se, sls), run(fresh(b0, b3), env, ls), out, env, t, se.enums),
+{
+    let p = e->Ite_0;
+    let a = e->Ite_1;
+    let b = e->Ite_2;
+    let d = b2.depth_s();
+    let w = xs.len();
+    lemma_one(*p, cx, sc, b0, b1, XTy::Bool, seq![c0], env, se, ls, sls);
+    lemma_extends_trans(b1, b2, b3);
+    lemma_run_fresh(b0, b1, b3, env, ls);
+    if let Ok(v) = eval_src(*p, se, sls) {
+        let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+        lemma_denotes_one(c0, env, l1, v, XTy::Bool, se.enums);
+        let bv = v->Bool_0;
+        lemma_added(b1, b2, c0, c, env, l1, Value::Bool(bv));
+        let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+        lemma_run_fresh(b1, b2, b3, env, l1);
+        lemma_ctx_weaken(cx, sc, env, se, l1, l2, sls);
+        assert(fresh(b2, b3) =~= ite_binds(c, fa, fb, w));
+        let br = if bv {
+            *a
+        } else {
+            *b
+        };
+        let f = if bv {
+            fa
+        } else {
+            fb
+        };
+        assert forall|i: int| 0 <= i < w implies #[trigger] closed_slots(br, cx, sc, (d + i) as nat, t, f[i]) by {
+            if bv {
+                assert(closed_slots(*a, cx, sc, (d + i) as nat, t, fa[i]));
+            } else {
+                assert(closed_slots(*b, cx, sc, (d + i) as nat, t, fb[i]));
+            }
+        }
+        lemma_ite_prefix(br, f, c, fa, fb, bv, d, w, w, cx, sc, t, env, se, l2, sls);
+        if bv {
+            lemma_one(*a, cx, sc, ba0, ba1, t, xs, env, se, l2, sls);
+        } else {
+            lemma_one(*b, cx, sc, bb0, bb1, t, ys, env, se, l2, sls);
+        }
+        if let Ok(vv) = eval_src(br, se, sls) {
+            let lw = run(ite_binds(c, fa, fb, w), env, l2)->Ok_0;
+            if bv {
+                let la = run(fresh(ba0, ba1), env, l2)->Ok_0;
+                lemma_models_len(slot_vals(xs, env, la), vv, t, se.enums);
+            } else {
+                let lb = run(fresh(bb0, bb1), env, l2)->Ok_0;
+                lemma_models_len(slot_vals(ys, env, lb), vv, t, se.enums);
+            }
+            assert(b3.wf());
+            lemma_ite_out(f, out, d, w, vv, t, env, lw, se.enums);
+        }
+    }
+}
+
+/// スロットごとの束縛を評価し終えたときの、条件式のスロットの値。
+proof fn lemma_ite_out(
+    f: Seq<Seq<Expr>>,
+    out: Seq<Expr>,
+    d: nat,
+    w: nat,
+    vv: SVal,
+    t: XTy,
+    env: Env,
+    lw: Seq<Value>,
+    enums: Seq<i64>,
+)
+    requires
+        w > 0,
+        w == xwidth(t, enums),
+        lw.len() == d + w,
+        d + w < usize::MAX,
+        out == Seq::new(w, |i: int| Expr::Local((d + i) as usize)),
+        forall|i: int|
+            0 <= i < w ==> #[trigger] lw[d + i] == slot_vals(f[i], env, lw.take(d + i))[i] && models(
+                slot_vals(f[i], env, lw.take(d + i)),
+                vv,
+                t,
+                enums,
+            ),
+    ensures
+        denotes(out, env, lw, vv, t, enums),
+{
+    let vs = Seq::new(w, |i: int| slot_vals(f[i], env, lw.take(d + i)));
+    let r = slot_vals(out, env, lw);
+    assert forall|i: int| 0 <= i < w implies #[trigger] models(vs[i], vv, t, enums) && vs[i].len() == w by {
+        assert(lw[d + i] == slot_vals(f[i], env, lw.take(d + i))[i]);
+        lemma_models_len(vs[i], vv, t, enums);
+    }
+    assert forall|i: int| 0 <= i < w implies #[trigger] r[i] == vs[i][i] by {
+        assert(out[i] == Expr::Local((d + i) as usize));
+        assert(((d + i) as usize) as int == d + i);
+        assert(lw[d + i] == slot_vals(f[i], env, lw.take(d + i))[i]);
+    }
+    lemma_models_diag(vs, r, vv, t, enums);
+    assert forall|j: int| 0 <= j < out.len() implies pure_below(#[trigger] out[j], lw.len()) && eval_l(
+        out[j],
+        env,
+        lw,
+    ) is Ok by {
+        assert(out[j] == Expr::Local((d + j) as usize));
+    }
+}
+
+/// 枝が束縛を持つ条件式の下ろし。
+proof fn lemma_ite_bound(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    c0: Expr,
+    c: Expr,
+    ba0: Block,
+    ba1: Block,
+    bb0: Block,
+    bb1: Block,
+    t: XTy,
+    xs: Seq<Expr>,
+    ys: Seq<Expr>,
+    fa: Seq<Seq<Expr>>,
+    fb: Seq<Seq<Expr>>,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Ite(p, a, b) && lowers(*p, cx, sc, b0, b1, XTy::Bool, seq![c0]) && lowers(
+            *a,
+            cx,
+            sc,
+            ba0,
+            ba1,
+            t,
+            xs,
+        ) && lowers(*b, cx, sc, bb0, bb1, t, ys) && (forall|i: int|
+            0 <= i < xs.len() ==> #[trigger] closed_slots(*a, cx, sc, (b2.depth_s() + i) as nat, t, fa[i])) && (forall|
+            i: int,
+        | 0 <= i < xs.len() ==> #[trigger] closed_slots(*b, cx, sc, (b2.depth_s() + i) as nat, t, fb[i])),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        extends(ba0, ba1),
+        extends(bb0, bb1),
+        added(b1, b2, c0, c),
+        ba0.binds@.len() == 0,
+        ba0.base == b2.depth_s(),
+        bb0.binds@.len() == 0,
+        bb0.base == b2.depth_s(),
+        xs.len() > 0,
+        xs.len() == ys.len(),
+        fa.len() == xs.len(),
+        fb.len() == xs.len(),
+        forall|i: int| 0 <= i < xs.len() ==> i < (#[trigger] fa[i]).len() && i < fb[i].len(),
+        b3.binds@ == b2.binds@ + ite_binds(c, fa, fb, xs.len()),
+        out == Seq::new(xs.len(), |i: int| Expr::Local((b2.depth_s() + i) as usize)),
+    ensures
+        lowers(e, cx, sc, b0, b3, t, out),
+{
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b3), env, ls),
+        out,
+        env,
+        t,
+        se.enums,
+    ) by {
+        lemma_ite_bound_at(e, cx, sc, b0, b1, b2, b3, c0, c, ba0, ba1, bb0, bb1, t, xs, ys, fa, fb, out, env, se, ls, sls);
+    }
+}
+
+/// 整数の演算と比較の下ろし。算術は束縛し、比較はそのままスロットにする。
+proof fn lemma_bin(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    x: Expr,
+    y: Expr,
+    t: XTy,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Bin(op, a, b) && lowers(*a, cx, sc, b0, b1, XTy::Int, seq![x]) && lowers(
+            *b,
+            cx,
+            sc,
+            b1,
+            b2,
+            XTy::Int,
+            seq![y],
+        ) && if op is Add || op is Sub || op is Mul || op is Div || op is Mod {
+            t == XTy::Int && b3.binds@ == b2.binds@.push(Expr::Bin(op, Box::new(x), Box::new(y))) && out == seq![
+                Expr::Local(b2.depth_s() as usize),
+            ]
+        } else {
+            (op is Lt || op is Le || op is Gt || op is Ge) && t == XTy::Bool && b3 == b2 && out == seq![
+                Expr::Bin(op, Box::new(x), Box::new(y)),
+            ]
+        },
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+    ensures
+        lowers(e, cx, sc, b0, b3, t, out),
+{
+    let op = e->Bin_0;
+    let a = e->Bin_1;
+    let b = e->Bin_2;
+    let z = Expr::Bin(op, Box::new(x), Box::new(y));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b3), env, ls),
+        out,
+        env,
+        t,
+        se.enums,
+    ) by {
+        lemma_pair(*a, *b, cx, sc, b0, b1, b2, XTy::Int, seq![x], XTy::Int, seq![y], env, se, ls, sls);
+        lemma_run_fresh(b0, b2, b3, env, ls);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            if let Ok(vb) = eval_src(*b, se, sls) {
+                let l = run(fresh(b0, b2), env, ls)->Ok_0;
+                lemma_denotes_one(x, env, l, va, XTy::Int, se.enums);
+                lemma_denotes_one(y, env, l, vb, XTy::Int, se.enums);
+                if t == XTy::Bool {
+                    lemma_fresh_refl(b2);
+                    assert(fresh(b2, b3) =~= Seq::<Expr>::empty());
+                    lemma_one_denotes(z, env, l, eval_l(z, env, l)->Ok_0, XTy::Bool, se.enums);
+                } else {
+                    lemma_run_one(b2, b3, z, env, l);
+                    if let Ok(r) = eval_l(z, env, l) {
+                        lemma_one_denotes(Expr::Local(l.len() as usize), env, l.push(r), r, XTy::Int, se.enums);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 否定の下ろし。
+proof fn lemma_not(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, x: Expr)
+    requires
+        e matches TExpr::Not(a) && lowers(*a, cx, sc, b0, b1, XTy::Bool, seq![x]),
+        extends(b0, b1),
+    ensures
+        lowers(e, cx, sc, b0, b1, XTy::Bool, seq![Expr::Not(Box::new(x))]),
+{
+    let a = e->Not_0;
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b1), env, ls),
+        seq![Expr::Not(Box::new(x))],
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        lemma_one(*a, cx, sc, b0, b1, XTy::Bool, seq![x], env, se, ls, sls);
+        if let Ok(v) = eval_src(*a, se, sls) {
+            let l = run(fresh(b0, b1), env, ls)->Ok_0;
+            lemma_denotes_one(x, env, l, v, XTy::Bool, se.enums);
+            let z = Expr::Not(Box::new(x));
+            lemma_one_denotes(z, env, l, eval_l(z, env, l)->Ok_0, XTy::Bool, se.enums);
+        }
+    }
+}
+
+/// 含意の下ろし。前件はスロットにし、後件は単独に評価する式にして、全体を束縛する。
+proof fn lemma_implies(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, b2: Block, p: Expr, q: Expr)
+    requires
+        e matches TExpr::Implies(a, b) && lowers(*a, cx, sc, b0, b1, XTy::Bool, seq![p]) && closed_lowers(
+            *b,
+            cx,
+            sc,
+            b1.depth_s(),
+            XTy::Bool,
+            q,
+        ),
+        extends(b0, b1),
+        extends(b1, b2),
+        b2.binds@ == b1.binds@.push(Expr::Implies(Box::new(p), Box::new(q))),
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Bool, seq![Expr::Local(b1.depth_s() as usize)]),
+{
+    let a = e->Implies_0;
+    let b = e->Implies_1;
+    let z = Expr::Implies(Box::new(p), Box::new(q));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        seq![Expr::Local(b1.depth_s() as usize)],
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        lemma_one(*a, cx, sc, b0, b1, XTy::Bool, seq![p], env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(v) = eval_src(*a, se, sls) {
+            let l = run(fresh(b0, b1), env, ls)->Ok_0;
+            lemma_denotes_one(p, env, l, v, XTy::Bool, se.enums);
+            lemma_run_one(b1, b2, z, env, l);
+            assert(ctx_ok(cx, sc, env, se, l, sls));
+            if let Ok(r) = eval_l(z, env, l) {
+                lemma_one_denotes(Expr::Local(l.len() as usize), env, l.push(r), r, XTy::Bool, se.enums);
+            }
+        }
     }
 }
 
@@ -1591,15 +2614,18 @@ fn low_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r
     proof {
         assert(added(b2, b3, rr, Expr::Local(rank_local)));
         lemma_fresh_push(b3, *blk, c);
-        lemma_get(
-            *e, *cx, sc@, b0, b1, b2, b3, *blk, **a, **x, ms@, sty(k), sty(v), rr, rank_local, c, slots@, fallback@,
-            rows, width,
-        );
+        if frag(*e) {
+            lemma_get(
+                *e, *cx, sc@, b0, b1, b2, b3, *blk, **a, **x, ms@, sty(k), sty(v), rr, rank_local, c, slots@,
+                fallback@, rows, width,
+            );
+        }
     }
     Some((ty, slots))
 }
 
 /// `Map#get` の下ろしの正しさ（[`low_get`]）。
+#[verifier::spinoff_prover]
 proof fn lemma_get(
     e: TExpr,
     cx: LowerCtx,
@@ -1628,8 +2654,8 @@ proof fn lemma_get(
         extends(b1, b2),
         extends(b2, b3),
         extends(b3, b4),
-        frag(e) ==> lowers(a, cx, sc, b0, b1, XTy::Map(Box::new(sk), Box::new(sv)), ms),
-        frag(e) ==> rank_lowers(x, cx, sc, b1, b2, sk, rr),
+        lowers(a, cx, sc, b0, b1, XTy::Map(Box::new(sk), Box::new(sv)), ms),
+        rank_lowers(x, cx, sc, b1, b2, sk, rr),
         added(b2, b3, rr, Expr::Local(rank_local)),
         fresh(b3, b4) == seq![c],
         rows == keys_or_zero(sk, cx.enums@),
@@ -1664,101 +2690,99 @@ proof fn lemma_get(
                 locals,
             ),
     ensures
-        frag(e) ==> lowers(e, cx, sc, b0, b4, to_xty(sv), slots),
+        lowers(e, cx, sc, b0, b4, to_xty(sv), slots),
 {
-    if frag(e) {
-        let enums = cx.enums@;
-        assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-            #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
-            eval_src(e, se, sls),
-            run(fresh(b0, b4), env, ls),
-            slots,
-            env,
-            to_xty(sv),
-            se.enums,
-        ) by {
-            lemma_run_fresh(b0, b1, b4, env, ls);
-            lemma_run_len(fresh(b0, b1), env, ls);
-            match eval_src(a, se, sls) {
-                Err(_) => {},
-                Ok(m) => {
-                    let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
-                    assert(denotes(ms, env, l1, m, XTy::Map(Box::new(sk), Box::new(sv)), enums));
-                    lemma_ctx_weaken(cx, sc, env, se, ls, l1, sls);
-                    assert(ctx_ok(cx, sc, env, se, l1, sls));
-                    lemma_run_fresh(b1, b2, b4, env, l1);
-                    lemma_run_len(fresh(b1, b2), env, l1);
-                    match eval_src(x, se, sls) {
-                        Err(_) => {},
-                        Ok(y) => {
-                            let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
-                            let rows_v = m->Map_0;
-                            let mem = member(y, sk, enums);
-                            let rk: i64 = if mem {
-                                rank(y, sk, enums) as i64
-                            } else {
-                                -1i64
-                            };
-                            assert(eval_l(rr, env, l2) == Ok::<Value, ErrKind>(Value::Int(rk)));
-                            lemma_added(b2, b3, rr, Expr::Local(rank_local), env, l2, Value::Int(rk));
-                            lemma_run_fresh(b2, b3, b4, env, l2);
-                            let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
-                            assert(rank_local < l3.len() && l3[rank_local as int] == Value::Int(rk));
-                            assert(key_rank(l3, rank_local) == rk as int);
-                            lemma_run_push(Seq::empty(), c, env, l3);
-                            assert(seq![c] =~= Seq::<Expr>::empty().push(c));
-                            lemma_prefix_trans(ls, l1, l2);
-                            lemma_prefix_trans(l1, l2, l3);
-                            assert(keys(sk, enums) == Some(rows_v.len()));
-                            if mem {
-                                lemma_rank_in_domain(y, sk, enums);
-                                let rkk = rank(y, sk, enums);
-                                assert(0 <= rkk < rows);
-                                let w1 = 1 + wd;
-                                lemma_enc_rows_index(rows_v, sv, enums, rkk, 0);
-                                let pos = rkk * w1;
-                                assert(clean(ms, env, l1));
-                                lemma_weaken(ms[pos], env, l1, l3);
-                                assert(eval_l(ms[pos], env, l1) == Ok::<Value, ErrKind>(slot_vals(ms, env, l1)[pos]));
-                                assert(slot_vals(ms, env, l1) == enc_rows(rows_v, sv, enums));
-                                assert(flat_slot(ms, wd, 0, rkk, env, l3) == Ok::<Value, ErrKind>(
-                                    Value::Bool(rows_v[rkk] is Some),
-                                ));
-                                match rows_v[rkk] {
-                                    None => {},
-                                    Some(val) => {
-                                        let l4 = l3.push(Value::Bool(true));
-                                        lemma_prefix_trans(l3, l3, l4);
-                                        lemma_prefix_trans(l1, l3, l4);
-                                        assert(key_rank(l4, rank_local) == rkk);
-                                        lemma_map_rows_member_index(rows_v, sv, enums, rkk);
-                                        lemma_enc_len(val, sv, enums);
-                                        lemma_models_enc(val, sv, enums);
-                                        lemma_clean_pure(ms, env, l1);
-                                        assert(all_pure(ms, l4.len())) by {
-                                            assert forall|j: int| 0 <= j < ms.len() implies pure_below(#[trigger] ms[j], l4.len()) by {
-                                                lemma_pure_mono(ms[j], l1.len(), l4.len());
-                                            }
+    let enums = cx.enums@;
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b4), env, ls),
+        slots,
+        env,
+        to_xty(sv),
+        se.enums,
+    ) by {
+        lemma_run_fresh(b0, b1, b4, env, ls);
+        lemma_run_len(fresh(b0, b1), env, ls);
+        match eval_src(a, se, sls) {
+            Err(_) => {},
+            Ok(m) => {
+                let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+                assert(denotes(ms, env, l1, m, XTy::Map(Box::new(sk), Box::new(sv)), enums));
+                lemma_ctx_weaken(cx, sc, env, se, ls, l1, sls);
+                assert(ctx_ok(cx, sc, env, se, l1, sls));
+                lemma_run_fresh(b1, b2, b4, env, l1);
+                lemma_run_len(fresh(b1, b2), env, l1);
+                match eval_src(x, se, sls) {
+                    Err(_) => {},
+                    Ok(y) => {
+                        let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                        let rows_v = m->Map_0;
+                        let mem = member(y, sk, enums);
+                        let rk: i64 = if mem {
+                            rank(y, sk, enums) as i64
+                        } else {
+                            -1i64
+                        };
+                        assert(eval_l(rr, env, l2) == Ok::<Value, ErrKind>(Value::Int(rk)));
+                        lemma_added(b2, b3, rr, Expr::Local(rank_local), env, l2, Value::Int(rk));
+                        lemma_run_fresh(b2, b3, b4, env, l2);
+                        let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                        assert(rank_local < l3.len() && l3[rank_local as int] == Value::Int(rk));
+                        assert(key_rank(l3, rank_local) == rk as int);
+                        lemma_run_push(Seq::empty(), c, env, l3);
+                        assert(seq![c] =~= Seq::<Expr>::empty().push(c));
+                        lemma_prefix_trans(ls, l1, l2);
+                        lemma_prefix_trans(l1, l2, l3);
+                        assert(keys(sk, enums) == Some(rows_v.len()));
+                        if mem {
+                            lemma_rank_in_domain(y, sk, enums);
+                            let rkk = rank(y, sk, enums);
+                            assert(0 <= rkk < rows);
+                            let w1 = 1 + wd;
+                            lemma_enc_rows_index(rows_v, sv, enums, rkk, 0);
+                            let pos = rkk * w1;
+                            assert(clean(ms, env, l1));
+                            lemma_weaken(ms[pos], env, l1, l3);
+                            assert(eval_l(ms[pos], env, l1) == Ok::<Value, ErrKind>(slot_vals(ms, env, l1)[pos]));
+                            assert(slot_vals(ms, env, l1) == enc_rows(rows_v, sv, enums));
+                            assert(flat_slot(ms, wd, 0, rkk, env, l3) == Ok::<Value, ErrKind>(
+                                Value::Bool(rows_v[rkk] is Some),
+                            ));
+                            match rows_v[rkk] {
+                                None => {},
+                                Some(val) => {
+                                    let l4 = l3.push(Value::Bool(true));
+                                    lemma_prefix_trans(l3, l3, l4);
+                                    lemma_prefix_trans(l1, l3, l4);
+                                    assert(key_rank(l4, rank_local) == rkk);
+                                    lemma_map_rows_member_index(rows_v, sv, enums, rkk);
+                                    lemma_enc_len(val, sv, enums);
+                                    lemma_models_enc(val, sv, enums);
+                                    lemma_clean_pure(ms, env, l1);
+                                    assert(all_pure(ms, l4.len())) by {
+                                        assert forall|j: int| 0 <= j < ms.len() implies pure_below(#[trigger] ms[j], l4.len()) by {
+                                            lemma_pure_mono(ms[j], l1.len(), l4.len());
                                         }
-                                        lemma_lits(enc(default_val(sv, enums), sv, enums), env, l4);
-                                        assert(all_pure(fallback, l4.len()));
-                                        assert(all_pure(slots, l4.len()));
-                                        assert forall|i: int| 0 <= i < slots.len() implies pure_below(#[trigger] slots[i], l4.len())
-                                            && eval_l(slots[i], env, l4) == Ok::<Value, ErrKind>(enc(val, sv, enums)[i]) by {
-                                            lemma_enc_rows_index(rows_v, sv, enums, rkk, i + 1);
-                                            let q = rkk * w1 + i + 1;
-                                            lemma_weaken(ms[q], env, l1, l4);
-                                            assert(eval_l(ms[q], env, l1) == Ok::<Value, ErrKind>(slot_vals(ms, env, l1)[q]));
-                                            assert(eval_l(slots[i], env, l4) == flat_slot_int(ms, wd, i + 1, rkk, env, l4));
-                                        }
-                                        assert(slot_vals(slots, env, l4) =~= enc(val, sv, enums));
-                                    },
-                                }
+                                    }
+                                    lemma_lits(enc(default_val(sv, enums), sv, enums), env, l4);
+                                    assert(all_pure(fallback, l4.len()));
+                                    assert(all_pure(slots, l4.len()));
+                                    assert forall|i: int| 0 <= i < slots.len() implies pure_below(#[trigger] slots[i], l4.len())
+                                        && eval_l(slots[i], env, l4) == Ok::<Value, ErrKind>(enc(val, sv, enums)[i]) by {
+                                        lemma_enc_rows_index(rows_v, sv, enums, rkk, i + 1);
+                                        let q = rkk * w1 + i + 1;
+                                        lemma_weaken(ms[q], env, l1, l4);
+                                        assert(eval_l(ms[q], env, l1) == Ok::<Value, ErrKind>(slot_vals(ms, env, l1)[q]));
+                                        assert(eval_l(slots[i], env, l4) == flat_slot_int(ms, wd, i + 1, rkk, env, l4));
+                                    }
+                                    assert(slot_vals(slots, env, l4) =~= enc(val, sv, enums));
+                                },
                             }
-                        },
-                    }
-                },
-            }
+                        }
+                    },
+                }
+            },
         }
     }
 }

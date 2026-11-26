@@ -20,19 +20,20 @@ use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, mode
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xwidth, xwidth_sum, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, lookup, Env, ErrKind};
+use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::{Bound, Layout, LowerCtx};
+use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
-use crate::model::{Expr, Type, Value};
+use crate::model::{Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::ranking::mixed_rank_eval;
 #[cfg(verus_keep_ghost)]
 use crate::slots::{and_s, bool_lit, extends, ite_s, join_s, lits, or_s, tree_s, Block, Join};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, SEnv, TExpr};
+use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -450,7 +451,7 @@ pub proof fn lemma_models_len(s: Seq<Value>, v: SVal, t: XTy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_models_seq_len(s: Seq<Value>, vs: Seq<SVal>, ts: Seq<XTy>, enums: Seq<i64>)
+pub proof fn lemma_models_seq_len(s: Seq<Value>, vs: Seq<SVal>, ts: Seq<XTy>, enums: Seq<i64>)
     requires
         models_seq(s, vs, ts, enums),
     ensures
@@ -1444,14 +1445,607 @@ pub open spec fn kind_expr(kind: u8, i: usize) -> Expr {
 
 /// 意味の保存を証明した式の範囲。証明が進むにつれて広げる。
 pub open spec fn frag(e: TExpr) -> bool
-    decreases e,
+    decreases e, 0nat,
 {
     match e {
         TExpr::Lit(_) | TExpr::Var(_) | TExpr::Next(_) | TExpr::Arg(_) | TExpr::Out | TExpr::Local(_)
         | TExpr::Const(_) => true,
+        TExpr::Bin(_, a, b) => frag(*a) && frag(*b),
+        TExpr::Not(a) => frag(*a),
+        TExpr::Fold(_, es) => frag_seq(es@),
+        TExpr::Implies(a, b) => frag(*a) && frag(*b),
+        TExpr::Ite(p, a, b) => frag(*p) && frag(*a) && frag(*b),
+        TExpr::Let(a, b) => frag(*a) && frag(*b),
         TExpr::Get(_, a, x) => frag(*a) && frag(*x),
         _ => false,
     }
+}
+
+pub open spec fn frag_seq(es: Seq<TExpr>) -> bool
+    decreases es, 1nat,
+{
+    if es.len() == 0 {
+        true
+    } else {
+        frag_seq(es.drop_last()) && frag(es.last())
+    }
+}
+
+pub proof fn lemma_frag_seq(es: Seq<TExpr>, i: int)
+    requires
+        frag_seq(es),
+        0 <= i < es.len(),
+    ensures
+        frag(es[i]),
+    decreases es.len(),
+{
+    if i < es.len() - 1 {
+        assert(es.drop_last()[i] == es[i]);
+        lemma_frag_seq(es.drop_last(), i);
+    }
+}
+
+// ---- 短絡する演算 ----
+
+/// 中核の式の列を左から短絡して評価する。`all` なら論理積、そうでなければ論理和。
+pub open spec fn sc_fold(all: bool, xs: Seq<Expr>, env: Env, ls: Seq<Value>) -> Result<bool, ErrKind>
+    decreases xs.len(),
+{
+    if xs.len() == 0 {
+        Ok(all)
+    } else {
+        match sc_fold(all, xs.drop_last(), env, ls) {
+            Err(k) => Err(k),
+            Ok(b) => if b != all {
+                Ok(b)
+            } else {
+                as_bool(eval_l(xs.last(), env, ls))
+            },
+        }
+    }
+}
+
+pub open spec fn raw_join(all: bool) -> Join {
+    if all {
+        Join::RawAnd
+    } else {
+        Join::RawOr
+    }
+}
+
+pub open spec fn lift_bool(r: Result<bool, ErrKind>) -> Result<Value, ErrKind> {
+    match r {
+        Ok(b) => Ok(Value::Bool(b)),
+        Err(k) => Err(k),
+    }
+}
+
+/// 各項の値は、Boolか失敗である。
+pub open spec fn bool_or_err(xs: Seq<Expr>, env: Env, ls: Seq<Value>) -> bool {
+    forall|i: int| 0 <= i < xs.len() ==> lift_bool(as_bool(#[trigger] eval_l(xs[i], env, ls))) == eval_l(xs[i], env, ls)
+}
+
+pub proof fn lemma_sc_fold_append(all: bool, a: Seq<Expr>, b: Seq<Expr>, env: Env, ls: Seq<Value>)
+    ensures
+        sc_fold(all, a + b, env, ls) == match sc_fold(all, a, env, ls) {
+            Err(k) => Err(k),
+            Ok(x) => if x != all {
+                Ok(x)
+            } else {
+                sc_fold(all, b, env, ls)
+            },
+        },
+    decreases b.len(),
+{
+    if b.len() == 0 {
+        assert(a + b =~= a);
+    } else {
+        lemma_sc_fold_append(all, a, b.drop_last(), env, ls);
+        assert((a + b).drop_last() =~= a + b.drop_last());
+        assert((a + b).last() == b.last());
+    }
+}
+
+/// 平衡した木にたたんだ論理積（論理和）は、左から短絡して評価した値になる。
+pub proof fn lemma_tree_sc(all: bool, xs: Seq<Expr>, env: Env, ls: Seq<Value>)
+    requires
+        bool_or_err(xs, env, ls),
+    ensures
+        eval_l(tree_s(xs, bool_lit(all), raw_join(all)), env, ls) == lift_bool(sc_fold(all, xs, env, ls)),
+    decreases xs.len(),
+{
+    let k = raw_join(all);
+    if xs.len() == 0 {
+        assert(tree_s(xs, bool_lit(all), k) == bool_lit(all));
+    } else if xs.len() == 1 {
+        assert(xs.drop_last() =~= Seq::<Expr>::empty());
+        assert(sc_fold(all, xs.drop_last(), env, ls) == Ok::<bool, ErrKind>(all));
+        assert(xs.last() == xs[0]);
+        assert(lift_bool(as_bool(eval_l(xs[0], env, ls))) == eval_l(xs[0], env, ls));
+        assert(tree_s(xs, bool_lit(all), k) == xs[0]);
+    } else {
+        let m = (xs.len() / 2) as int;
+        let a = xs.take(m);
+        let b = xs.skip(m);
+        assert forall|i: int| 0 <= i < a.len() implies lift_bool(as_bool(#[trigger] eval_l(a[i], env, ls))) == eval_l(
+            a[i],
+            env,
+            ls,
+        ) by {
+            assert(a[i] == xs[i]);
+        }
+        assert forall|i: int| 0 <= i < b.len() implies lift_bool(as_bool(#[trigger] eval_l(b[i], env, ls))) == eval_l(
+            b[i],
+            env,
+            ls,
+        ) by {
+            assert(b[i] == xs[i + m]);
+        }
+        lemma_tree_sc(all, a, env, ls);
+        lemma_tree_sc(all, b, env, ls);
+        lemma_sc_fold_append(all, a, b, env, ls);
+        assert(a + b =~= xs);
+        let ta = tree_s(a, bool_lit(all), k);
+        let tb = tree_s(b, bool_lit(all), k);
+        assert(tree_s(xs, bool_lit(all), k) == join_s(k, ta, tb));
+        assert(as_bool(eval_l(ta, env, ls)) == sc_fold(all, a, env, ls));
+        assert(as_bool(eval_l(tb, env, ls)) == sc_fold(all, b, env, ls));
+        if all {
+            assert(join_s(k, ta, tb) == Expr::And(Box::new(ta), Box::new(tb)));
+        } else {
+            assert(join_s(k, ta, tb) == Expr::Or(Box::new(ta), Box::new(tb)));
+        }
+    }
+}
+
+/// 各項の真偽が値の意味論と一致すれば、短絡した評価も `eval_fold` と一致する。
+pub proof fn lemma_fold_eq(all: bool, es: Seq<TExpr>, xs: Seq<Expr>, se: SEnv, sls: Seq<SVal>, env: Env, ls: Seq<Value>)
+    requires
+        es.len() == xs.len(),
+        forall|i: int| 0 <= i < xs.len() ==> #[trigger] as_bool(eval_l(xs[i], env, ls)) == src_bool(eval_src(es[i], se, sls)),
+    ensures
+        sc_fold(all, xs, env, ls) == eval_fold(all, es, se, sls),
+    decreases xs.len(),
+{
+    if xs.len() > 0 {
+        let n = xs.len() - 1;
+        assert forall|i: int| 0 <= i < xs.drop_last().len() implies #[trigger] as_bool(
+            eval_l(xs.drop_last()[i], env, ls),
+        ) == src_bool(eval_src(es.drop_last()[i], se, sls)) by {
+            assert(as_bool(eval_l(xs[i], env, ls)) == src_bool(eval_src(es[i], se, sls)));
+        }
+        lemma_fold_eq(all, es.drop_last(), xs.drop_last(), se, sls, env, ls);
+        assert(as_bool(eval_l(xs[n], env, ls)) == src_bool(eval_src(es[n], se, sls)));
+    }
+}
+
+/// 最初の項が失敗すれば、`eval_fold` は同じ失敗になる。
+pub proof fn lemma_fold_first_err(all: bool, es: Seq<TExpr>, se: SEnv, sls: Seq<SVal>, k: ErrKind)
+    requires
+        es.len() >= 1,
+        eval_src(es[0], se, sls) == Err::<SVal, ErrKind>(k),
+    ensures
+        eval_fold(all, es, se, sls) == Err::<bool, ErrKind>(k),
+    decreases es.len(),
+{
+    if es.len() == 1 {
+        assert(es.drop_last() =~= Seq::<TExpr>::empty());
+    } else {
+        assert(es.drop_last()[0] == es[0]);
+        lemma_fold_first_err(all, es.drop_last(), se, sls, k);
+    }
+}
+
+// ---- 下ろしの合成 ----
+
+/// 束縛の列を評価できれば、局所変数の列は伸びて、その長さは `b1` の深さになる。
+pub proof fn lemma_run_fresh_ok(b0: Block, b1: Block, env: Env, ls: Seq<Value>)
+    requires
+        extends(b0, b1),
+        ls.len() == b0.depth_s(),
+    ensures
+        run(fresh(b0, b1), env, ls) matches Ok(l) ==> l.len() == b1.depth_s() && prefix(ls, l),
+{
+    lemma_run_len(fresh(b0, b1), env, ls);
+}
+
+/// 部分式を1つ下ろした結果を、環境ごとに取り出す。
+pub proof fn lemma_one(
+    a: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    t: XTy,
+    xs: Seq<Expr>,
+    env: Env,
+    se: SEnv,
+    ls: Seq<Value>,
+    sls: Seq<SVal>,
+)
+    requires
+        extends(b0, b1),
+        lowers(a, cx, sc, b0, b1, t, xs),
+        ctx_ok(cx, sc, env, se, ls, sls),
+        ls.len() == b0.depth_s(),
+    ensures
+        match eval_src(a, se, sls) {
+            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(v) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && denotes(
+                xs,
+                env,
+                l,
+                v,
+                t,
+                se.enums,
+            ) && ctx_ok(cx, sc, env, se, l, sls),
+        },
+{
+    lemma_run_fresh_ok(b0, b1, env, ls);
+    if let Ok(l) = run(fresh(b0, b1), env, ls) {
+        lemma_ctx_weaken(cx, sc, env, se, ls, l, sls);
+    }
+}
+
+/// 部分式を2つ順に下ろした結果を、環境ごとに取り出す。
+pub proof fn lemma_pair(
+    a: TExpr,
+    b: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    ta: XTy,
+    xa: Seq<Expr>,
+    tb: XTy,
+    xb: Seq<Expr>,
+    env: Env,
+    se: SEnv,
+    ls: Seq<Value>,
+    sls: Seq<SVal>,
+)
+    requires
+        extends(b0, b1),
+        extends(b1, b2),
+        lowers(a, cx, sc, b0, b1, ta, xa),
+        lowers(b, cx, sc, b1, b2, tb, xb),
+        ctx_ok(cx, sc, env, se, ls, sls),
+        ls.len() == b0.depth_s(),
+    ensures
+        match eval_src(a, se, sls) {
+            Err(k) => run(fresh(b0, b2), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(va) => match eval_src(b, se, sls) {
+                Err(k) => run(fresh(b0, b2), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+                Ok(vb) => run(fresh(b0, b2), env, ls) matches Ok(l) && l.len() == b2.depth_s() && prefix(ls, l)
+                    && denotes(xa, env, l, va, ta, se.enums) && denotes(xb, env, l, vb, tb, se.enums) && ctx_ok(
+                    cx,
+                    sc,
+                    env,
+                    se,
+                    l,
+                    sls,
+                ),
+            },
+        },
+{
+    lemma_run_fresh(b0, b1, b2, env, ls);
+    lemma_one(a, cx, sc, b0, b1, ta, xa, env, se, ls, sls);
+    if let Ok(va) = eval_src(a, se, sls) {
+        let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+        lemma_one(b, cx, sc, b1, b2, tb, xb, env, se, l1, sls);
+        if let Ok(vb) = eval_src(b, se, sls) {
+            let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+            lemma_denotes_weaken(xa, env, l1, l2, va, ta, se.enums);
+            lemma_prefix_trans(ls, l1, l2);
+        }
+    }
+}
+
+/// スカラーの1つのスロットが表す値。
+pub proof fn lemma_denotes_one(x: Expr, env: Env, l: Seq<Value>, v: SVal, t: XTy, enums: Seq<i64>)
+    requires
+        denotes(seq![x], env, l, v, t, enums),
+        t == XTy::Int || t == XTy::Bool,
+    ensures
+        pure_below(x, l.len()),
+        to_value(v) is Some,
+        eval_l(x, env, l) == Ok::<Value, ErrKind>(to_value(v)->Some_0),
+        t == XTy::Int ==> v is Int,
+        t == XTy::Bool ==> v is Bool,
+{
+    assert(seq![x][0] == x);
+    assert(slot_vals(seq![x], env, l)[0] == eval_l(x, env, l)->Ok_0);
+}
+
+/// 純粋で評価できるスカラーの式は、その値を表す1つのスロットになる。
+pub proof fn lemma_one_denotes(x: Expr, env: Env, l: Seq<Value>, val: Value, t: XTy, enums: Seq<i64>)
+    requires
+        pure_below(x, l.len()),
+        eval_l(x, env, l) == Ok::<Value, ErrKind>(val),
+        (t == XTy::Int && val is Int) || (t == XTy::Bool && val is Bool),
+    ensures
+        denotes(seq![x], env, l, of_value(val), t, enums),
+{
+    assert(seq![x][0] == x);
+    assert(slot_vals(seq![x], env, l) =~= seq![val]);
+}
+
+/// 1つの束縛を加えた束縛の列の評価。
+pub proof fn lemma_run_one(b0: Block, b1: Block, e: Expr, env: Env, l: Seq<Value>)
+    requires
+        b1.binds@ == b0.binds@.push(e),
+    ensures
+        run(fresh(b0, b1), env, l) == match eval_l(e, env, l) {
+            Err(k) => Err(k),
+            Ok(v) => Ok::<Seq<Value>, ErrKind>(l.push(v)),
+        },
+{
+    lemma_fresh_push(b0, b1, e);
+    assert(seq![e] =~= Seq::<Expr>::empty().push(e));
+    lemma_run_push(Seq::empty(), e, env, l);
+}
+
+/// 単独に評価するBoolの式の真偽は、値の意味論の真偽と一致する。
+pub proof fn lemma_scalar_bool(src: Result<SVal, ErrKind>, core: Result<Value, ErrKind>, enums: Seq<i64>)
+    requires
+        scalar_result(src, core, XTy::Bool, enums),
+    ensures
+        as_bool(core) == src_bool(src),
+        lift_bool(as_bool(core)) == core,
+{
+    if let Ok(v) = src {
+        assert(seq![core->Ok_0][0] == core->Ok_0);
+    }
+}
+
+/// 束縛したスロットの列 `out` は、元のスロットの列 `xs` と同じ値を表す。
+pub open spec fn atoms_ok(xs: Seq<Expr>, out: Seq<Expr>, b0: Block, b1: Block) -> bool {
+    &&& out.len() == xs.len()
+    &&& forall|env: Env, l: Seq<Value>|
+        l.len() == b0.depth_s() && #[trigger] clean(xs, env, l) ==> atoms_run(xs, out, b0, b1, env, l)
+}
+
+pub open spec fn atoms_run(xs: Seq<Expr>, out: Seq<Expr>, b0: Block, b1: Block, env: Env, l: Seq<Value>) -> bool {
+    match run(fresh(b0, b1), env, l) {
+        Ok(l2) => prefix(l, l2) && l2.len() == b1.depth_s() && clean(out, env, l2) && slot_vals(out, env, l2)
+            == slot_vals(xs, env, l),
+        Err(_) => false,
+    }
+}
+
+pub proof fn lemma_atoms_empty(b: Block)
+    ensures
+        atoms_ok(Seq::empty(), Seq::empty(), b, b),
+{
+    lemma_fresh_refl(b);
+    assert forall|env: Env, l: Seq<Value>| l.len() == b.depth_s() && #[trigger] clean(Seq::empty(), env, l) implies atoms_run(Seq::empty(), Seq::empty(), b, b, env, l) by {
+        assert(fresh(b, b) =~= Seq::<Expr>::empty());
+        lemma_prefix_refl(l);
+        assert(slot_vals(Seq::empty(), env, l) =~= slot_vals(Seq::empty(), env, l));
+    }
+}
+
+pub proof fn lemma_atoms_step(xs: Seq<Expr>, x: Expr, out: Seq<Expr>, y: Expr, b0: Block, b1: Block, b2: Block)
+    requires
+        atoms_ok(xs, out, b0, b1),
+        extends(b0, b1),
+        extends(b1, b2),
+        added(b1, b2, x, y),
+    ensures
+        atoms_ok(xs.push(x), out.push(y), b0, b2),
+{
+    assert forall|env: Env, l: Seq<Value>| l.len() == b0.depth_s() && #[trigger] clean(xs.push(x), env, l) implies atoms_run(xs.push(x), out.push(y), b0, b2, env, l) by {
+        lemma_clean_sub(xs.push(x), env, l, 0, xs.len() as int);
+        assert(xs.push(x).subrange(0, xs.len() as int) =~= xs);
+        let l1 = run(fresh(b0, b1), env, l)->Ok_0;
+        assert(xs.push(x)[xs.len() as int] == x);
+        let val = eval_l(x, env, l)->Ok_0;
+        lemma_weaken(x, env, l, l1);
+        lemma_pure_mono(x, l.len(), l1.len());
+        lemma_added(b1, b2, x, y, env, l1, val);
+        let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+        lemma_run_fresh(b0, b1, b2, env, l);
+        lemma_clean_weaken(out, env, l1, l2);
+        lemma_prefix_trans(l, l1, l2);
+        assert forall|j: int| 0 <= j < out.len() + 1 implies pure_below(#[trigger] out.push(y)[j], l2.len()) && eval_l(
+            out.push(y)[j],
+            env,
+            l2,
+        ) is Ok by {
+            if j < out.len() {
+                assert(out.push(y)[j] == out[j]);
+            }
+        }
+        assert(slot_vals(out.push(y), env, l2) =~= slot_vals(xs.push(x), env, l)) by {
+            assert forall|j: int| 0 <= j < out.len() + 1 implies #[trigger] slot_vals(out.push(y), env, l2)[j]
+                == slot_vals(xs.push(x), env, l)[j] by {
+                if j < out.len() {
+                    assert(out.push(y)[j] == out[j]);
+                    assert(xs.push(x)[j] == xs[j]);
+                    assert(slot_vals(out, env, l2)[j] == slot_vals(xs, env, l)[j]);
+                }
+            }
+        }
+    }
+}
+
+
+pub proof fn lemma_extends_trans(a: Block, b: Block, c: Block)
+    requires
+        extends(a, b),
+        extends(b, c),
+    ensures
+        extends(a, c),
+{
+    assert forall|i: int| 0 <= i < a.binds@.len() implies #[trigger] c.binds@[i] == a.binds@[i] by {
+        assert(c.binds@[i] == b.binds@[i]);
+    }
+}
+
+/// 式 `e` は、局所変数 `n` 個のもとで純粋である（[`pure_below`]）。
+pub fn pure_exec(e: &Expr, n: usize) -> (r: bool)
+    ensures
+        r == pure_below(*e, n as nat),
+    decreases e,
+{
+    match e {
+        Expr::Local(i) => *i < n,
+        Expr::Bin(_, a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::And(a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::Or(a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::Implies(a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::Not(a) => pure_exec(a, n),
+        Expr::Code(a) => pure_exec(a, n),
+        Expr::Ite(c, a, b) => pure_exec(c, n) && pure_exec(a, n) && pure_exec(b, n),
+        Expr::Let(_, _) => false,
+        Expr::Forall(_, _, _, _) => false,
+        Expr::Exists(_, _, _, _) => false,
+        _ => true,
+    }
+}
+
+
+// ---- 値の表現の混合 ----
+
+/// `m` が真の位置は `a`、偽の位置は `b` からとった列。
+pub open spec fn mix2(a: Seq<Value>, b: Seq<Value>, m: Seq<bool>) -> Seq<Value> {
+    Seq::new(
+        a.len(),
+        |j: int|
+            if m[j] {
+                a[j]
+            } else {
+                b[j]
+            },
+    )
+}
+
+/// 同じ値を表す2つのスロットの値の列を、位置ごとに混ぜても、同じ値を表す。
+/// Optionの空の中身のように、値が決めないスロットがあるので、2つの列は等しいとは限らない。
+pub proof fn lemma_models_mix(a: Seq<Value>, b: Seq<Value>, m: Seq<bool>, v: SVal, t: XTy, enums: Seq<i64>)
+    requires
+        models(a, v, t, enums),
+        models(b, v, t, enums),
+        m.len() == a.len(),
+    ensures
+        models(mix2(a, b, m), v, t, enums),
+    decreases t, 1nat,
+{
+    lemma_models_len(a, v, t, enums);
+    lemma_models_len(b, v, t, enums);
+    let s = mix2(a, b, m);
+    match t {
+        XTy::Tuple(ts) => lemma_models_seq_mix(a, b, m, v->Tuple_0, ts, enums),
+        XTy::Record(_, ts) => lemma_models_seq_mix(a, b, m, v->Tuple_0, ts, enums),
+        XTy::Option(x) => {
+            assert(s[0] == a[0]);
+            if let SVal::Some(w) = v {
+                assert(s.drop_first() =~= mix2(a.drop_first(), b.drop_first(), m.drop_first()));
+                lemma_models_mix(a.drop_first(), b.drop_first(), m.drop_first(), *w, *x, enums);
+            }
+        },
+        _ => {
+            assert(s =~= a);
+        },
+    }
+}
+
+proof fn lemma_models_seq_mix(a: Seq<Value>, b: Seq<Value>, m: Seq<bool>, vs: Seq<SVal>, ts: Seq<XTy>, enums: Seq<i64>)
+    requires
+        models_seq(a, vs, ts, enums),
+        models_seq(b, vs, ts, enums),
+        m.len() == a.len(),
+    ensures
+        models_seq(mix2(a, b, m), vs, ts, enums),
+    decreases ts, 0nat,
+{
+    lemma_models_seq_len(a, vs, ts, enums);
+    lemma_models_seq_len(b, vs, ts, enums);
+    let s = mix2(a, b, m);
+    if ts.len() > 0 {
+        let cut = a.len() - xwidth(ts.last(), enums);
+        assert(s.take(cut) =~= mix2(a.take(cut), b.take(cut), m.take(cut)));
+        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));
+        lemma_models_seq_mix(a.take(cut), b.take(cut), m.take(cut), vs.drop_last(), ts.drop_last(), enums);
+        lemma_models_mix(a.skip(cut), b.skip(cut), m.skip(cut), vs.last(), ts.last(), enums);
+    }
+}
+
+/// 対角に混ぜた列。先頭 `k + 1` 個の位置は `vs[j][j]`、残りは `vs[0][j]`。
+pub open spec fn diag(vs: Seq<Seq<Value>>, k: int, n: nat) -> Seq<Value> {
+    Seq::new(
+        n,
+        |j: int|
+            if j <= k {
+                vs[j][j]
+            } else {
+                vs[0][j]
+            },
+    )
+}
+
+proof fn lemma_models_diag_k(vs: Seq<Seq<Value>>, k: int, v: SVal, t: XTy, enums: Seq<i64>)
+    requires
+        0 <= k < vs.len(),
+        forall|j: int| 0 <= j < vs.len() ==> #[trigger] models(vs[j], v, t, enums) && vs[j].len() == vs.len(),
+    ensures
+        models(diag(vs, k, vs.len()), v, t, enums),
+    decreases k,
+{
+    let n = vs.len();
+    assert(models(vs[0], v, t, enums) && vs[0].len() == n);
+    if k == 0 {
+        assert(diag(vs, 0, n) =~= vs[0]);
+    } else {
+        lemma_models_diag_k(vs, k - 1, v, t, enums);
+        assert(models(vs[k], v, t, enums) && vs[k].len() == n);
+        let m = Seq::new(n, |j: int| j == k);
+        assert(diag(vs, k, n) =~= mix2(vs[k], diag(vs, k - 1, n), m));
+        lemma_models_mix(vs[k], diag(vs, k - 1, n), m, v, t, enums);
+    }
+}
+
+/// 各 `vs[j]` が同じ値を表すなら、`j` 番目の位置を `vs[j]` からとった列も、その値を表す。
+pub proof fn lemma_models_diag(vs: Seq<Seq<Value>>, r: Seq<Value>, v: SVal, t: XTy, enums: Seq<i64>)
+    requires
+        vs.len() > 0,
+        r.len() == vs.len(),
+        forall|j: int| 0 <= j < vs.len() ==> #[trigger] models(vs[j], v, t, enums) && vs[j].len() == vs.len(),
+        forall|j: int| 0 <= j < r.len() ==> #[trigger] r[j] == vs[j][j],
+    ensures
+        models(r, v, t, enums),
+{
+    lemma_models_diag_k(vs, vs.len() - 1, v, t, enums);
+    assert(diag(vs, vs.len() - 1, vs.len()) =~= r);
+}
+
+// ---- 単独に評価するスロット ----
+
+/// 単独に評価する式の列 `xs` の結果が、値の意味論の結果 `src` と対応する。
+pub open spec fn slots_result(src: Result<SVal, ErrKind>, xs: Seq<Expr>, env: Env, ls: Seq<Value>, t: XTy, enums: Seq<i64>) -> bool {
+    match src {
+        Err(k) => forall|j: int| 0 <= j < xs.len() ==> #[trigger] eval_l(xs[j], env, ls) == Err::<Value, ErrKind>(k),
+        Ok(v) => (forall|j: int| 0 <= j < xs.len() ==> #[trigger] eval_l(xs[j], env, ls) is Ok) && models(
+            slot_vals(xs, env, ls),
+            v,
+            t,
+            enums,
+        ),
+    }
+}
+
+/// 深さ `d` で単独に評価する式の列 `xs` が、`e` の値を表す。
+pub open spec fn closed_slots(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, d: nat, t: XTy, xs: Seq<Expr>) -> bool {
+    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == d ==> slots_result(
+            eval_src(e, se, sls),
+            xs,
+            env,
+            ls,
+            t,
+            se.enums,
+        )
 }
 
 } // verus!

@@ -190,7 +190,12 @@ VERUS_MUTANTS = [
   ["lowering.rs", "let x = wrap(&blk.binds, copy_expr(&slots[0]));", "let x = copy_expr(&slots[0]);", "スカラーの下ろしで束縛を捨てる"],
   ["slots.rs", "let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(-1));", "let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(0));", "型に属さないキーの番号を0にする"],
   ["slots.rs", "let y = bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi));", "let y = bin(BinOp::Lt, copy_expr(&slots[0]), ci(*hi));", "整数の型の上限を除く"],
-  ["lowering.rs", "let r = lookup_rank(x, cx, sc, blk, &k)?;\n    let ghost b2", "let r = lookup_rank(x, cx, sc, blk, &v)?;\n    let ghost b2", "Mapのキーの番号を値の型で計算する"]
+  ["lowering.rs", "let r = lookup_rank(x, cx, sc, blk, &k)?;\n    let ghost b2", "let r = lookup_rank(x, cx, sc, blk, &v)?;\n    let ghost b2", "Mapのキーの番号を値の型で計算する"],
+  ["lowering.rs", "out.push(bin(*op, x, y));", "out.push(bin(*op, y, x));", "比較の左右を入れ替える"],
+  ["lowering.rs", "out.push(not(x));", "out.push(x);", "否定を落とす"],
+  ["lowering.rs", "out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);", "out.push(bind(blk, Expr::Or(Box::new(p), Box::new(q)))?);", "含意を論理和にする"],
+  ["lowering.rs", "if all { Join::RawAnd } else { Join::RawOr }", "if all { Join::RawOr } else { Join::RawAnd }", "allとanyのたたみ方を入れ替える"],
+  ["lowering.rs", "let out = ite_slots(&c, &xs, &ys, d)?;", "let out = ite_slots(&c, &ys, &xs, d)?;", "条件式の枝を入れ替える"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -237,6 +242,10 @@ VERUS_CANARIES = [
   ["lowering.rs", "assert(key_rank(l3, rank_local) == rk as int);", "lemma_get のキーの番号"],
   ["lowering.rs", "assert(store_ok(_c, stored@, env, l, v, sty(*st), se.enums));", "lower_stored の値の場合"],
   ["lowering.rs", "assert(slot_vals(slots@, env, l) =~= seq![eval_l(slots@[0], env, l)->Ok_0]);", "scalar_in の値の場合"],
+  ["lowering.rs", "            assert(ctx_ok(cx, sc2, env, se, l2, sls2));", "lemma_let の局所変数の対応"],
+  ["lowering.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
+  ["lowering.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
+  ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"]
 ].freeze
 
