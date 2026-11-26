@@ -8,7 +8,7 @@ Rubyで実行可能な形式仕様を記述し、Rust製の独立した検証エ
 
 新規設計とし、既存の仕様言語、テストライブラリ、トレース形式、アダプターAPIとの互換性を前提としない。Ruby利用者の記述量と検証時のフィードバックを起点に設計する。外部のモデル検査ツールやNode.jsは不要とする。
 
-本書のAPI、型名、crate名、既定値は設計案であり、既存実装の仕様ではない。プロジェクト名は未定とする。
+本書のAPI、型名、crate名、既定値は設計案であり、既存実装の仕様ではない。プロジェクト名はfmspecとする。
 
 ## 2. 目的と非目的
 
@@ -133,10 +133,10 @@ Nupurは公開crateではなく、Makiriのワークスペース内で使う前�
 
 ### 4.1 設計原則と利用者向けAPI
 
-最も頻繁に使う操作が短く記述できることを優先する。仕様の構築時にRubyブロックを実行して型付きIRを生成し、探索時には任意のRubyコードを呼び出さない。以下の `Spec` は仮の名前空間である。
+最も頻繁に使う操作が短く記述できることを優先する。仕様の構築時にRubyブロックを実行して型付きIRを生成し、探索時には任意のRubyコードを呼び出さない。Rubyの名前空間は `Fmspec` とする。
 
 ```ruby
-Tickets = Spec.define(:tickets) do
+Tickets = Fmspec.define(:tickets) do
   state :sold, int(0..4), initial: 0
   constant :capacity, 3
 
@@ -690,15 +690,15 @@ native extensionの境界では、Nupur、その下の `nupur_sys` と rb-sys、
 
 ## 15. CLI・Agent向けインターフェース
 
-コマンド名は仮称。
+コマンド名は `fmspec` とする。
 
 ```sh
-modelcheck validate model.json
-modelcheck check model.json --strategy bfs --max-states 100000
-modelcheck simulate model.json --traces 100 --max-steps 20 --seed 42
-modelcheck verify-certificate model.json certificate.json
-modelcheck replay model.json trace.json
-modelcheck shrink model.json trace.json
+fmspec validate model.json
+fmspec check model.json --strategy bfs --max-states 100000
+fmspec simulate model.json --traces 100 --max-steps 20 --seed 42
+fmspec verify-certificate model.json certificate.json
+fmspec replay model.json trace.json
+fmspec shrink model.json trace.json
 ```
 
 人間向け診断と機械可読JSONを提供する。違反した不変条件名、操作列、引数、状態差分、ソース位置、探索制限を出力する。終了コード案は0=要求された検査の正常完了（網羅成功かサンプル成功かはstatusで区別）、1=反例、または提示された証明書やトレースの拒否、2=評価エラー、不正な入力、内部エラー（statusで区別）、3=探索未完了。サンプリング成功と網羅検査成功の違いは結果のstatusで明示する。
@@ -800,7 +800,7 @@ Ruby側にはBindingの雛形生成、RSpecへの組み込み、反例から固�
 
 ## 18. 未決事項
 
-- 正式な名称、gem/crateの分割、ライセンス。
+- gem/crateの分割、ライセンス。
 - DSLの糖衣構文、モジュール・関数・型パラメータの詳細。
 - IR/Traceの正式なJSON Schemaと互換性ポリシー。
 - 有限型の具体的な符号化、任意精度整数・文字列の将来拡張、複合型の詳細。
