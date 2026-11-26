@@ -14,6 +14,7 @@ require_relative "result"
 require_relative "binding"
 require_relative "testing"
 require_relative "coverage"
+require_relative "compose"
 
 # Ruby で書く実行可能な形式仕様と、モデル検査。
 #
@@ -38,5 +39,18 @@ module Fmspec
     builder = Builder.new(name)
     builder.instance_eval(&block)
     builder.build
+  end
+
+  # モデルを合成する（仕様書 §12.5）。キーワードの名前が、各モデルの名前空間の接頭辞になる。
+  # ブロックの中の語彙（sync、invariant、terminal、initially）は Fmspec::Composer にある。
+  #
+  #   Shop = Fmspec.compose(:shop, cart: Cart, stock: Stock) do
+  #     sync :checkout, cart: :pay, stock: :ship
+  #     invariant(:paid_items_shipped) { |s| s.cart.paid <= s.stock.shipped }
+  #   end
+  def self.compose(name, **components, &block)
+    composer = Composer.new(name, components)
+    composer.instance_eval(&block) if block
+    composer.build
   end
 end
