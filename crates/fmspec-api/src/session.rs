@@ -5,7 +5,7 @@
 
 use crate::conditions;
 use fmspec_core::evidence::Claim;
-use fmspec_ir::{args_to_json, claim_to_json, output_to_json, state_to_json, value_from_json, value_to_json, Model};
+use fmspec_ir::{claim_to_json, output_to_json, state_to_json, value_from_json, value_to_json, Model};
 use fmspec_search::{InputCheck, ModelError, NextInput, Observed, PossibleOutcome, Seen, SeenOutput};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -31,9 +31,10 @@ impl Session {
     /// セッションを作る。
     ///
     /// オプションは、検査条件（`actions`、`invariants`、`contracts`）、`seed`、
-    /// `observe`（観測する状態変数の名前。省略時はすべて）、`max_candidates`。
+    /// `observe`（観測する状態変数の名前。省略時はすべて）、
+    /// `inject`（操作名から、注入する内部選択の名前の配列へのオブジェクト）、`max_candidates`。
     pub fn new(model: Arc<Model>, opts: &Value) -> Result<Session, String> {
-        let map = crate::options(opts, &["seed", "observe", "max_candidates"])?;
+        let map = crate::options(opts, &["seed", "observe", "inject", "max_candidates"])?;
         let cond = conditions(&model, map)?;
         let seed = crate::count(map, "seed", 0)?.unwrap_or(0);
         let max = crate::count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);
@@ -56,7 +57,31 @@ impl Session {
                 observed
             }
         };
-        let inner = fmspec_search::Session::new(cond, observed, seed, usize::try_from(max).unwrap_or(usize::MAX));
+        let mut injected: Vec<Vec<usize>> = vec![Vec::new(); model.names.actions.len()];
+        if let Some(v) = map.get("inject").filter(|v| !v.is_null()) {
+            let message = "inject は、操作名から内部選択の名前の配列へのオブジェクトです";
+            for (action_name, choices) in v.as_object().ok_or(message)? {
+                let a = model
+                    .names
+                    .action_index(action_name)
+                    .ok_or(format!("未定義の操作 {action_name:?}"))?;
+                let n_params = model.raw().actions[a].n_params;
+                for choice in choices.as_array().ok_or(message)? {
+                    let choice = choice.as_str().ok_or(message)?;
+                    let k = model.names.actions[a]
+                        .choices
+                        .iter()
+                        .position(|n| n == choice)
+                        .ok_or(format!("操作 {action_name:?} に内部選択 {choice:?} はありません"))?;
+                    if !injected[a].contains(&(n_params + k)) {
+                        injected[a].push(n_params + k);
+                    }
+                }
+                injected[a].sort_unstable();
+            }
+        }
+        let max = usize::try_from(max).unwrap_or(usize::MAX);
+        let inner = fmspec_search::Session::new(cond, observed, injected, seed, max);
         Ok(Session {
             model,
             inner,
@@ -102,6 +127,7 @@ impl Session {
         })
     }
 
+    /// 入力（`{"action", "args", "choices"}`）を読む。`choices` は注入する選択の値である。
     fn input(&self, v: &Value) -> Result<(usize, Vec<i64>), String> {
         let map = v.as_object().ok_or("入力はオブジェクトです")?;
         let name = map
@@ -114,30 +140,55 @@ impl Session {
             .action_index(name)
             .ok_or(format!("未定義の操作 {name:?}"))?;
         let empty = json!({});
-        let n_params = self.model.raw().actions[action].n_params;
-        // 内部選択は実装に渡さないので、公開引数だけを読む。
-        let mut params = Vec::new();
+        let act = &self.model.raw().actions[action];
+        let names = &self.model.names.actions[action];
         let args = map
             .get("args")
             .unwrap_or(&empty)
             .as_object()
             .ok_or("args はオブジェクトです")?;
-        let names = &self.model.names.actions[action].params;
-        if args.len() != names.len() {
-            return Err(format!("操作 {name:?} の引数の個数が合いません"));
+        let choices = map
+            .get("choices")
+            .unwrap_or(&empty)
+            .as_object()
+            .ok_or("choices はオブジェクトです")?;
+        let injected = self.inner.injected(action);
+        if args.len() != names.params.len() || choices.len() != injected.len() {
+            return Err(format!("操作 {name:?} の引数または注入する選択の個数が合いません"));
         }
-        for (i, param) in names.iter().enumerate().take(n_params) {
-            let ty = &self.model.raw().actions[action].domains[i];
-            let v = args.get(param).ok_or(format!("引数 {param:?} がありません"))?;
-            params.push(value_from_json(&self.model.names.enums, ty, v).map_err(|e| format!("引数 {param:?}: {e}"))?);
+        let mut values = Vec::new();
+        let read = |given: &Map<String, Value>, binding: &String, index: usize| -> Result<i64, String> {
+            let v = given.get(binding).ok_or(format!("引数 {binding:?} がありません"))?;
+            value_from_json(&self.model.names.enums, &act.domains[index], v)
+                .map_err(|e| format!("引数 {binding:?}: {e}"))
+        };
+        for (i, param) in names.params.iter().enumerate() {
+            values.push(read(args, param, i)?);
         }
-        Ok((action, params))
+        for index in injected {
+            values.push(read(choices, &names.choices[index - act.n_params], *index)?);
+        }
+        Ok((action, values))
     }
 
-    fn input_json(&self, action: usize, params: &[i64]) -> Value {
-        // 公開引数だけの列を、名前付きのJSONにする。内部選択は含まない。
-        let (args, _) = args_to_json(&self.model, action, params);
-        json!({"action": self.model.names.actions[action].name, "args": args})
+    /// 入力を、公開引数（`args`）と注入する選択（`choices`）の名前付きのJSONにする。
+    fn input_json(&self, action: usize, values: &[i64]) -> Value {
+        let act = &self.model.raw().actions[action];
+        let names = &self.model.names.actions[action];
+        let mut args = Map::new();
+        let mut choices = Map::new();
+        for (i, x) in values.iter().enumerate() {
+            if i < act.n_params {
+                args.insert(
+                    names.params[i].clone(),
+                    value_to_json(&self.model.names, &act.domains[i], *x),
+                );
+            } else if let Some(index) = self.inner.injected(action).get(i - act.n_params) {
+                let name = names.choices[index - act.n_params].clone();
+                choices.insert(name, value_to_json(&self.model.names, &act.domains[*index], *x));
+            }
+        }
+        json!({"action": names.name, "args": args, "choices": choices})
     }
 
     /// 観測した値のうち、モデルが許すどの結果とも一致しない項目。

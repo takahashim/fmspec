@@ -12,7 +12,7 @@ module Fmspec
   #
   # command と observe のブロックは実装を操作する普通の Ruby で、仕様の記号式とは別のものである。
   class Binding
-    Handler = Struct.new(:name, :callable, :source)
+    Handler = Struct.new(:name, :callable, :source, :inject)
 
     attr_reader :model, :commands, :observers
 
@@ -48,10 +48,15 @@ module Fmspec
     # 操作のハンドラ。ブロックは実装のコンテキストと、操作の引数（キーワード）を受け取る。
     # 操作が出力を宣言していれば、ブロックの戻り値を仕様の出力と比べる。
     # `command :cancel, method: :refund` は、コンテキストの refund を引数付きで呼ぶ。
-    def command(name, method: nil, &block)
+    #
+    # `inject:` は障害注入である（仕様書 §12.3）。名前を挙げた内部選択は、実装が決めるのではなく、
+    # テストが値を選んでブロックにキーワードで渡す。ブロックは、その値のとおりに振る舞うよう
+    # fake や注入点に指示してから、実装を呼ぶ。
+    def command(name, method: nil, inject: [], &block)
       register(@commands, name, "command", method, block) do |m|
         ->(context, **args) { args.empty? ? context.public_send(m) : context.public_send(m, **args) }
       end
+      @commands[name.to_sym].inject = Array(inject).map(&:to_sym).freeze
     end
 
     # 状態変数の観測。ブロックは実装のコンテキストを受け取り、仕様上の値を返す。
@@ -71,7 +76,7 @@ module Fmspec
 
       location = caller_locations(2, 1)&.first
       source = block ? block.source_location&.join(":") : location && "#{location.path}:#{location.lineno}"
-      table[name] = Handler.new(name, block || yield(method.to_sym), source)
+      table[name] = Handler.new(name, block || yield(method.to_sym), source, [].freeze)
     end
 
     # 登録を、実行の前に仕様と照合する。
@@ -95,9 +100,14 @@ module Fmspec
 
     # command のブロックのキーワード引数が、操作の公開引数と合うことを確かめる。
     def check_keywords(handler, action)
+      choices = action["choices"].map { |c| c["name"].to_sym }
+      unknown = handler.inject - choices
+      unless unknown.empty?
+        raise BuildError, "command #{handler.name} の inject に、操作にない内部選択があります: #{unknown.join(', ')}"
+      end
       return unless handler.callable.is_a?(Proc) && !handler.callable.lambda?
 
-      params = action["params"].map { |p| p["name"].to_sym }
+      params = action["params"].map { |p| p["name"].to_sym } + handler.inject
       kinds = handler.callable.parameters
       return if kinds.any? { |kind, _| kind == :keyrest }
 
@@ -107,7 +117,7 @@ module Fmspec
       return if unexpected.empty? && unhandled.empty?
 
       raise BuildError, "command #{handler.name} のブロックのキーワード引数（#{keywords.join(', ')}）が、" \
-                        "操作の引数（#{params.join(', ')}）と合いません"
+                        "操作の引数と注入する選択（#{params.join(', ')}）と合いません"
     end
   end
 end

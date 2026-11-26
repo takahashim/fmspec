@@ -15,7 +15,8 @@ module Fmspec
   #
   # 実装に対する有限回のテストの成功であり、形式証明ではない。モデル検査の :verified とは別のものである。
   class TestResult
-    # 実行した1ステップ。output と observation は、実装から得た Ruby の値。
+    # 実行した1ステップ。args は、公開引数と、注入した内部選択の値。
+    # output と observation は、実装から得た Ruby の値。
     Step = Struct.new(:action, :args, :output, :observation)
 
     STATUSES = %i[passed conformance_failure execution_error setup_error model_error model_violation inconclusive].freeze
@@ -163,6 +164,11 @@ module Fmspec
       @native = native
       @binding = binding
       @options = options
+      # 操作ごとの、列挙型の引数と内部選択の名前。command には、ラベルを Symbol で渡す。
+      @enum_args = model.to_ir["actions"].to_h do |action|
+        bindings = action["params"] + action["choices"]
+        [action["name"].to_sym, bindings.select { |b| b["type"].key?("enum") }.map { |b| b["name"].to_sym }]
+      end
     end
 
     # `seed` で入力を選びながら、最大 `max_steps` ステップ実行する。
@@ -172,7 +178,7 @@ module Fmspec
 
         answer = ask(session.next_input)
         case answer["status"]
-        when "input" then [answer["action"].to_sym, answer["args"].transform_keys(&:to_sym)]
+        when "input" then normalize(answer["action"], answer["args"].merge(answer["choices"]))
         when "end" then nil
         else throw :finished, outcome(answer["status"].to_sym, steps, answer)
         end
@@ -185,7 +191,8 @@ module Fmspec
         input = inputs[steps.length]
         next nil unless input
 
-        answer = ask(session.check_input(JSON.generate("action" => input[0], "args" => input[1])))
+        input = normalize(*input)
+        answer = ask(session.check_input(JSON.generate(wire_input(*input))))
         case answer["status"]
         when "valid" then input
         when "invalid" then throw :finished, outcome(:invalid, steps, answer)
@@ -195,6 +202,13 @@ module Fmspec
     end
 
     private
+
+    # 入力を [操作名, キーワード引数] にそろえる。列挙型の値は Symbol にする。
+    def normalize(action, args)
+      action = action.to_sym
+      enums = @enum_args.fetch(action) { raise ArgumentError, "未定義の操作 #{action}" }
+      [action, (args || {}).to_h { |name, value| [name.to_sym, enums.include?(name.to_sym) ? value.to_sym : value] }]
+    end
 
     def run(seed, &next_input)
       context = begin
@@ -219,7 +233,8 @@ module Fmspec
     end
 
     def drive(context, seed)
-      options = @options.merge("seed" => seed, "observe" => @binding.observers.keys.map(&:to_s))
+      inject = @binding.commands.reject { |_, h| h.inject.empty? }.to_h { |name, h| [name.to_s, h.inject.map(&:to_s)] }
+      options = @options.merge("seed" => seed, "observe" => @binding.observers.keys.map(&:to_s), "inject" => inject)
       session = Native::Session.start(@native, JSON.generate(options))
       raise ArgumentError, JSON.parse(session)["message"] if session.is_a?(String)
 
@@ -239,7 +254,7 @@ module Fmspec
         steps << TestResult::Step.new(action, args, output, nil)
         observation = observe(context, steps)
         steps.last.observation = observation
-        report = { "action" => action, "args" => args, "output" => wire_value(output), "observation" => wire(observation) }
+        report = wire_input(action, args).merge("output" => wire_value(output), "observation" => wire(observation))
         answer = ask(session.observe(JSON.generate(report)))
         return outcome(answer["status"].to_sym, steps, answer) unless answer["status"] == "continue"
       end
@@ -262,6 +277,14 @@ module Fmspec
       raise ArgumentError, answer["message"] if answer["status"] == "usage_error"
 
       answer
+    end
+
+    # 入力を、公開引数（args）と注入する選択（choices）に分ける。
+    def wire_input(action, args)
+      injected = @binding.commands.fetch(action).inject
+      choices, params = args.partition { |name, _| injected.include?(name) }.map(&:to_h)
+      { "action" => action, "args" => params.transform_values { |v| wire_value(v) },
+        "choices" => choices.transform_values { |v| wire_value(v) } }
     end
 
     def wire(observation) = observation.to_h { |name, value| [name.to_s, wire_value(value)] }

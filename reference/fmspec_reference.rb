@@ -468,28 +468,35 @@ module FmspecReference
 
     def action_named(name) = @actions.find { |a| a["name"] == name }
 
-    # 状態で有効な公開入力を、[操作名, 公開引数] の配列で返す。
-    def enabled_inputs(state, cond)
+    # 遷移の入力。[操作名, 公開引数, 注入する選択の値]。
+    # `injected` は、操作名から、注入する内部選択の添字の配列への Hash。
+    def input_of(action, transition, injected)
+      [action["name"], transition["params"], (injected[action["name"]] || []).map { |i| transition["choices"][i] }]
+    end
+
+    # 状態で有効な入力。
+    def enabled_inputs(state, cond, injected = {})
       @actions.flat_map do |action|
         next [] unless cond[:actions].include?(action["name"])
 
-        transitions(action, state).map { |t| [action["name"], t["params"]] }.uniq
+        transitions(action, state).map { |t| input_of(action, t, injected) }.uniq
       end
     end
 
-    # 全候補で有効な公開入力。
-    def common_inputs(candidates, cond)
-      candidates.map { |state| enabled_inputs(state, cond) }.reduce { |kept, inputs| kept & inputs } || []
+    # 全候補で有効な入力。
+    def common_inputs(candidates, cond, injected = {})
+      candidates.map { |state| enabled_inputs(state, cond, injected) }.reduce { |kept, inputs| kept & inputs } || []
     end
 
     # 実装の応答で候補集合を更新する。
     # Cnext = { t | exists s in C, k, r: T(s, (a, k, r), t) and output_matches(r, y) and obs(t) = x }
+    # `input` は input_of の形で、注入した選択の値と一致する遷移だけを考える。
     # `observed` は観測する状態変数の添字、`seen` はその値。出力を宣言しない操作では、戻り値を比べない。
-    def next_candidates(candidates, name, params, output, observed, seen)
-      action = action_named(name)
+    def next_candidates(candidates, input, output, observed, seen, injected = {})
+      action = action_named(input[0])
       candidates.flat_map do |state|
         transitions(action, state).filter_map do |t|
-          next unless t["params"] == params
+          next unless input_of(action, t, injected) == input
           next unless action["output"].nil? || t["output"] == output
           next unless observed.map { |i| t["state"][i] } == seen
 

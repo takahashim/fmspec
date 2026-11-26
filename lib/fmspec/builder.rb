@@ -64,6 +64,14 @@ module Fmspec
       nil
     end
 
+    # Ghost State（仕様書 §12.3）。履歴を記録する有限の補助状態で、モデルの上では普通の状態変数である。
+    # 実装との照合では、実際の外部イベント（fake が記録した呼び出しなど）から観測する。
+    def ghost(name, type, initial:)
+      state(name, type, initial: initial)
+      @states.last[:ghost] = true
+      nil
+    end
+
     # 定数。記号的な状態から、状態変数と同じように名前で参照できる。
     def constant(name, value)
       claim(name, "定数")
@@ -126,7 +134,7 @@ module Fmspec
     end
 
     def build
-      Model.new(@name.to_sym, to_ir)
+      Model.new(@name.to_sym, to_ir, ghosts: @states.select { |s| s[:ghost] }.map { |s| s[:name] })
     end
 
     def declared_enums = @enums.values
@@ -209,6 +217,9 @@ module Fmspec
       action["output"] = { "type" => output[1].to_ir, "expr" => output[0].node } if output
       [action, contracts(output)]
     end
+
+    # 列挙型。仕様の定義の `enum` と同じで、宣言済みの型を返す。
+    def enum(name, *labels) = @model.enum(name, *labels)
 
     # 遷移の有効性。複数書くと、すべてが真のときに有効になる。
     def guard(condition)

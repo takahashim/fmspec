@@ -120,7 +120,7 @@ class SessionTest < Minitest::Test
     s = session(workflow(ping: true, reveal: true))
     assert_equal({ "status" => "continue", "candidates" => 1, "matched" => 0 },
                  ask(s.initial('{"started": false, "shown": false}')))
-    assert_equal({ "status" => "input", "action" => "start", "args" => {} }, ask(s.next_input))
+    assert_equal({ "status" => "input", "action" => "start", "args" => {}, "choices" => {} }, ask(s.next_input))
     assert_equal 2, observe(s, "start", started: true)["candidates"]
     assert_equal %w[a b], phases(s)
     # 候補を任意に1つへ絞らない。共通の操作のあとも、両方が残る。
@@ -134,6 +134,27 @@ class SessionTest < Minitest::Test
     assert_equal({ "status" => "continue", "candidates" => 1, "matched" => 3 }, observe(s, "reveal", started: true, shown: true))
     assert_equal %w[a], phases(s)
     assert_equal "valid", ask(s.check_input('{"action": "approve", "args": {}}'))["status"]
+  end
+
+  # 障害注入。内部選択をテストが決めると、その値と一致する遷移だけが候補になる（仕様書 §12.2）。
+  def test_an_injected_choice_constrains_the_candidates
+    s = session(workflow, "inject" => { "start" => ["to_a"] })
+    s.initial('{"started": false, "shown": false}')
+    answer = ask(s.next_input)
+    assert_equal ["input", "start", {}], answer.values_at("status", "action", "args")
+    assert_includes [true, false], answer["choices"]["to_a"]
+    # 注入する選択の値は、入力の一部として渡す。
+    assert_equal "usage_error", ask(s.check_input('{"action": "start", "args": {}}'))["status"]
+    assert_equal "valid", ask(s.check_input('{"action": "start", "args": {}, "choices": {"to_a": false}}'))["status"]
+    report = { "action" => "start", "args" => {}, "choices" => { "to_a" => false },
+               "observation" => { "started" => true, "shown" => false } }
+    assert_equal 1, ask(s.observe(JSON.generate(report)))["candidates"]
+    assert_equal %w[b], phases(s)
+    # 候補が1つになったので、B でだけ有効な cancel が選べる。
+    assert_equal "valid", ask(s.check_input('{"action": "cancel", "args": {}}'))["status"]
+    native = Fmspec::Native::Model.load(workflow.to_json)
+    bad = Fmspec::Native::Session.start(native, '{"inject": {"start": ["missing"]}}')
+    assert_match(/内部選択 "missing" はありません/, ask(bad)["message"])
   end
 
   def test_an_empty_candidate_set_reports_what_the_model_allows
@@ -230,6 +251,7 @@ class SessionTest < Minitest::Test
   def test_candidate_sets_agree_with_the_reference_implementation
     compared = 0
     kept_several = 0
+    injections = 0
     200.times do |n|
       seed = 9_000_000 + n
       rng = Random.new(seed)
@@ -241,41 +263,51 @@ class SessionTest < Minitest::Test
       names = ir["states"].map { |s| s["name"] }
       observed = (0...names.length).select { rng.rand < 0.5 }
       project = ->(state) { observed.to_h { |i| [names[i], reference.json_value(state[i])] } }
+      # 内部選択の一部を、テストが決める（障害注入）。
+      injected = ir["actions"].to_h { |a| [a["name"], (0...(a["choices"] || []).length).select { rng.rand < 0.4 }] }
+                              .reject { |_, indices| indices.empty? }
+      inject = injected.to_h { |name, indices| [name, indices.map { |i| reference.action_named(name)["choices"][i]["name"] }] }
       native = Fmspec::Native::Model.load(JSON.generate(ir))
-      session = Fmspec::Native::Session.start(native, JSON.generate("seed" => seed, "observe" => observed.map { |i| names[i] }))
+      session = Fmspec::Native::Session.start(
+        native, JSON.generate("seed" => seed, "observe" => observed.map { |i| names[i] }, "inject" => inject)
+      )
       truth = reference.initial
       candidates = [truth]
       assert_equal "continue", ask(session.initial(JSON.generate(project.(truth))))["status"]
 
       6.times do
-        context = -> { "seed #{seed}\n#{JSON.generate(ir)}\ncandidates: #{candidates.inspect}" }
+        context = -> { "seed #{seed}\n#{JSON.generate(ir)}\ninject: #{inject}\ncandidates: #{candidates.inspect}" }
         expected_inputs = begin
-          reference.common_inputs(candidates, cond)
+          reference.common_inputs(candidates, cond, injected)
         rescue FmspecReference::StepError
           assert_equal "model_error", ask(session.next_input)["status"], context
           break
         end
         answer = ask(session.next_input)
         if expected_inputs.empty?
-          any = candidates.any? { |s| !reference.enabled_inputs(s, cond).empty? }
+          any = candidates.any? { |s| !reference.enabled_inputs(s, cond, injected).empty? }
           assert_equal (any ? "inconclusive" : "end"), answer["status"], context
           break
         end
         assert_equal "input", answer["status"], context
         action = reference.action_named(answer["action"])
-        params = (action["params"] || []).map do |p|
-          v = answer["args"].fetch(p["name"])
-          p["type"].key?("enum") ? FmspecReference::EnumValue.new(p["type"]["enum"], v) : v
+        value = ->(binding, v) { binding["type"].key?("enum") ? FmspecReference::EnumValue.new(binding["type"]["enum"], v) : v }
+        params = (action["params"] || []).map { |p| value.(p, answer["args"].fetch(p["name"])) }
+        chosen_values = (injected[action["name"]] || []).map do |i|
+          choice = action["choices"][i]
+          value.(choice, answer["choices"].fetch(choice["name"]))
         end
-        assert_includes expected_inputs, [action["name"], params], context
+        input = [action["name"], params, chosen_values]
+        assert_includes expected_inputs, input, context
+        injections += 1 unless chosen_values.empty?
 
-        # 真の状態から、モデルが許す遷移を1つ選んで、実装の応答とする。
-        chosen = reference.transitions(action, truth).select { |t| t["params"] == params }.sample(random: rng)
+        # 真の状態から、入力と一致するモデルの遷移を1つ選んで、実装の応答とする。
+        chosen = reference.transitions(action, truth).select { |t| reference.input_of(action, t, injected) == input }
+                          .sample(random: rng)
         truth = chosen["state"]
-        candidates = reference.next_candidates(candidates, action["name"], params, chosen["output"], observed,
-                                               observed.map { |i| truth[i] })
-        report = { "action" => action["name"], "args" => answer["args"], "output" => reference.json_value(chosen["output"]),
-                   "observation" => project.(truth) }
+        candidates = reference.next_candidates(candidates, input, chosen["output"], observed, observed.map { |i| truth[i] }, injected)
+        report = { "action" => action["name"], "args" => answer["args"], "choices" => answer["choices"],
+                   "output" => reference.json_value(chosen["output"]), "observation" => project.(truth) }
         observed_answer = ask(session.observe(JSON.generate(report)))
         assert_equal ["continue", candidates.length], observed_answer.values_at("status", "candidates"), context
         assert_equal reference.sort_states(candidates).map { |s| reference.json_state(s) }, ask(session.candidates), context
@@ -284,6 +316,7 @@ class SessionTest < Minitest::Test
       end
     end
     assert_operator compared, :>, 400
-    assert_operator kept_several, :>, 100, "複数の候補が残る場合を、ほとんど試していない"
+    assert_operator kept_several, :>, 60, "複数の候補が残る場合を、ほとんど試していない"
+    assert_operator injections, :>, 60, "内部選択を注入する場合を、ほとんど試していない"
   end
 end

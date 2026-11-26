@@ -135,6 +135,20 @@ module Fmspec
       Expr.new({ "any" => operands.map { |o| lift(o).expect(:bool, "any").node } }, :bool)
     end
 
+    # 小さいほう。`min(s.charges + 1, 2)` は、2で飽和するカウンタの増分になる。
+    def min(left, right)
+      a = lift(left).expect(:int, "min")
+      b = lift(right).expect(:int, "min")
+      ite(a <= b, a, b)
+    end
+
+    # 大きいほう。
+    def max(left, right)
+      a = lift(left).expect(:int, "max")
+      b = lift(right).expect(:int, "max")
+      ite(a >= b, a, b)
+    end
+
     def implies(premise, conclusion)
       lift(premise).expect(:bool, "implies").implies(conclusion)
     end

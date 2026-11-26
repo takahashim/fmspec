@@ -4,10 +4,13 @@ module Fmspec
   # 仕様。`Fmspec.define` が作る。型付きIRを持ち、検査はエンジン（native extension）が行う。
   class Model
     attr_reader :name
+    # Ghost State として宣言した状態変数の名前。
+    attr_reader :ghosts
 
-    def initialize(name, ir)
+    def initialize(name, ir, ghosts: [])
       @name = name
       @ir = Model.deep_freeze(ir)
+      @ghosts = ghosts.dup.freeze
       @native = nil
     end
 
@@ -82,7 +85,7 @@ module Fmspec
       options["max_candidates"] = max_candidates if max_candidates
       run = TestRun.new(self, native, binding, cases: cases, steps: steps, seed: seed || Random.new_seed % (2**64),
                                                shrink: shrink, shrink_runs: shrink_runs, options: options)
-      replay ? run.replay(replay.map { |action, args| [action.to_sym, (args || {}).transform_keys(&:to_sym)] }) : run.run
+      replay ? run.replay(replay) : run.run
     end
 
     def inspect = "#<Fmspec::Model #{name}>"

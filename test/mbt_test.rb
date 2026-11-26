@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "fmspec"
+require "timeout"
 
 # 実装との適合性検査（仕様書 §11、§17.2）。意図的にバグを入れた実装で、検出と縮小を確かめる。
 class MbtTest < Minitest::Test
@@ -196,6 +197,111 @@ class MbtTest < Minitest::Test
     assert_match(/expected return value: "forbidden"\n  observed return value: :success/, result.to_s)
   end
 
+  # 外部の決済APIの応答を内部選択として書いた仕様。応答はテストが決めて、fake に指示する（仕様書 §12.3）。
+  def payments
+    @payments ||= Fmspec.define(:payments) do
+      enum(:response, :ok, :declined, :timeout_charged)
+      state :paid, bool, initial: false
+      # 決済の回数。0、1、2以上の3値に飽和させて、二重決済を見つける。
+      ghost :charges, int(0..2), initial: 0
+
+      action :pay do |s|
+        guard s.paid.not_
+        response = choose(:response, enum(:response, :ok, :declined, :timeout_charged))
+        charged = response.ne(:declined)
+        # 同じ注文への2回目の請求は、冪等キーによって新しい決済にならない。
+        update paid: response.eq(:ok), charges: ite(charged, max(s.charges, 1), s.charges)
+      end
+
+      invariant(:no_double_charge) { |s| s.charges <= 1 }
+    end
+  end
+
+  # 決済APIの fake。次の応答を指示でき、決済の記録を持つ。
+  class FakeGateway
+    attr_accessor :next_response
+    attr_reader :charges
+
+    def initialize
+      @charges = []
+      @keys = {}
+    end
+
+    def charge(key)
+      return :declined if next_response == :declined
+
+      @charges << key unless key && @keys[key]
+      @keys[key] = true if key
+      next_response == :ok ? :ok : (raise Timeout::Error)
+    end
+  end
+
+  class Shop
+    attr_reader :gateway, :paid
+
+    def initialize(idempotent:)
+      @gateway = FakeGateway.new
+      @paid = false
+      @idempotent = idempotent
+    end
+
+    def pay
+      @paid = gateway.charge(@idempotent ? "order-1" : nil) == :ok
+    rescue Timeout::Error
+      @paid = false
+    end
+  end
+
+  def payments_binding(idempotent:, seen: nil)
+    payments.bind do
+      setup { Shop.new(idempotent: idempotent) }
+      command(:pay, inject: [:response]) do |shop, response:|
+        seen << response if seen
+        shop.gateway.next_response = response
+        shop.pay
+      end
+      observe(:paid, method: :paid)
+      # Ghost State は、fake が記録した実際の決済から観測する。期待した回数を代入しない。
+      observe(:charges) { |shop| [shop.gateway.charges.length, 2].min }
+    end
+  end
+
+  def test_fault_injection_finds_a_double_charge
+    assert_equal [:charges], payments.ghosts
+    assert_equal :verified, payments.check.status
+    seen = []
+    payments.test(payments_binding(idempotent: true, seen: seen), cases: 100, steps: 6, seed: 9).assert_passed!
+    # テストが、決済APIの応答をすべての種類で注入している。
+    assert_equal %i[declined ok timeout_charged], seen.uniq.sort
+
+    # 冪等キーを付けない実装は、応答を失った決済のあとの再試行で、二重に決済する。
+    result = payments.test(payments_binding(idempotent: false), cases: 100, steps: 6, seed: 9)
+    assert_equal [:conformance_failure, ["charges"]], [result.status, result.detail["mismatch"]]
+    assert_equal [:pay, :pay], result.inputs.map(&:first)
+    assert_equal :timeout_charged, result.inputs[0][1][:response]
+    refute_equal :declined, result.inputs[1][1][:response]
+    assert_match(/1\. pay\(response: :timeout_charged\)\n/, result.to_s)
+    assert_match(/expected charges: 1\n  observed charges: 2/, result.to_s)
+    # 注入した値ごと、操作列を再実行できる。
+    replayed = payments.test(payments_binding(idempotent: false), replay: result.inputs)
+    assert_equal [:conformance_failure, result.inputs], [replayed.status, replayed.inputs]
+    assert_equal :passed, payments.test(payments_binding(idempotent: true), replay: result.inputs).status
+    # JSON に保存した操作列（キーと列挙型の値が文字列）でも再実行できる。
+    saved = JSON.parse(JSON.generate(result.inputs))
+    assert_equal :conformance_failure, payments.test(payments_binding(idempotent: false), replay: saved).status
+  end
+
+  def test_injected_choices_are_checked_against_the_specification
+    model = payments
+    error = assert_raises(Fmspec::BuildError) do
+      model.bind do
+        setup { Object.new }
+        command(:pay, inject: [:outcome]) { |_c, outcome:| outcome }
+      end
+    end
+    assert_match(/command pay の inject に、操作にない内部選択があります: outcome/, error.message)
+  end
+
   def test_values_outside_the_specification_do_not_match
     model = tickets
     weird = model.bind do
@@ -232,7 +338,7 @@ class MbtTest < Minitest::Test
       command(:cancel) { |_c| nil }
       observe(:total) { |_c| 0 }
     end
-    rejected.call(/command purchase のブロックのキーワード引数（count）が、操作の引数（quantity）と合いません/) do
+    rejected.call(/command purchase のブロックのキーワード引数（count）が、操作の引数と注入する選択（quantity）と合いません/) do
       setup { Object.new }
       command(:purchase) { |_c, count:| count }
       command(:cancel) { |_c| nil }

@@ -10,6 +10,10 @@
 //! 空集合になれば不適合である。候補を任意に1つへ絞ることはしない。
 //! 次の入力は、全候補で有効な公開入力から選ぶ。
 //!
+//! 障害注入では、テストハーネスが一部の内部選択の値を決めて実装（の fake）に指示する。
+//! その内部選択を**注入する選択**と呼び、公開引数と同じく入力の一部として扱う。
+//! 入力を選ぶときも、候補を更新するときも、注入した値と一致する遷移だけを考える（仕様書 §12.2）。
+//!
 //! 後続状態は検証済みの遷移列挙器で求めるが、候補集合の更新そのものは証明の対象外で、
 //! 境界ケース（仕様書 §17.2.1）と参照実装との比較で検査する。
 
@@ -100,6 +104,8 @@ pub struct Session {
     cond: Conditions,
     /// 観測する状態変数の添字。
     observed: Vec<usize>,
+    /// 操作ごとの、注入する選択。引数の列（公開引数に続けて内部選択）の添字で、昇順に並ぶ。
+    injected: Vec<Vec<usize>>,
     candidates: BTreeSet<Vec<i64>>,
     rng: SplitMix64,
     max_candidates: usize,
@@ -107,22 +113,42 @@ pub struct Session {
     matched: usize,
 }
 
-/// 公開入力。操作の添字と、公開引数の列。
+/// 入力。操作の添字と、公開引数に注入する選択の値を続けた列。
 type Input = (usize, Vec<i64>);
 
 /// 診断に含める「モデルが許す結果」の数の上限。
 const MAX_POSSIBLE: usize = 16;
 
 impl Session {
-    pub fn new(cond: Conditions, observed: Vec<usize>, seed: u64, max_candidates: usize) -> Session {
+    pub fn new(
+        cond: Conditions,
+        observed: Vec<usize>,
+        injected: Vec<Vec<usize>>,
+        seed: u64,
+        max_candidates: usize,
+    ) -> Session {
         Session {
             cond,
             observed,
+            injected,
             candidates: BTreeSet::new(),
             rng: SplitMix64::new(seed),
             max_candidates,
             matched: 0,
         }
+    }
+
+    /// 操作 `action` の、注入する選択の添字。
+    pub fn injected(&self, action: usize) -> &[usize] {
+        self.injected.get(action).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// 遷移の引数の列から、入力（公開引数と、注入する選択の値）を取り出す。
+    fn input_of(&self, model: &CheckedModel, action: usize, args: &[i64]) -> Vec<i64> {
+        let n = model.raw().actions[action].n_params.min(args.len());
+        let mut input = args[..n].to_vec();
+        input.extend(self.injected(action).iter().filter_map(|i| args.get(*i)));
+        input
     }
 
     pub fn candidates(&self) -> usize {
@@ -185,13 +211,12 @@ impl Session {
         Ok(all)
     }
 
-    /// 状態で有効な公開入力。操作の定義順、引数の辞書順に並ぶ。
+    /// 状態で有効な入力。操作の定義順に並び、同じ入力は1つにまとめる。
     fn inputs(&self, model: &CheckedModel, state: &[i64]) -> Result<Vec<Input>, ModelError> {
         let mut inputs: Vec<Input> = Vec::new();
         for (a, t) in self.transitions(model, state)? {
-            let n = model.raw().actions[a].n_params.min(t.args.len());
-            let input = (a, t.args[..n].to_vec());
-            if inputs.last() != Some(&input) {
+            let input = (a, self.input_of(model, a, &t.args));
+            if !inputs.contains(&input) {
                 inputs.push(input);
             }
         }
@@ -250,10 +275,9 @@ impl Session {
         output: SeenOutput,
         seen: &[Seen],
     ) -> Observed {
-        let Some(act) = model.raw().actions.get(action) else {
+        if action >= model.raw().actions.len() {
             return Observed::InvalidInput;
-        };
-        let n_params = act.n_params;
+        }
         let mut next: BTreeSet<Vec<i64>> = BTreeSet::new();
         let mut possible: BTreeSet<Outcome> = BTreeSet::new();
         let mut violation = None;
@@ -264,7 +288,7 @@ impl Session {
             };
             let mut enabled = false;
             for (a, t) in transitions {
-                if a != action || t.args.get(..n_params) != Some(params) {
+                if a != action || self.input_of(model, a, &t.args) != params {
                     continue;
                 }
                 enabled = true;
