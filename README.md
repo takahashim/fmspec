@@ -82,6 +82,7 @@ IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
 rake compile       # native extension をビルドして lib/fmspec に置く
 rake test          # Rustのテスト、参照実装のテスト、参照実装との比較テスト、Rubyのテスト、fmspec-railsのテスト
 rake verus         # 中核の証明と、証明が空虚でないことの検査
+rake verus:proof   # 中核の証明だけ（変異と assert(false) の検査を除く）
 rake lint          # rustfmt と clippy
 rake nupur:check   # Nupurの写しが、固定したコミットの内容と一致することの検査
 rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
@@ -101,7 +102,8 @@ GitHub Actions（`.github/workflows/ci.yml`）で、上の検査をすべて実�
 | `rust` | `rake lint`、`rake nupur:check`、Rustのテスト、参照実装のテスト、参照実装との比較テスト |
 | `ruby` | native extension のビルドと Rubyのテスト。Ruby 3.3 と 4.0 |
 | `rails` | `fmspec-rails` のテスト。PostgreSQL を立て、分離レベル別のテストも skip させない |
-| `verus` | `rake verus`。Verus は `rakelib/verus.rake` の `VERUS_VERSION` のリリースを取得する |
+| `verus` | `rake verus:proof`（変異の検査を除いた証明）。Verus は `rakelib/verus.rake` の `VERUS_VERSION` のリリースを取得する |
+| `verus-mutants` | `rake verus:mutants`（変異と `assert(false)`）。重いので、main への PR、毎日の定期実行、手動実行でだけ回す |
 | `nupur` | `rake nupur:upstream` と `rake nupur:lint`。Makiri の固定コミット（`rakelib/nupur.rake` の `NUPUR_COMMIT`）を取得する |
 
 rakelib は UTF-8 のファイルを読むので、手元でもロケールを UTF-8 にしておく（例：`LANG=C.UTF-8`）。

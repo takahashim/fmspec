@@ -8,6 +8,8 @@
 # - verus:contract  未検証コードから呼べる公開関数が、前提条件（requires）を持たない（仕様書 §3.1）。
 # - verus:mutants   検査を1つ壊した変異と、到達点に assert(false) を置いた変種が、証明に失敗する。
 #
+# `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
+#
 # Verus の実行ファイルは環境変数 VERUS で指定する（なければ PATH の verus）。
 # バージョンは VERUS_VERSION に固定する。更新は証明の再確認とあわせて行う。
 require "open3"
@@ -487,12 +489,18 @@ namespace :verus do
   end
 end
 
-desc "中核の証明を検証する（Verus #{VERUS_VERSION} が必要）"
-task verus: %w[verus:version verus:trusted verus:coverage verus:contract] do
-  ok, verified, errors, out = verus_run(VERUS_CRATE)
-  puts out.lines.grep(/verification results|^(error|warning)/)
-  abort "verus: 証明に失敗した\n#{out}" unless ok && errors&.zero?
-  abort "verus: 警告がある\n#{out}" if out.match?(/^warning/)
-  puts "verus: #{verified} 件を検証した"
-  Rake::Task["verus:mutants"].invoke
+namespace :verus do
+  # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行し、
+  # 変異の検査は main への PR と定期実行で行う（.github/workflows/ci.yml）。
+  desc "中核の証明だけを検証する（変異と assert(false) の検査を除く）"
+  task proof: %w[verus:version verus:trusted verus:coverage verus:contract] do
+    ok, verified, errors, out = verus_run(VERUS_CRATE)
+    puts out.lines.grep(/verification results|^(error|warning)/)
+    abort "verus: 証明に失敗した\n#{out}" unless ok && errors&.zero?
+    abort "verus: 警告がある\n#{out}" if out.match?(/^warning/)
+    puts "verus: #{verified} 件を検証した"
+  end
 end
+
+desc "中核の証明と、証明が空虚でないことの検査（Verus #{VERUS_VERSION} が必要）"
+task verus: %w[verus:proof verus:mutants]
