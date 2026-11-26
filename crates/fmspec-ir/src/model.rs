@@ -736,7 +736,13 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
             let path = &choice_paths[i][j];
             match f {
                 Fault::Lower => internal(path),
-                Fault::Eval(ErrKind::OutOfRange(_)) => reason(InvalidModel::Initial(j)),
+                Fault::Eval(ErrKind::OutOfRange(x)) => invalid(
+                    InvalidModel::Initial(j),
+                    format!(
+                        "{path}: 状態変数 {:?} の初期値 {x} が型の範囲外です",
+                        names.states.get(i).map(String::as_str).unwrap_or("?")
+                    ),
+                ),
                 Fault::Eval(k) => eval(path, k),
             }
         }

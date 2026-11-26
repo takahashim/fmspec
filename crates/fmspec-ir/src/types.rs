@@ -110,16 +110,16 @@ impl SType {
         (n <= MAX_KEYS).then_some(n)
     }
 
-    /// スロット数。
+    /// スロット数。入れ子が深く `usize` に収まらない型では飽和する（`MAX_WIDTH` の検査で拒否する）。
     pub fn width(&self, enums: &[EnumNames]) -> usize {
         match self {
             SType::Bool | SType::Int(_, _) | SType::Enum(_) => 1,
-            SType::Tuple(ts) => ts.iter().map(|t| t.width(enums)).sum(),
-            SType::Record(fs) => fs.iter().map(|(_, t)| t.width(enums)).sum(),
-            SType::Option(t) => 1 + t.width(enums),
+            SType::Tuple(ts) => ts.iter().fold(0usize, |n, t| n.saturating_add(t.width(enums))),
+            SType::Record(fs) => fs.iter().fold(0usize, |n, (_, t)| n.saturating_add(t.width(enums))),
+            SType::Option(t) => t.width(enums).saturating_add(1),
             SType::Set(t) => t.keys(enums).unwrap_or(0) as usize,
-            SType::Map(k, v) => k.keys(enums).unwrap_or(0) as usize * (1 + v.width(enums)),
-            SType::List(t, n) => 1 + n * t.width(enums),
+            SType::Map(k, v) => (k.keys(enums).unwrap_or(0) as usize).saturating_mul(v.width(enums).saturating_add(1)),
+            SType::List(t, n) => n.saturating_mul(t.width(enums)).saturating_add(1),
         }
     }
 
@@ -211,9 +211,9 @@ impl XType {
     pub fn width(&self, enums: &[EnumNames]) -> usize {
         match self {
             XType::Bool | XType::Int | XType::Enum(_) => 1,
-            XType::Tuple(ts) => ts.iter().map(|t| t.width(enums)).sum(),
-            XType::Record(fs) => fs.iter().map(|(_, t)| t.width(enums)).sum(),
-            XType::Option(t) => 1 + t.width(enums),
+            XType::Tuple(ts) => ts.iter().fold(0usize, |n, t| n.saturating_add(t.width(enums))),
+            XType::Record(fs) => fs.iter().fold(0usize, |n, (_, t)| n.saturating_add(t.width(enums))),
+            XType::Option(t) => t.width(enums).saturating_add(1),
             XType::Set(t) => SType::Set(t.clone()).width(enums),
             XType::Map(k, v) => SType::Map(k.clone(), v.clone()).width(enums),
             XType::List(t, n) => SType::List(t.clone(), *n).width(enums),

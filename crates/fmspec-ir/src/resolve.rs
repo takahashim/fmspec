@@ -387,8 +387,8 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 {
                     let ipath = format!("{path}.items[{i}]");
                     let pair = operands(item, &ipath, 2)?;
-                    let key = self.fitting(&pair[0], &format!("{ipath}[1]"), sc, k)?;
-                    let value = self.fitting(&pair[1], &format!("{ipath}[2]"), sc, val)?;
+                    let key = self.fitting(&pair[0], &format!("{ipath}[0]"), sc, k)?;
+                    let value = self.fitting(&pair[1], &format!("{ipath}[1]"), sc, val)?;
                     items.push(Item { key, value });
                 }
                 Ok((st.xtype(), TExpr::MapLit(f.stype(k), f.stype(val), items)))

@@ -32,14 +32,29 @@ fn codes(v: &Value, what: &str) -> Result<Vec<i64>, String> {
 pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
     let map = options(opts, &["max_states", "seen"])?;
     let cond = conditions(model, map)?;
-    let empty = json!({});
-    let seen = map.get("seen").unwrap_or(&empty);
+    let empty = serde_json::Map::new();
+    let seen = match map.get("seen") {
+        None | Some(Value::Null) => &empty,
+        Some(v) => v.as_object().ok_or("seen はオブジェクトです")?,
+    };
+    if let Some(key) = seen.keys().find(|k| !["states", "transitions"].contains(&k.as_str())) {
+        return Err(format!("seen の未知のキー {key:?}"));
+    }
+    let list = |key: &str| -> Result<&[Value], String> {
+        match seen.get(key) {
+            None | Some(Value::Null) => Ok(&[]),
+            Some(v) => v
+                .as_array()
+                .map(Vec::as_slice)
+                .ok_or_else(|| format!("seen の {key} は配列です")),
+        }
+    };
     let mut states: HashSet<Vec<i64>> = HashSet::new();
-    for s in seen.get("states").and_then(Value::as_array).into_iter().flatten() {
+    for s in list("states")? {
         states.insert(codes(s, "seen の状態")?);
     }
     let mut transitions: HashSet<(Vec<i64>, usize, Vec<i64>)> = HashSet::new();
-    for t in seen.get("transitions").and_then(Value::as_array).into_iter().flatten() {
+    for t in list("transitions")? {
         let parts = t
             .as_array()
             .filter(|p| p.len() == 3)

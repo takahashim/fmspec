@@ -33,6 +33,13 @@ fn error_text(e: &Value) -> String {
         }
         Some("type_mismatch") => "型の不一致".to_string(),
         Some("unbound") => "未束縛の参照".to_string(),
+        Some("division_by_zero") => "0による除算".to_string(),
+        Some("none") => "空の option の取り出し".to_string(),
+        Some("missing_key") => "map にないキーの参照".to_string(),
+        Some("index_out_of_range") => "list の範囲外の添字".to_string(),
+        Some("full") => "上限に達した list への追加".to_string(),
+        Some("empty") => "空の list からの取り出し".to_string(),
+        Some("not_in_domain") => "ドメインにない値".to_string(),
         _ => e.to_string(),
     }
 }

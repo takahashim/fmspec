@@ -69,6 +69,8 @@ struct Args {
     strategy: Option<String>,
     certificate_out: Option<String>,
     trace_out: Option<String>,
+    /// 指定されたオプションの名前（`--json` を除く）。コマンドが使わないものを拒否するために持つ。
+    flags: Vec<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
@@ -79,10 +81,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         strategy: None,
         certificate_out: None,
         trace_out: None,
+        flags: Vec::new(),
     };
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
+        if arg.starts_with("--") && arg != "--json" && !parsed.flags.iter().any(|f| f == arg) {
+            parsed.flags.push(arg.to_string());
+        }
         let mut value = || -> Result<String, String> {
             i += 1;
             args.get(i).cloned().ok_or_else(|| format!("{arg} には値が必要です"))
@@ -184,7 +190,24 @@ fn usage<T>(json: bool, message: impl Into<String>) -> Result<T, Run> {
     Err(failure(json, "usage_error", message.into()))
 }
 
+/// 検査条件のオプション。
+const CONDITION_FLAGS: [&str; 4] = ["--actions", "--invariants", "--contracts", "--deadlock"];
+
+/// コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
+fn accepts(a: &Args, command: &str, allowed: &[&str], conditions: bool) -> Result<(), Run> {
+    for flag in &a.flags {
+        if !allowed.contains(&flag.as_str()) && !(conditions && CONDITION_FLAGS.contains(&flag.as_str())) {
+            return usage(a.json, format!("{command} は {flag} を受け付けません"));
+        }
+    }
+    Ok(())
+}
+
+/// 判定ゲートが受理したトレース（違反か評価エラー）だけを書き出す。拒否されたトレースは書き出さない。
 fn save_trace(io: &Io, a: &Args, body: &Value) -> Result<(), Run> {
+    if !matches!(body["status"].as_str(), Some("violated" | "error")) {
+        return Ok(());
+    }
     if let (Some(out), Some(trace)) = (&a.trace_out, body.get("trace")) {
         write_file(io, out, trace, a.json)?;
     }
@@ -192,6 +215,7 @@ fn save_trace(io: &Io, a: &Args, body: &Value) -> Result<(), Run> {
 }
 
 fn cmd_validate(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(a, "validate", &[], false)?;
     let [path] = a.positional.as_slice() else {
         return usage(a.json, "validate にはモデルのファイルを1つ指定します");
     };
@@ -200,6 +224,18 @@ fn cmd_validate(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_check(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(
+        a,
+        "check",
+        &[
+            "--strategy",
+            "--max-states",
+            "--max-check-cost",
+            "--certificate-out",
+            "--trace-out",
+        ],
+        true,
+    )?;
     let [path] = a.positional.as_slice() else {
         return usage(a.json, "check にはモデルのファイルを1つ指定します");
     };
@@ -221,6 +257,12 @@ fn cmd_check(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_simulate(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(
+        a,
+        "simulate",
+        &["--traces", "--max-steps", "--seed", "--trace-out"],
+        true,
+    )?;
     let [path] = a.positional.as_slice() else {
         return usage(a.json, "simulate にはモデルのファイルを1つ指定します");
     };
@@ -232,6 +274,7 @@ fn cmd_simulate(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_verify_certificate(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(a, "verify-certificate", &["--max-check-cost"], true)?;
     let [model_path, cert_path] = a.positional.as_slice() else {
         return usage(a.json, "verify-certificate にはモデルと証明書のファイルを指定します");
     };
@@ -243,6 +286,7 @@ fn cmd_verify_certificate(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_replay(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(a, "replay", &[], false)?;
     let [model_path, trace_path] = a.positional.as_slice() else {
         return usage(a.json, "replay にはモデルとトレースのファイルを指定します");
     };
@@ -252,6 +296,7 @@ fn cmd_replay(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(a, "shrink", &["--trace-out"], false)?;
     let [model_path, trace_path] = a.positional.as_slice() else {
         return usage(a.json, "shrink にはモデルとトレースのファイルを指定します");
     };

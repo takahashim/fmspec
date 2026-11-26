@@ -342,11 +342,14 @@ impl Session {
                 continue;
             };
             for t in ts {
-                if possible.len() < MAX_POSSIBLE && self.input_of(model, action, &t.args) == params {
+                if self.input_of(model, action, &t.args) == params {
                     possible.insert(Outcome {
                         output: t.output,
                         state: t.state,
                     });
+                    if possible.len() > MAX_POSSIBLE {
+                        possible.pop_last();
+                    }
                 }
             }
         }
