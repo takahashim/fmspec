@@ -195,7 +195,16 @@ VERUS_MUTANTS = [
   ["lowering.rs", "out.push(not(x));", "out.push(x);", "否定を落とす"],
   ["lowering.rs", "out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);", "out.push(bind(blk, Expr::Or(Box::new(p), Box::new(q)))?);", "含意を論理和にする"],
   ["lowering.rs", "if all { Join::RawAnd } else { Join::RawOr }", "if all { Join::RawOr } else { Join::RawAnd }", "allとanyのたたみ方を入れ替える"],
-  ["lowering.rs", "let out = ite_slots(&c, &xs, &ys, d)?;", "let out = ite_slots(&c, &ys, &xs, d)?;", "条件式の枝を入れ替える"]
+  ["lowering.rs", "let out = ite_slots(&c, &xs, &ys, d)?;", "let out = ite_slots(&c, &ys, &xs, d)?;", "条件式の枝を入れ替える"],
+  ["quant.rs", "out.push(bin(BinOp::Add, copy_expr(r), ci(*lo)));", "out.push(bin(BinOp::Sub, copy_expr(r), ci(*lo)));", "整数の番号に下端を足さない"],
+  ["quant.rs", "acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, k)), acc);", "acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, 0)), acc);", "列挙型の番号をラベルに対応させない"],
+  ["quant.rs", "payload.push(ite(eq(copy_expr(r), ci(0)), copy_expr(&ds[j]), copy_expr(&us[j])));", "payload.push(ite(eq(copy_expr(r), ci(0)), copy_expr(&us[j]), copy_expr(&ds[j])));", "Optionの番号0で中身を作る"],
+  ["quant.rs", "let pre = unrank_seq(_parent, ts, n - 1, &q, enums)?;", "let pre = unrank_seq(_parent, ts, n - 1, &m, enums)?;", "組の先頭の番号に剰余を使う"],
+  ["quant.rs", "let x = ite(c, a, b);", "let x = ite(c, b, a);", "印を選ぶ木の枝を入れ替える"],
+  ["lowering.rs", "Expr::Implies(Box::new(guard), Box::new(e))", "Expr::And(Box::new(guard), Box::new(e))", "forallのガードを論理積にする"],
+  ["lowering.rs", "let at = j.checked_mul(stride)?;", "let at = j.checked_mul(w)?;", "Mapの有無の位置を値の幅で数える"],
+  ["lowering.rs", "let hi = n as i64 - 1;", "let hi = n as i64 - 2;", "量化で最後の値をたどらない"],
+  ["lowering.rs", "(copy_stype(t), cb(true), n as usize)", "(copy_stype(t), cb(false), n as usize)", "型の全体をたどる量化で値を選ばない"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -246,7 +255,11 @@ VERUS_CANARIES = [
   ["lowering.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
   ["lowering.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
-  ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"]
+  ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
+  ["lowering.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
+  ["lowering.rs", "            lemma_guard_pick(g, fs, bits, env, l);", "lemma_over_map の値の場合"],
+  ["lowering.rs", "        lemma_scalar_bool(eval_src(body, se, sls2), eval_l(b, env, lx), se.enums);", "lemma_quant_step の選ぶ位置"],
+  ["quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);", "lemma_qscan の帰納"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

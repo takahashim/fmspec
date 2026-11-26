@@ -722,98 +722,6 @@ fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Op
     Some(acc)
 }
 
-/// スロットの中核の型を `out` に追加する。
-pub fn slot_types(t: &SType, enums: &Vec<i64>, out: &mut Vec<Type>)
-    decreases t, 1nat,
-{
-    match t {
-        SType::Bool => out.push(Type::Bool),
-        SType::Int(lo, hi) => out.push(Type::Int(*lo, *hi)),
-        SType::Enum(id) => out.push(Type::Enum(*id)),
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            slot_types_all(t, ts, enums, out)
-        },
-        SType::Record(_, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            slot_types_all(t, ts, enums, out)
-        },
-        SType::Option(x) => {
-            out.push(Type::Bool);
-            slot_types(x, enums, out);
-        },
-        SType::Set(e) => {
-            let n = keys_or_zero_exec(e, enums);
-            let mut i = 0;
-            while i < n
-                decreases n - i,
-            {
-                out.push(Type::Bool);
-                i += 1;
-            }
-        },
-        SType::Map(k, v) => {
-            let n = keys_or_zero_exec(k, enums);
-            let mut i = 0;
-            proof {
-                assert(decreases_to!(*t => **v));
-            }
-            while i < n
-                invariant
-                    decreases_to!(*t => **v),
-                decreases n - i,
-            {
-                out.push(Type::Bool);
-                slot_types(v, enums, out);
-                i += 1;
-            }
-        },
-        SType::List(e, n) => {
-            let top: i64 = if *n <= 0x7fff_ffffusize {
-                *n as i64
-            } else {
-                0x7fff_ffff
-            };
-            out.push(Type::Int(0, top));
-            let mut i = 0;
-            proof {
-                assert(decreases_to!(*t => **e));
-            }
-            while i < *n
-                invariant
-                    decreases_to!(*t => **e),
-                decreases *n - i,
-            {
-                slot_types(e, enums, out);
-                i += 1;
-            }
-        },
-    }
-}
-
-fn slot_types_all(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>, out: &mut Vec<Type>)
-    requires
-        decreases_to!(*_parent => *ts),
-    decreases _parent, 0nat,
-{
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-        }
-        slot_types(&ts[i], enums, out);
-        i += 1;
-    }
-}
-
 /// 中核の型の既定値。Boolは偽、Intは範囲の最小値、Enumは最初のラベル。
 pub fn default_value(t: Type) -> (r: Value) {
     match t {
@@ -1039,31 +947,6 @@ fn defaults_all(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Vec<E
     }
     proof {
         assert(xs.take(ts@.len() as int) =~= xs);
-    }
-    out
-}
-
-/// 量化で束縛する型の、スロットごとの範囲。
-pub fn quant_ranges(t: &SType, enums: &Vec<i64>) -> (r: Vec<(Type, i64, i64)>) {
-    let mut tys: Vec<Type> = Vec::new();
-    slot_types(t, enums, &mut tys);
-    let mut out: Vec<(Type, i64, i64)> = Vec::new();
-    let mut i = 0;
-    while i < tys.len()
-        decreases tys.len() - i,
-    {
-        let ty = tys[i];
-        let (lo, hi) = match ty {
-            Type::Bool => (0i64, 1i64),
-            Type::Int(lo, hi) => (lo, hi),
-            Type::Enum(id) => if id < enums.len() && enums[id] > i64::MIN {
-                (0, enums[id] - 1)
-            } else {
-                (0, -1)
-            },
-        };
-        out.push((ty, lo, hi));
-        i += 1;
     }
     out
 }
@@ -1453,6 +1336,7 @@ fn store_option(_parent: &XType, x: &XType, slots: &Vec<Expr>, _st: &SType, inne
     Some((cond, out))
 }
 
+#[verifier::spinoff_prover]
 fn store_parts(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r:
     Option<(Expr, Vec<Expr>)>)
     requires

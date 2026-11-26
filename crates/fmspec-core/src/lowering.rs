@@ -27,7 +27,7 @@ use crate::encoding::{to_xty, xty, xtys, xwidth, XTy};
 use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::keys::{lemma_rank_in_domain, rank};
+use crate::keys::{domain, lemma_domain_len, lemma_domain_rank, lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
 use crate::map_lookup::{flat_slot, flat_slot_int, key_rank, MISSING_KEY};
 use crate::map_lookup::{put_map_rows_exec, select_flat_map_lookup};
@@ -35,9 +35,14 @@ use crate::model::{BinOp, Expr, Type, Value};
 use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
+#[cfg(verus_keep_ghost)]
+use crate::quant::unrank_ok;
+#[cfg(verus_keep_ghost)]
+use crate::quant::{at_rank, flags_at, lemma_flags_weaken, lemma_qscan, lemma_select_all, picks, q_step_ok, qprefix};
+use crate::quant::{pick_flag, unrank};
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_fold, eval_src, src_bool, SEnv};
+use crate::source::{eval_fold, eval_quant, eval_src, select_bits, src_bool, SEnv};
 use crate::source::{Over, SetOp, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
 use vstd::prelude::*;
 
@@ -2102,7 +2107,10 @@ fn low_struct(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
     }
 }
 
-/// `forall` と `exists`。集合（Set の要素、Map のキー、List の要素）か、型の全体をたどる。
+/// `forall` と `exists`。型の全体、Set の要素、Map のキー、List の要素をたどる。
+///
+/// List 以外は、値の正規順での番号を1つの整数の局所変数でたどる。束縛する値のスロットは
+/// 番号から作り（[`unrank`]）、番号の位置が対象に含まれるかをガードで表す。
 fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
     requires
         old(blk).wf(),
@@ -2117,95 +2125,16 @@ fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> 
         TExpr::Quant(all, over, body) => (*all, over, body),
         _ => return None,
     };
-    // 束縛する値の型と、その値が対象に含まれる条件の元（Setの要素の有無、Mapのキーの有無）。
-    // List なら、要素の型、長さの上限、Listのスロット。
-    let mut flags: Option<Vec<Expr>> = None;
-    let mut list: Option<(usize, Vec<Expr>)> = None;
-    let st: SType = match over {
-        Over::Type(t) => {
-            proof {
-                lemma_extends_refl(*blk);
-            }
-            if keys_exec(t, enums).is_none() {
-                return None;
-            }
-            copy_stype(t)
-        },
-        Over::Set(t, s) => {
-            let (ty, cs) = low(s, cx, sc, blk)?;
-            match ty {
-                XType::Set(u) => {
-                    if !stype_eq(&u, t) {
-                        return None;
-                    }
-                    flags = Some(cs);
-                    *u
-                },
-                _ => return None,
-            }
-        },
-        Over::Map(t, m) => {
-            let (ty, cs) = low(m, cx, sc, blk)?;
-            match ty {
-                XType::Map(k, v) => {
-                    if !stype_eq(&k, t) {
-                        return None;
-                    }
-                    let (present, _) = map_parts(&k, &v, &cs, enums)?;
-                    flags = Some(present);
-                    *k
-                },
-                _ => return None,
-            }
-        },
-        Over::List(l) => {
-            let (ty, cs) = low(l, cx, sc, blk)?;
-            match ty {
-                XType::List(u, max) => {
-                    list = Some((max, cs));
-                    *u
-                },
-                _ => return None,
-            }
-        },
-    };
-    let d = depth(blk);
+    let ghost b0 = *blk;
     let ghost before = sc@;
-    let q = match list {
-        None => {
-            let ranges = quant_ranges(&st, enums);
-            let k = ranges.len();
-            let top = d.checked_add(k)?;
-            let x = locals(d, top);
-            let mut guard = canonical(&st, &x, enums)?;
-            match flags {
-                Some(fs) => {
-                    let r = rank_expr(&to_xtype(&st), &x, &st, enums)?;
-                    let hit = select_one(&singletons(&fs), &r)?;
-                    guard = and(guard, hit);
-                },
-                None => {},
-            }
-            sc.push(Bound { ty: to_xtype(&st), slots: x });
-            let b = bool_in(body, cx, sc, top);
-            if b.is_none() {
-                return None;
-            }
-            sc.pop();
-            let mut q = combine(all, guard, b.unwrap());
-            let mut i = ranges.len();
-            while i > 0
-                invariant
-                    i <= ranges.len(),
-                decreases i,
-            {
-                i -= 1;
-                let (ty, lo, hi) = ranges[i];
-                q = quant(all, ty, lo, hi, q);
-            }
-            q
-        },
-        Some((max, cs)) => {
+    if let Over::List(l) = over {
+        let (ty, cs) = low(l, cx, sc, blk)?;
+        let (st, max) = match ty {
+            XType::List(u, max) => (*u, max),
+            _ => return None,
+        };
+        let d = depth(blk);
+        let q = {
             let (len, rows) = list_parts(&st, max, &cs, enums)?;
             let w = stype_width(&st, enums)?;
             let first = d.checked_add(1)?;
@@ -2235,19 +2164,133 @@ fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> 
                 max as i64 - 1
             };
             quant(all, Type::Int(0, top_code), lo, hi, combine(all, guard, b))
+        };
+        let mut out: Vec<Expr> = Vec::new();
+        out.push(keep(blk, q)?);
+        return Some((XType::Bool, out));
+    }
+    // たどる値の型、番号の位置が対象に含まれるかのガード、値の数。
+    let (st, g, n): (SType, Expr, usize) = match over {
+        Over::Type(t) => {
+            let n = keys_exec(t, enums)?;
+            if n > 0x7fff_ffff {
+                return None;
+            }
+            proof {
+                lemma_extends_refl(*blk);
+                lemma_over_type(*over, *cx, sc@, *blk, n as nat);
+            }
+            (copy_stype(t), cb(true), n as usize)
         },
+        Over::Set(t, s) => {
+            let (ty, cs) = low(s, cx, sc, blk)?;
+            let ghost xt = ty;
+            let u = match ty {
+                XType::Set(u) => u,
+                _ => return None,
+            };
+            let n = keys_exec(t, enums)?;
+            if !stype_eq(&u, t) || n > 0x7fff_ffff || cs.len() != n as usize {
+                return None;
+            }
+            let d = depth(blk);
+            let g = pick_flag(&cs, &Expr::Local(d));
+            proof {
+                if frag(*e) {
+                    lemma_over_set(*over, *t, **s, *cx, sc@, b0, *blk, cs@, g, n as nat);
+                }
+            }
+            (copy_stype(t), g, n as usize)
+        },
+        Over::Map(t, m) => {
+            let (ty, cs) = low(m, cx, sc, blk)?;
+            let (kt, vt) = match ty {
+                XType::Map(k, v) => (k, v),
+                _ => return None,
+            };
+            let n = keys_exec(t, enums)?;
+            if !stype_eq(&kt, t) || n > 0x7fff_ffff {
+                return None;
+            }
+            let w = stype_width(&vt, enums)?;
+            let stride = w.checked_add(1)?;
+            let ghost b1 = *blk;
+            let mut fs: Vec<Expr> = Vec::new();
+            let mut j: usize = 0;
+            while j < n as usize
+                invariant
+                    n <= 0x7fff_ffff,
+                    j <= n,
+                    fs@.len() == j,
+                    forall|q: int| 0 <= q < j ==> #[trigger] fs@[q] == cs@[q * stride],
+                    extends(*old(blk), *blk),
+                    *blk == b1,
+                decreases n - j,
+            {
+                let at = j.checked_mul(stride)?;
+                if at >= cs.len() {
+                    return None;
+                }
+                fs.push(copy_expr(&cs[at]));
+                j += 1;
+            }
+            let d = depth(blk);
+            let g = pick_flag(&fs, &Expr::Local(d));
+            proof {
+                if frag(*e) {
+                    lemma_over_map(*over, *t, **m, *cx, sc@, b0, *blk, sty(*vt), stride as int, cs@, fs@, g, n as nat);
+                }
+            }
+            (copy_stype(t), g, n as usize)
+        },
+        Over::List(_) => return None,
     };
+    let ghost b1 = *blk;
+    let d = depth(blk);
+    let top = d.checked_add(1)?;
+    let us = unrank(&st, &Expr::Local(d), enums)?;
+    let bd = Bound { ty: to_xtype(&st), slots: us };
+    let ghost bg = bd;
+    sc.push(bd);
+    let b = bool_in(body, cx, sc, top)?;
+    sc.pop();
     proof {
         assert(sc@ =~= before);
     }
+    let qb = combine(all, g, b);
+    let hi = n as i64 - 1;
+    let top_code = if n == 0 {
+        0i64
+    } else {
+        hi
+    };
+    let q = quant(all, Type::Int(0, top_code), 0, hi, qb);
+    let z = bind(blk, q)?;
     let mut out: Vec<Expr> = Vec::new();
-    out.push(keep(blk, q)?);
+    out.push(z);
+    proof {
+        if frag(*e) {
+            lemma_quant(*e, all, *over, **body, *cx, before, b0, b1, *blk, sty(st), n as nat, g, bg, b, qb, q);
+        }
+    }
     Some((XType::Bool, out))
 }
 
 /// 量化の本体と、値が対象に含まれる条件を組み合わせる。
-fn combine(all: bool, guard: Expr, e: Expr) -> (r: Expr) {
+fn combine(all: bool, guard: Expr, e: Expr) -> (r: Expr)
+    ensures
+        combine_ok(all, guard, e, r),
+{
     if is_bool_lit(&guard, true) {
+        proof {
+            assert forall|env: Env, l: Seq<Value>| #[trigger] as_bool(eval_l(e, env, l)) == match as_bool(eval_l(guard, env, l)) {
+                Err(k) => Err(k),
+                Ok(true) => as_bool(eval_l(e, env, l)),
+                Ok(false) => Ok::<bool, ErrKind>(all),
+            } by {
+                assert(eval_l(guard, env, l) == Ok::<Value, ErrKind>(Value::Bool(true)));
+            }
+        }
         e
     } else if all {
         Expr::Implies(Box::new(guard), Box::new(e))
@@ -2256,11 +2299,444 @@ fn combine(all: bool, guard: Expr, e: Expr) -> (r: Expr) {
     }
 }
 
-fn quant(all: bool, ty: Type, lo: i64, hi: i64, e: Expr) -> (r: Expr) {
+/// `qb` は、ガード `g` が真なら本体 `b` の真偽、偽なら `all` になる。
+pub open spec fn combine_ok(all: bool, g: Expr, b: Expr, qb: Expr) -> bool {
+    forall|env: Env, l: Seq<Value>| #[trigger] as_bool(eval_l(qb, env, l)) == match as_bool(eval_l(g, env, l)) {
+        Err(k) => Err(k),
+        Ok(true) => as_bool(eval_l(b, env, l)),
+        Ok(false) => Ok::<bool, ErrKind>(all),
+    }
+}
+
+fn quant(all: bool, ty: Type, lo: i64, hi: i64, e: Expr) -> (r: Expr)
+    ensures
+        r == quant_s(all, ty, lo, hi, e),
+{
     if all {
         Expr::Forall(ty, lo, hi, Box::new(e))
     } else {
         Expr::Exists(ty, lo, hi, Box::new(e))
+    }
+}
+
+pub open spec fn quant_s(all: bool, ty: Type, lo: i64, hi: i64, e: Expr) -> Expr {
+    if all {
+        Expr::Forall(ty, lo, hi, Box::new(e))
+    } else {
+        Expr::Exists(ty, lo, hi, Box::new(e))
+    }
+}
+
+/// 量化でたどる値の型。
+pub open spec fn over_sty(over: Over) -> STy {
+    match over {
+        Over::Type(t) => sty(t),
+        Over::Set(t, _) => sty(t),
+        Over::Map(t, _) => sty(t),
+        Over::List(_) => STy::Bool,
+    }
+}
+
+/// 量化でたどる値を、型の正規順の列のどの位置から選ぶか。
+pub open spec fn over_bits(over: Over, se: SEnv, sls: Seq<SVal>) -> Result<Seq<bool>, ErrKind> {
+    match over {
+        Over::Type(t) => Ok(Seq::new(domain(sty(t), se.enums).len(), |i: int| true)),
+        Over::Set(_, s) => match eval_src(*s, se, sls) {
+            Ok(SVal::Set(bits)) => Ok(bits),
+            Ok(_) => Err(ErrKind::TypeMismatch),
+            Err(k) => Err(k),
+        },
+        Over::Map(_, m) => match eval_src(*m, se, sls) {
+            Ok(SVal::Map(rows)) => Ok(Seq::new(rows.len(), |i: int| rows[i] is Some)),
+            Ok(_) => Err(ErrKind::TypeMismatch),
+            Err(k) => Err(k),
+        },
+        Over::List(_) => Err(ErrKind::TypeMismatch),
+    }
+}
+
+/// 局所変数 `l` に番号 `x` を加えると、ガード `g` は `bits[x]` になる。
+pub open spec fn guard_at(g: Expr, bits: Seq<bool>, env: Env, l: Seq<Value>) -> bool {
+    forall|x: int|
+        0 <= x < bits.len() ==> #[trigger] eval_l(g, env, l.push(Value::Int(x as i64))) == Ok::<Value, ErrKind>(
+            Value::Bool(bits[x]),
+        )
+}
+
+/// 対象を `b0` から `b1` までに下ろすと、ガード `g` は、番号の位置がたどる値に含まれるかを表す。
+pub open spec fn over_ok(over: Over, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, g: Expr, n: nat) -> bool {
+    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match over_bits(over, se, sls) {
+            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(bits) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+                cx,
+                sc,
+                env,
+                se,
+                l,
+                sls,
+            ) && bits.len() == n && guard_at(g, bits, env, l),
+        }
+}
+
+/// 型の全体をたどる量化のガードは、つねに真である。
+proof fn lemma_over_type(over: Over, cx: LowerCtx, sc: Seq<Bound>, b: Block, n: nat)
+    requires
+        over is Type,
+        keys(over_sty(over), cx.enums@) == Some(n),
+    ensures
+        over_ok(over, cx, sc, b, b, bool_lit(true), n),
+{
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b.depth_s() implies match over_bits(over, se, sls) {
+        Err(k) => run(fresh(b, b), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(bits) => run(fresh(b, b), env, ls) matches Ok(l) && l.len() == b.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && bits.len() == n && guard_at(bool_lit(true), bits, env, l),
+    } by {
+        lemma_domain_len(over_sty(over), se.enums);
+        lemma_fresh_refl(b);
+        assert(run(Seq::<Expr>::empty(), env, ls) == Ok::<Seq<Value>, ErrKind>(ls));
+        lemma_prefix_refl(ls);
+        let bits = over_bits(over, se, sls)->Ok_0;
+        assert forall|x: int| 0 <= x < bits.len() implies #[trigger] eval_l(
+            bool_lit(true),
+            env,
+            ls.push(Value::Int(x as i64)),
+        ) == Ok::<Value, ErrKind>(Value::Bool(bits[x])) by {}
+    }
+}
+
+/// 下ろした式の列 `fs` が印 `bits` を表すなら、番号の位置を選ぶ式 `g` は番号ごとのガードになる。
+proof fn lemma_guard_pick(g: Expr, fs: Seq<Expr>, bits: Seq<bool>, env: Env, l: Seq<Value>)
+    requires
+        picks(g, fs, Expr::Local(l.len() as usize)),
+        flags_at(fs, bits, env, l),
+        l.len() < usize::MAX,
+        bits.len() <= 0x7fff_ffff,
+    ensures
+        guard_at(g, bits, env, l),
+{
+    assert forall|x: int| 0 <= x < bits.len() implies #[trigger] eval_l(g, env, l.push(Value::Int(x as i64)))
+        == Ok::<Value, ErrKind>(Value::Bool(bits[x])) by {
+        let lx = l.push(Value::Int(x as i64));
+        assert(prefix(l, lx));
+        lemma_flags_weaken(fs, bits, env, l, lx);
+        assert(at_rank(Expr::Local(l.len() as usize), env, lx, x as i64));
+    }
+}
+
+/// Setの要素をたどる量化のガード。
+proof fn lemma_over_set(
+    over: Over,
+    t: SType,
+    s: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    cs: Seq<Expr>,
+    g: Expr,
+    n: nat,
+)
+    requires
+        over == Over::Set(t, Box::new(s)),
+        lowers(s, cx, sc, b0, b1, XTy::Set(Box::new(sty(t))), cs),
+        extends(b0, b1),
+        b1.wf(),
+        keys(sty(t), cx.enums@) == Some(n),
+        n <= 0x7fff_ffff,
+        cs.len() == n,
+        picks(g, cs, Expr::Local(b1.depth_s() as usize)),
+    ensures
+        over_ok(over, cx, sc, b0, b1, g, n),
+{
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match over_bits(over, se, sls) {
+        Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(bits) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && bits.len() == n && guard_at(g, bits, env, l),
+    } by {
+        lemma_one(s, cx, sc, b0, b1, XTy::Set(Box::new(sty(t))), cs, env, se, ls, sls);
+        if let Ok(v) = eval_src(s, se, sls) {
+            let l = run(fresh(b0, b1), env, ls)->Ok_0;
+            let bits = v->Set_0;
+            assert(slot_vals(cs, env, l) == enc(v, STy::Set(Box::new(sty(t))), se.enums));
+            assert forall|j: int| 0 <= j < cs.len() implies pure_below(#[trigger] cs[j], l.len()) && eval_l(cs[j], env, l)
+                == Ok::<Value, ErrKind>(Value::Bool(bits[j])) by {
+                assert(slot_vals(cs, env, l)[j] == eval_l(cs[j], env, l)->Ok_0);
+            }
+            assert(flags_at(cs, bits, env, l));
+            lemma_guard_pick(g, cs, bits, env, l);
+        }
+    }
+}
+
+/// Mapのキーをたどる量化のガード。`fs` は各行の有無のスロットである。
+proof fn lemma_over_map(
+    over: Over,
+    t: SType,
+    m: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    sv: STy,
+    stride: int,
+    cs: Seq<Expr>,
+    fs: Seq<Expr>,
+    g: Expr,
+    n: nat,
+)
+    requires
+        over == Over::Map(t, Box::new(m)),
+        lowers(m, cx, sc, b0, b1, XTy::Map(Box::new(sty(t)), Box::new(sv)), cs),
+        extends(b0, b1),
+        b1.wf(),
+        keys(sty(t), cx.enums@) == Some(n),
+        n <= 0x7fff_ffff,
+        stride == 1 + width(sv, cx.enums@),
+        fs.len() == n,
+        forall|q: int| 0 <= q < n ==> #[trigger] fs[q] == cs[q * stride],
+        picks(g, fs, Expr::Local(b1.depth_s() as usize)),
+    ensures
+        over_ok(over, cx, sc, b0, b1, g, n),
+{
+    let xt = XTy::Map(Box::new(sty(t)), Box::new(sv));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match over_bits(over, se, sls) {
+        Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(bits) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && bits.len() == n && guard_at(g, bits, env, l),
+    } by {
+        lemma_one(m, cx, sc, b0, b1, xt, cs, env, se, ls, sls);
+        if let Ok(v) = eval_src(m, se, sls) {
+            let l = run(fresh(b0, b1), env, ls)->Ok_0;
+            let rows = v->Map_0;
+            let bits = Seq::new(rows.len(), |i: int| rows[i] is Some);
+            assert(slot_vals(cs, env, l) == enc_rows(rows, sv, se.enums));
+            assert forall|q: int| 0 <= q < fs.len() implies pure_below(#[trigger] fs[q], l.len()) && eval_l(fs[q], env, l)
+                == Ok::<Value, ErrKind>(Value::Bool(bits[q])) by {
+                lemma_enc_rows_index(rows, sv, se.enums, q, 0);
+                let at = q * stride;
+                assert(slot_vals(cs, env, l)[at] == eval_l(cs[at], env, l)->Ok_0);
+                assert(row_slots(rows[q], sv, se.enums)[0] == Value::Bool(rows[q] is Some));
+            }
+            assert(flags_at(fs, bits, env, l));
+            lemma_guard_pick(g, fs, bits, env, l);
+        }
+    }
+}
+
+/// 量化の値の意味論を、たどる値の選び方で書き直す。
+proof fn lemma_quant_src(e: TExpr, all: bool, over: Over, body: TExpr, se: SEnv, sls: Seq<SVal>)
+    requires
+        e == TExpr::Quant(all, over, Box::new(body)),
+        !(over is List),
+    ensures
+        eval_src(e, se, sls) == match over_bits(over, se, sls) {
+            Err(k) => Err(k),
+            Ok(bits) => match eval_quant(all, select_bits(domain(over_sty(over), se.enums), bits), body, se, sls) {
+                Err(k) => Err(k),
+                Ok(b) => Ok(SVal::Bool(b)),
+            },
+        },
+{
+    if let Over::Type(t) = over {
+        let dom = domain(sty(t), se.enums);
+        lemma_select_all(dom, dom.len());
+        assert(dom.take(dom.len() as int) =~= dom);
+    }
+}
+
+/// 番号 `x` を束縛した文脈。束縛した値は、正規順で `x` 番目の値である。
+proof fn lemma_quant_ctx(
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    bd: Bound,
+    st: STy,
+    n: nat,
+    env: Env,
+    se: SEnv,
+    l: Seq<Value>,
+    sls: Seq<SVal>,
+    x: int,
+)
+    requires
+        ctx_ok(cx, sc, env, se, l, sls),
+        l.len() < usize::MAX,
+        unrank_ok(st, Expr::Local(l.len() as usize), bd.slots@, cx.enums@),
+        xty(bd.ty) == to_xty(st),
+        keys(st, cx.enums@) == Some(n),
+        n <= 0x7fff_ffff,
+        0 <= x < n,
+    ensures
+        ctx_ok(cx, sc.push(bd), env, se, l.push(Value::Int(x as i64)), sls.push(domain(st, se.enums)[x])),
+{
+    let lx = l.push(Value::Int(x as i64));
+    let enums = se.enums;
+    assert(prefix(l, lx));
+    lemma_ctx_weaken(cx, sc, env, se, l, lx, sls);
+    assert(at_rank(Expr::Local(l.len() as usize), env, lx, x as i64));
+    let v = domain(st, enums)[x];
+    lemma_domain_rank(st, enums, x);
+    lemma_models_enc(v, st, enums);
+    assert(denotes(bd.slots@, env, lx, v, xty(bd.ty), enums));
+    let sc2 = sc.push(bd);
+    let sls2 = sls.push(v);
+    assert forall|i: int| 0 <= i < sc2.len() implies #[trigger] denotes(sc2[i].slots@, env, lx, sls2[i], xty(sc2[i].ty), enums) by {
+        if i < sc.len() {
+            assert(sc2[i] == sc[i] && sls2[i] == sls[i]);
+        }
+    }
+}
+
+/// 番号 `x` での量化の本体の真偽。
+proof fn lemma_quant_step(
+    all: bool,
+    g: Expr,
+    b: Expr,
+    qb: Expr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    bd: Bound,
+    st: STy,
+    n: nat,
+    body: TExpr,
+    env: Env,
+    se: SEnv,
+    l: Seq<Value>,
+    sls: Seq<SVal>,
+    bits: Seq<bool>,
+    x: int,
+)
+    requires
+        ctx_ok(cx, sc, env, se, l, sls),
+        l.len() < usize::MAX,
+        unrank_ok(st, Expr::Local(l.len() as usize), bd.slots@, cx.enums@),
+        xty(bd.ty) == to_xty(st),
+        keys(st, cx.enums@) == Some(n),
+        n <= 0x7fff_ffff,
+        bits.len() == n,
+        guard_at(g, bits, env, l),
+        combine_ok(all, g, b, qb),
+        closed_lowers(body, cx, sc.push(bd), l.len() + 1, XTy::Bool, b),
+        0 <= x < n,
+    ensures
+        as_bool(eval_l(qb, env, l.push(Value::Int(x as i64)))) == if bits[x] {
+            src_bool(eval_src(body, se, sls.push(domain(st, se.enums)[x])))
+        } else {
+            Ok::<bool, ErrKind>(all)
+        },
+{
+    let lx = l.push(Value::Int(x as i64));
+    assert(eval_l(g, env, lx) == Ok::<Value, ErrKind>(Value::Bool(bits[x])));
+    assert(as_bool(eval_l(qb, env, lx)) == match as_bool(eval_l(g, env, lx)) {
+        Err(k) => Err(k),
+        Ok(true) => as_bool(eval_l(b, env, lx)),
+        Ok(false) => Ok::<bool, ErrKind>(all),
+    });
+    if bits[x] {
+        let sls2 = sls.push(domain(st, se.enums)[x]);
+        lemma_quant_ctx(cx, sc, bd, st, n, env, se, l, sls, x);
+        assert(ctx_ok(cx, sc.push(bd), env, se, lx, sls2));
+        lemma_scalar_bool(eval_src(body, se, sls2), eval_l(b, env, lx), se.enums);
+    }
+}
+
+/// 量化の下ろし。対象を下ろし、番号を1つの整数でたどる量化を束縛する。
+proof fn lemma_quant(
+    e: TExpr,
+    all: bool,
+    over: Over,
+    body: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    st: STy,
+    n: nat,
+    g: Expr,
+    bd: Bound,
+    b: Expr,
+    qb: Expr,
+    q: Expr,
+)
+    requires
+        e == TExpr::Quant(all, over, Box::new(body)),
+        !(over is List),
+        over_sty(over) == st,
+        over_ok(over, cx, sc, b0, b1, g, n),
+        keys(st, cx.enums@) == Some(n),
+        n <= 0x7fff_ffff,
+        b1.depth_s() + 1 < usize::MAX,
+        unrank_ok(st, Expr::Local(b1.depth_s() as usize), bd.slots@, cx.enums@),
+        xty(bd.ty) == to_xty(st),
+        closed_lowers(body, cx, sc.push(bd), b1.depth_s() + 1, XTy::Bool, b),
+        combine_ok(all, g, b, qb),
+        q == quant_s(all, Type::Int(0, if n == 0 { 0i64 } else { (n - 1) as i64 }), 0, (n - 1) as i64, qb),
+        b2.binds@ == b1.binds@.push(q),
+        extends(b0, b1),
+        extends(b1, b2),
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Bool, seq![Expr::Local(b1.depth_s() as usize)]),
+{
+    let z = Expr::Local(b1.depth_s() as usize);
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        seq![z],
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        lemma_quant_src(e, all, over, body, se, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(bits) = over_bits(over, se, sls) {
+            let l = run(fresh(b0, b1), env, ls)->Ok_0;
+            let dom = domain(st, se.enums);
+            lemma_domain_len(st, se.enums);
+            assert forall|x: int| 0 <= x < bits.len() implies #[trigger] as_bool(
+                eval_l(qb, env, l.push(Value::Int(x as i64))),
+            ) == if bits[x] {
+                src_bool(eval_src(body, se, sls.push(dom[x])))
+            } else {
+                Ok::<bool, ErrKind>(all)
+            } by {
+                lemma_quant_step(all, g, b, qb, cx, sc, bd, st, n, body, env, se, l, sls, bits, x);
+            }
+            assert(q_step_ok(all, qb, env, l, bits, dom, body, se, sls));
+            let ty = Type::Int(0, if n == 0 { 0 } else { (n - 1) as i64 });
+            assert(bits.take(0) =~= Seq::<bool>::empty());
+            assert(qprefix(all, dom, bits, 0, body, se, sls) == Ok::<bool, ErrKind>(all));
+            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);
+            assert(bits.take(bits.len() as int) =~= bits);
+            let res = eval_quant(all, select_bits(dom, bits), body, se, sls);
+            assert(eval_l(q, env, l) == lift_bool(res));
+            lemma_run_one(b1, b2, q, env, l);
+            if let Ok(bv) = res {
+                lemma_one_denotes(z, env, l.push(Value::Bool(bv)), Value::Bool(bv), XTy::Bool, se.enums);
+            }
+        }
     }
 }
 

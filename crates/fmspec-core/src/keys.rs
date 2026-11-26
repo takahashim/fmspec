@@ -106,7 +106,7 @@ pub proof fn lemma_domain_len(t: STy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_product_len(ts: Seq<STy>, enums: Seq<i64>)
+pub proof fn lemma_product_len(ts: Seq<STy>, enums: Seq<i64>)
     requires
         keys_product(ts, enums) is Some,
     ensures

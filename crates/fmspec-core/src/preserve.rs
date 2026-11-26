@@ -33,7 +33,7 @@ use crate::ranking::mixed_rank_eval;
 #[cfg(verus_keep_ghost)]
 use crate::slots::{and_s, bool_lit, extends, ite_s, join_s, lits, or_s, tree_s, Block, Join};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, SEnv, TExpr};
+use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, Over, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -1457,6 +1457,12 @@ pub open spec fn frag(e: TExpr) -> bool
         TExpr::Ite(p, a, b) => frag(*p) && frag(*a) && frag(*b),
         TExpr::Let(a, b) => frag(*a) && frag(*b),
         TExpr::Get(_, a, x) => frag(*a) && frag(*x),
+        TExpr::Quant(_, over, body) => frag(*body) && match over {
+            Over::Type(_) => true,
+            Over::Set(_, s) => frag(*s),
+            Over::Map(_, m) => frag(*m),
+            Over::List(_) => false,
+        },
         _ => false,
     }
 }
