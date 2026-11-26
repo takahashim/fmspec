@@ -15,13 +15,14 @@
 use crate::json::{array, int, object, operands, required, schema, single, string};
 use crate::model::{EnumNames, LoadError};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
+use fmspec_core::map_lookup::{require_map_key, select_map_slot, MISSING_KEY};
 use fmspec_core::model::{BinOp, Expr as C, Type, Value as CV};
 use serde_json::Value;
 use std::collections::HashSet;
 
 /// `Expr::Fail` の番号。
 pub const FAIL_NONE: i64 = 1;
-pub const FAIL_MISSING_KEY: i64 = 2;
+pub const FAIL_MISSING_KEY: i64 = MISSING_KEY;
 pub const FAIL_INDEX: i64 = 3;
 pub const FAIL_FULL: i64 = 4;
 pub const FAIL_EMPTY: i64 = 5;
@@ -1269,16 +1270,33 @@ impl<'a> Ctx<'a> {
                 let (k, v) = self.map_types(&tm, &at(0))?;
                 let r = self.lookup_rank(&items[1], &at(1), sc, blk, &k)?;
                 let (present, values) = map_parts(enums, &k, &v, &ms);
-                let rows: Vec<Vec<C>> = present.iter().map(|p| vec![p.clone()]).collect();
-                let hit = and(
-                    bin(BinOp::Ge, r.clone(), ci(0)),
-                    select(&rows, &r, &[cb(false)]).pop().unwrap_or_else(|| cb(false)),
-                );
                 if key == "has_key" {
+                    let rows: Vec<Vec<C>> = present.into_iter().map(|p| vec![p]).collect();
+                    let hit = and(
+                        bin(BinOp::Ge, r.clone(), ci(0)),
+                        select(&rows, &r, &[cb(false)]).pop().unwrap_or_else(|| cb(false)),
+                    );
                     return Ok((XType::Bool, vec![hit]));
                 }
-                blk.check(hit, FAIL_MISSING_KEY);
-                Ok((v.xtype(), select(&values, &r, &defaults(enums, &v))))
+                let rank_local = match r {
+                    C::Local(index) => index,
+                    _ => {
+                        let index = blk.depth();
+                        blk.bind(r);
+                        index
+                    }
+                };
+                let presence = select_map_slot(present, rank_local, cb(false));
+                blk.bind(require_map_key(presence, rank_local));
+                let slots = defaults(enums, &v)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, fallback)| {
+                        let column = values.iter().map(|row| row[index].clone()).collect();
+                        select_map_slot(column, rank_local, fallback)
+                    })
+                    .collect();
+                Ok((v.xtype(), slots))
             }
             "put" => {
                 let items = ops(3)?;

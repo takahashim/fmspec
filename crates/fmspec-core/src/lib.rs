@@ -20,6 +20,7 @@ pub mod evidence;
 pub mod gate;
 mod impls;
 pub mod mbt;
+pub mod map_lookup;
 pub mod model;
 pub mod semantics;
 pub mod step;

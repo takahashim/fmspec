@@ -39,6 +39,10 @@ end
 
 # 変異。[ファイル, 元の文字列, 置き換え, 説明]。元の文字列はファイルにちょうど1回現れなければならない。
 VERUS_MUTANTS = [
+  ["map_lookup.rs", "            BinOp::Lt,", "            BinOp::Ge,",
+   "Mapの値を選ぶときに二分木の枝を逆にする"],
+  ["map_lookup.rs", "Box::new(Expr::Fail(Type::Bool, MISSING_KEY)),", "Box::new(Expr::Const(Value::Bool(true))),",
+   "Mapの欠損キーで失敗しない"],
   ["eval.rs", "BinOp::Add => checked(a.checked_add(*b)),", "BinOp::Add => checked(a.checked_sub(*b)),",
    "加算を減算として実行する"],
   ["eval.rs", "BinOp::Mul => checked(a.checked_mul(*b)),", "BinOp::Mul => Ok(Value::Int(a.wrapping_mul(*b))),",
