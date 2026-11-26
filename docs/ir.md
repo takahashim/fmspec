@@ -1,7 +1,8 @@
 # fmspec IR v1 と証拠の形式
 
 fmspecのエンジンが読み書きするJSONの形式を定める。
-対象は、モデルのIR（`ir_version: 1`）、検査条件、安全性証明書、トレース、`fmspec check --json` の結果である。
+対象は、モデルのIR（`ir_version: 1`）、検査条件、安全性証明書、トレース、`fmspec check --json` と `fmspec simulate --json` の結果である。
+Rubyの `Fmspec::Result#to_h` も同じ結果を返す。
 
 設計の背景は[設計仕様書](ruby_model_checker_spec.md)にある。
 仕様書§18の未決事項のうち、公開引数、内部選択、出力、遷移契約、終端条件のIRでの表現と、探索順に依存する結果の扱いは、本書の内容で実装した。
@@ -170,6 +171,17 @@ JSONでは名前で並べる。
 上限に達したあとも既訪問の状態への辺は検査し、新しい状態を保持する必要が生じた時点で `inconclusive` とする。
 このとき、その新しい状態の不変条件は検査していない。
 
+## シミュレーション
+
+`simulate` は、各トレースを初期状態から始め、有効な具体的遷移から1つを一様に選んで進む。
+遷移の列挙順は幅優先探索と同じで、操作の定義順、引数の辞書順である。
+初期状態と各到達状態の不変条件、選んだ辺の遷移契約を検査し、違反または評価エラーで止まる。
+有効な遷移のない状態では、デッドロックを検査してから、そのトレースを終える。
+
+乱数はSplitMix64である。
+`n` 個の遷移から選ぶときは、64ビットの乱数 `x` が `2^64 mod n` 以上になるまで引き直し、`x mod n` 番目を選ぶ。
+同じモデル、検査条件、seed、トレース数、最大ステップ数に対して、結果は同じになる。
+
 ## 証明書
 
 ```json
@@ -225,7 +237,7 @@ JSONでは名前で並べる。
 
 `replay` は、トレースに記録された検査条件で、各ステップの出力と状態、末尾の主張を検査する。
 
-## `check --json` の結果
+## 検査の結果
 
 | キー | 内容 |
 |---|---|
@@ -239,7 +251,12 @@ JSONでは名前で並べる。
 | `reason` | `inconclusive` のとき、`max_states` または `interrupted` |
 | `rejected` | `internal_error` のとき、判定ゲートが証拠を拒否した理由 |
 
+`simulate --json` の結果は、`search` と `gate` の代わりに `simulation` を持つ。
+`simulation` はシミュレータの報告で、`seed`、`traces`、`max_steps`、`prng`、`completed_traces`、`steps`、`time_ms` からなる。
+違反も評価エラーも見つからなければ `status` は `sampled` で、指定したサンプルの検査を完了したことだけを表す。
+見つかった場合の `status`、`property`、`trace` は `check` と同じで、トレースの `seed` にシミュレーションのseedを記録する。
+
 `verify-certificate` と `replay` の結果は同じ形で、`search` を持たない。
 提示された証拠を判定ゲートが拒否した場合の `status` は `rejected` である。
 
-終了コードは、`verified` が0、`violated` と `rejected` が1、`error`、不正な入力、`internal_error` が2、`inconclusive` が3である。
+終了コードは、`verified` と `sampled` が0、`violated` と `rejected` が1、`error`、不正な入力、`internal_error` が2、`inconclusive` が3である。
