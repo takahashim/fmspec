@@ -3,10 +3,15 @@
 use crate::canonical;
 use crate::json::{array, index, object, optional_array, required, schema, source, string, unique, Res};
 use crate::lower::{self, Constant, Ctx, Layout};
+use crate::resolve::Fields;
 use crate::types::SType;
 use crate::IR_VERSION;
+use fmspec_core::eval::ErrKind;
 use fmspec_core::gate::{validate, CheckedModel};
-use fmspec_core::model::{Action, Contract, Expr, Output, RawModel, Type, Update, Value as CoreValue};
+use fmspec_core::model::{RawModel, Value as CoreValue};
+use fmspec_core::model_lower::lower_model;
+use fmspec_core::smodel::{Fault, LowerError, SAction, SConst, SContract, SModel, SOutput, SUpdate};
+use fmspec_core::source::TExpr;
 use fmspec_core::typing::InvalidModel;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -173,96 +178,16 @@ fn parse_stype(v: &Value, path: &str, enums: &[EnumNames]) -> Res<SType> {
     })
 }
 
-/// 局所変数のない環境で値を評価し、スロットごとの符号にする（初期値と定数）。
-fn constant_codes(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<Vec<i64>, LoadError> {
-    let slots = lowered(ctx.stored(v, path, st, 0), |detail| LoadError::Schema {
+/// 局所変数のない環境に置く値を名前解決する（初期値と定数）。値は中核の下ろしが評価する。
+fn stored_tree(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<TExpr, LoadError> {
+    lowered(ctx.stored(v, path, st), |detail| LoadError::Schema {
         path: path.to_string(),
         message: format!("初期値の型が状態変数の型と合いません（{detail}）"),
-    })?;
-    let mut tys = Vec::new();
-    st.slot_types(ctx.enums, &mut tys);
-    let mut codes = Vec::new();
-    for (e, ty) in slots.iter().zip(&tys) {
-        match lower::eval_const(e, ty) {
-            Ok(x) => codes.push(x),
-            Err(kind) => return schema(path, format!("値を評価できません（{kind:?}）")),
-        }
-    }
-    Ok(codes)
+    })
 }
 
 /// 初期値の候補の組み合わせのうち、調べる数の上限。
-pub const MAX_INITIAL_CANDIDATES: usize = 1 << 20;
-
-/// 初期状態の集合。状態変数ごとの候補の直積から、`initial_constraint` を満たすものを残し、
-/// 符号化列の辞書順に整列して重複を除く。
-fn initial_states(
-    choices: &[Vec<Vec<i64>>],
-    state_types: &Vec<Type>,
-    enums: &[EnumNames],
-    layouts: &[Layout],
-    constants: &[Constant],
-    map: &serde_json::Map<String, Value>,
-) -> Res<Vec<Vec<i64>>> {
-    let total = choices.iter().try_fold(1usize, |n, c| {
-        n.checked_mul(c.len()).filter(|n| *n <= MAX_INITIAL_CANDIDATES)
-    });
-    if total.is_none() {
-        return schema(
-            "$.states",
-            format!("初期値の候補の組み合わせが {MAX_INITIAL_CANDIDATES} 個を超えます"),
-        );
-    }
-    let mut inits: Vec<Vec<i64>> = vec![Vec::new()];
-    for c in choices {
-        inits = inits
-            .iter()
-            .flat_map(|prefix| c.iter().map(move |codes| [prefix.as_slice(), codes].concat()))
-            .collect();
-    }
-    if let Some(e) = map.get("initial_constraint").filter(|e| !e.is_null()) {
-        let no_args: Vec<Layout> = Vec::new();
-        let ctx = Ctx {
-            enums,
-            states: Some(layouts),
-            args: &no_args,
-            n_params: 0,
-            next: false,
-            output: None,
-            constants,
-        };
-        let path = "$.initial_constraint";
-        let expr = lowered(ctx.prop(e, path), |d| LoadError::Schema {
-            path: path.to_string(),
-            message: format!("初期条件が Bool 式でないか、未定義の参照を含みます（{d}）"),
-        })?;
-        let mut kept = Vec::new();
-        for s in inits {
-            let no_tys: Vec<Type> = Vec::new();
-            let no_vals: Vec<i64> = Vec::new();
-            let ctx = fmspec_core::eval::Ctx {
-                st_tys: state_types,
-                arg_tys: &no_tys,
-                pre: &s,
-                args: &no_vals,
-                post: &no_vals,
-                out: None,
-            };
-            match fmspec_core::eval::eval_prop(&expr, &ctx) {
-                Ok(true) => kept.push(s),
-                Ok(false) => {}
-                Err(kind) => return schema(path, format!("初期条件を評価できません（{kind:?}）")),
-            }
-        }
-        inits = kept;
-    }
-    if inits.is_empty() {
-        return schema("$.initial_constraint", "初期条件を満たす初期状態がありません");
-    }
-    inits.sort();
-    inits.dedup();
-    Ok(inits)
-}
+pub use fmspec_core::model_lower::MAX_INITIAL_CANDIDATES;
 
 /// 引数の宣言。`domain` は動的ドメイン（`in`）の式。
 struct Bindings<'v> {
@@ -310,14 +235,6 @@ fn layouts(enums: &[EnumNames], types: &[SType]) -> Vec<Layout> {
         .collect()
 }
 
-fn slot_types(enums: &[EnumNames], types: &[SType]) -> Vec<Type> {
-    let mut out = Vec::new();
-    for t in types {
-        t.slot_types(enums, &mut out);
-    }
-    out
-}
-
 fn arg_names_at<'n>(params: &'n [String], choices: &'n [String], i: usize) -> &'n str {
     params.iter().chain(choices).nth(i).map(String::as_str).unwrap_or("?")
 }
@@ -327,9 +244,10 @@ struct Parsed<'a> {
     states: &'a [Layout],
     state_names: &'a [String],
     constants: &'a [Constant],
+    fields: &'a Fields,
 }
 
-fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames, Action)> {
+fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames, SAction)> {
     let enums = p.enums;
     let map = object(
         v,
@@ -374,10 +292,11 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
         next: false,
         output: None,
         constants: p.constants,
+        fields: p.fields,
     };
     let what = |kind: &str| format!("操作 {name:?} の{kind}");
     let user_guard = match map.get("guard") {
-        None | Some(Value::Null) => Expr::Const(CoreValue::Bool(true)),
+        None | Some(Value::Null) => TExpr::Lit(CoreValue::Bool(true)),
         Some(g) => lowered(ctx.prop(g, &format!("{path}.guard")), |d| {
             invalid(
                 InvalidModel::Guard(a),
@@ -385,19 +304,6 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
             )
         })?,
     };
-    // スロットごとに列挙した引数の組のうち、正規形でないものは無効にする。
-    let mut canon = Vec::new();
-    for l in &args {
-        let slots: Vec<Expr> = (l.offset..l.offset + l.ty.width(enums)).map(Expr::Arg).collect();
-        let core = crate::resolve::Resolver::new(&ctx);
-        let Some(c) = fmspec_core::canon::canonical(&core.fields().stype(&l.ty), &slots, &core.lower_ctx().enums)
-        else {
-            return schema(path, "内部エラー: 中核が引数の型の正規形を扱えません");
-        };
-        if !matches!(c, Expr::Const(CoreValue::Bool(true))) {
-            canon.push(c);
-        }
-    }
     // 動的ドメイン。引数がドメインの式の値に含まれなければ、その組は無効にする。
     // ドメインの式は、状態と、それより前の引数だけを参照できる。
     let mut members = Vec::new();
@@ -435,14 +341,13 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
             fail,
         )?);
     }
-    let guard = members
-        .into_iter()
-        .rev()
-        .fold(user_guard, |acc, c| Expr::And(Box::new(c), Box::new(acc)));
-    let guard = canon
-        .into_iter()
-        .rev()
-        .fold(guard, |acc, c| Expr::And(Box::new(c), Box::new(acc)));
+    // 正規形でない引数の組を無効にする判定は、中核の下ろしがこの guard の前に置く。
+    let guard = if members.is_empty() {
+        user_guard
+    } else {
+        members.push(user_guard);
+        TExpr::Fold(true, members)
+    };
     let mut updates = Vec::new();
     let mut owners = Vec::new();
     for (u, item) in optional_array(map, path, "updates")?.iter().enumerate() {
@@ -455,8 +360,8 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
                 format!("{} {} 番目の更新の対象 {target} は未定義です", what(""), u + 1),
             ));
         };
-        let slots = lowered(
-            ctx.stored(required(up, &path, "expr")?, &format!("{path}.expr"), &l.ty, 0),
+        let expr = lowered(
+            ctx.stored(required(up, &path, "expr")?, &format!("{path}.expr"), &l.ty),
             |d| {
                 invalid(
                     InvalidModel::Update(a, u),
@@ -469,17 +374,14 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
                 )
             },
         )?;
-        for (j, expr) in slots.into_iter().enumerate() {
-            updates.push(Update {
-                target: l.offset + j,
-                expr,
-            });
+        for slot in 0..l.ty.width(enums) {
             owners.push(UpdateSlot {
                 update: u,
                 var: target,
-                slot: j,
+                slot,
             });
         }
+        updates.push(SUpdate { var: target, expr });
     }
     let (output, output_type) = match map.get("output") {
         None | Some(Value::Null) => (None, None),
@@ -487,11 +389,11 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
             let path = format!("{path}.output");
             let out = object(o, &path, &["type", "expr"])?;
             let st = parse_stype(required(out, &path, "type")?, &format!("{path}.type"), enums)?;
-            let Some(ty) = st.core() else {
+            if st.core().is_none() {
                 return schema(&format!("{path}.type"), "出力の型は bool、int、enum に限ります");
-            };
-            let mut slots = lowered(
-                ctx.stored(required(out, &path, "expr")?, &format!("{path}.expr"), &st, 0),
+            }
+            let expr = lowered(
+                ctx.stored(required(out, &path, "expr")?, &format!("{path}.expr"), &st),
                 |d| {
                     invalid(
                         InvalidModel::Output(a),
@@ -499,8 +401,13 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
                     )
                 },
             )?;
-            let expr = slots.pop().unwrap_or(Expr::Const(CoreValue::Bool(false)));
-            (Some(Output { ty, expr }), Some(st))
+            (
+                Some(SOutput {
+                    ty: p.fields.stype(&st),
+                    expr,
+                }),
+                Some(st),
+            )
         }
     };
     let names = ActionNames {
@@ -515,9 +422,9 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
     };
     Ok((
         names,
-        Action {
+        SAction {
             n_params,
-            domains: slot_types(enums, &args.iter().map(|l| l.ty.clone()).collect::<Vec<_>>()),
+            args: args.iter().map(|l| p.fields.stype(&l.ty)).collect(),
             guard,
             updates,
             output,
@@ -574,8 +481,10 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         enums.push(EnumNames { name, variants });
     }
 
+    let fields = Fields::default();
     let no_args: Vec<Layout> = Vec::new();
     let mut constants: Vec<Constant> = Vec::new();
+    let mut sconsts: Vec<SConst> = Vec::new();
     let mut seen = HashSet::new();
     for (i, item) in optional_array(map, path, "constants")?.iter().enumerate() {
         let path = format!("$.constants[{i}]");
@@ -591,27 +500,22 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             next: false,
             output: None,
             constants: &constants,
+            fields: &fields,
         };
-        let codes = constant_codes(&ctx, required(c, &path, "value")?, &format!("{path}.value"), &ty)?;
-        let mut tys = Vec::new();
-        ty.slot_types(&enums, &mut tys);
-        if let Some(x) = tys.iter().zip(&codes).find_map(|(t, x)| match t {
-            Type::Int(lo, hi) if x < lo || x > hi => Some(*x),
-            _ => None,
-        }) {
-            return schema(
-                &format!("{path}.value"),
-                format!("定数 {name:?} の値 {x} が型の範囲の外です"),
-            );
-        }
-        constants.push(Constant { name, ty, codes });
+        let expr = stored_tree(&ctx, required(c, &path, "value")?, &format!("{path}.value"), &ty)?;
+        sconsts.push(SConst {
+            ty: fields.stype(&ty),
+            expr,
+        });
+        constants.push(Constant { name, ty });
     }
 
     let mut states = Vec::new();
     let mut state_sources = Vec::new();
     let mut state_stypes = Vec::new();
-    // 状態変数ごとの初期値の候補。
-    let mut choices: Vec<Vec<Vec<i64>>> = Vec::new();
+    // 状態変数ごとの初期値の候補と、その位置。
+    let mut choices: Vec<Vec<TExpr>> = Vec::new();
+    let mut choice_paths: Vec<Vec<String>> = Vec::new();
     let mut seen = HashSet::new();
     for (i, item) in array(required(map, path, "states")?, "$.states")?.iter().enumerate() {
         let path = format!("$.states[{i}]");
@@ -632,9 +536,10 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             next: false,
             output: None,
             constants: &constants,
+            fields: &fields,
         };
-        choices.push(match (s.get("initial"), s.get("initial_in")) {
-            (Some(v), None) => vec![constant_codes(&ctx, v, &format!("{path}.initial"), &ty)?],
+        let paths: Vec<(String, &Value)> = match (s.get("initial"), s.get("initial_in")) {
+            (Some(v), None) => vec![(format!("{path}.initial"), v)],
             (None, Some(vs)) => {
                 let path = format!("{path}.initial_in");
                 let vs = array(vs, &path)?;
@@ -643,23 +548,48 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
                 }
                 vs.iter()
                     .enumerate()
-                    .map(|(j, v)| constant_codes(&ctx, v, &format!("{path}[{j}]"), &ty))
-                    .collect::<Res<_>>()?
+                    .map(|(j, v)| (format!("{path}[{j}]"), v))
+                    .collect()
             }
             _ => return schema(&path, "initial と initial_in のどちらか一方を書きます"),
-        });
+        };
+        let mut exprs = Vec::new();
+        for (p, v) in &paths {
+            exprs.push(stored_tree(&ctx, v, p, &ty)?);
+        }
+        choices.push(exprs);
+        choice_paths.push(paths.into_iter().map(|(p, _)| p).collect());
         state_stypes.push(ty);
         state_sources.push(source(s, &path)?);
         states.push(name);
     }
     let state_layouts = layouts(&enums, &state_stypes);
-    let state_types = slot_types(&enums, &state_stypes);
-    let inits = initial_states(&choices, &state_types, &enums, &state_layouts, &constants, map)?;
+    let ctx = Ctx {
+        enums: &enums,
+        states: Some(&state_layouts),
+        args: &no_args,
+        n_params: 0,
+        next: false,
+        output: None,
+        constants: &constants,
+        fields: &fields,
+    };
+    let constraint = match map.get("initial_constraint").filter(|e| !e.is_null()) {
+        None => None,
+        Some(e) => {
+            let path = "$.initial_constraint";
+            Some(lowered(ctx.prop(e, path), |d| LoadError::Schema {
+                path: path.to_string(),
+                message: format!("初期条件が Bool 式でないか、未定義の参照を含みます（{d}）"),
+            })?)
+        }
+    };
     let parsed = Parsed {
         enums: &enums,
         states: &state_layouts,
         state_names: &states,
         constants: &constants,
+        fields: &fields,
     };
 
     let mut action_names = Vec::new();
@@ -673,15 +603,6 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         actions.push(action);
     }
 
-    let ctx = Ctx {
-        enums: &enums,
-        states: Some(&state_layouts),
-        args: &no_args,
-        n_params: 0,
-        next: false,
-        output: None,
-        constants: &constants,
-    };
     let mut invariant_names = Vec::new();
     let mut invariant_sources = Vec::new();
     let mut invariants = Vec::new();
@@ -735,6 +656,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             next: true,
             output: act.output.as_ref(),
             constants: &constants,
+            fields: &fields,
         };
         let expr = lowered(cctx.prop(required(con, &path, "expr")?, &format!("{path}.expr")), |d| {
             invalid(
@@ -742,7 +664,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
                 format!("遷移契約 {name:?} が Bool 式でないか、未定義の参照を含みます（{d}）"),
             )
         })?;
-        contracts.push(Contract { action, expr });
+        contracts.push(SContract { action, expr });
         contract_sources.push(source(con, &path)?);
         contract_names.push(name);
     }
@@ -757,10 +679,12 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         })?),
     };
 
-    let raw = RawModel {
+    let sm = SModel {
         enums: enums.iter().map(|e| e.variants.len() as i64).collect(),
-        state_types,
-        inits,
+        consts: sconsts,
+        states: state_stypes.iter().map(|t| fields.stype(t)).collect(),
+        inits: choices,
+        constraint,
         actions,
         invariants,
         contracts,
@@ -779,7 +703,64 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         contracts: contract_names,
         contract_sources,
     };
+    let raw = lower_model(&sm).map_err(|e| lower_error(e, &names, &constants, &choice_paths))?;
     Ok((raw, names, canonical::digest(&root)))
+}
+
+/// 中核の下ろしの失敗を、読み込みの誤りにする。
+/// 型の誤りと未定義の参照は名前解決で報告するので、残るのは値の評価の失敗と、型の不正である。
+fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_paths: &[Vec<String>]) -> LoadError {
+    let internal = |path: &str| LoadError::Schema {
+        path: path.to_string(),
+        message: "内部エラー: 中核の下ろしが式を受理しません".to_string(),
+    };
+    let eval = |path: &str, k: ErrKind| LoadError::Schema {
+        path: path.to_string(),
+        message: format!("値を評価できません（{k:?}）"),
+    };
+    let reason = |r: InvalidModel| invalid(r, describe(&r, names));
+    match e {
+        LowerError::State(i) => reason(InvalidModel::StateType(i)),
+        LowerError::Const(i, f) => {
+            let path = format!("$.constants[{i}].value");
+            match f {
+                Fault::Lower => internal(&path),
+                Fault::Eval(ErrKind::OutOfRange(x)) => LoadError::Schema {
+                    message: format!("定数 {:?} の値 {x} が型の範囲の外です", constants[i].name),
+                    path,
+                },
+                Fault::Eval(k) => eval(&path, k),
+            }
+        }
+        LowerError::Init(i, j, f) => {
+            let path = &choice_paths[i][j];
+            match f {
+                Fault::Lower => internal(path),
+                Fault::Eval(ErrKind::OutOfRange(_)) => reason(InvalidModel::Initial(j)),
+                Fault::Eval(k) => eval(path, k),
+            }
+        }
+        LowerError::InitCount => LoadError::Schema {
+            path: "$.states".to_string(),
+            message: format!("初期値の候補の組み合わせが {MAX_INITIAL_CANDIDATES} 個を超えます"),
+        },
+        LowerError::Constraint(Fault::Lower) => internal("$.initial_constraint"),
+        LowerError::Constraint(Fault::Eval(k)) => LoadError::Schema {
+            path: "$.initial_constraint".to_string(),
+            message: format!("初期条件を評価できません（{k:?}）"),
+        },
+        LowerError::NoInit => LoadError::Schema {
+            path: "$.initial_constraint".to_string(),
+            message: "初期条件を満たす初期状態がありません".to_string(),
+        },
+        LowerError::Args(a, d) => reason(InvalidModel::Domain(a, d)),
+        LowerError::Guard(a) => reason(InvalidModel::Guard(a)),
+        LowerError::Update(a, u) => reason(InvalidModel::Update(a, u)),
+        LowerError::Output(a) => reason(InvalidModel::Output(a)),
+        LowerError::Invariant(i) => reason(InvalidModel::Invariant(i)),
+        LowerError::Contract(k) => reason(InvalidModel::Contract(k)),
+        LowerError::Terminal => reason(InvalidModel::Terminal),
+    }
 }
 
 /// 中核のIR検証が返した理由の添字（スロットと中核の更新）を、IRの定義の添字に戻す。

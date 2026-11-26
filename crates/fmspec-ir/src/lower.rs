@@ -1,14 +1,13 @@
-//! IRの式の名前解決と型検査を経て、中核の式に下ろす。
+//! IRの式の名前解決の文脈と、型の構文の読み取り、型の名前。
 //!
 //! 名前解決（[`crate::resolve`]）が、JSONの式を中核の型付き構文木にし、型の誤りを報告する。
-//! 中核の式への下ろしは、中核の検証済みの関数（[`fmspec_core::lowering`]）が行う。
-//! ここにあるのは、下ろしの文脈、型の構文の読み取り、型の名前、定数の評価である。
+//! 中核の式への下ろしは、モデル全体をまとめて、中核の検証済みの関数（[`fmspec_core::model_lower`]）が行う。
 
 use crate::json::{array, int, object, required, schema, single, string};
 use crate::model::{EnumNames, LoadError};
-use crate::resolve::Resolver;
-use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
-use fmspec_core::model::{Expr as C, Type, Value as CV};
+use crate::resolve::{Fields, Resolver};
+use crate::types::{SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
+use fmspec_core::source::TExpr;
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -46,15 +45,14 @@ pub struct Layout {
     pub offset: usize,
 }
 
-/// 名前付きの定数。値はスロットごとの符号。
+/// 名前付きの定数。値は中核の下ろしが式を評価して求める。
 #[derive(Clone, Debug)]
 pub(crate) struct Constant {
     pub name: String,
     pub ty: SType,
-    pub codes: Vec<i64>,
 }
 
-/// 式を下ろす文脈。
+/// 式を名前解決する文脈。
 pub(crate) struct Ctx<'a> {
     pub enums: &'a [EnumNames],
     /// 状態変数。`None` なら状態を参照できない（初期値と定数）。
@@ -66,6 +64,8 @@ pub(crate) struct Ctx<'a> {
     pub next: bool,
     pub output: Option<&'a SType>,
     pub constants: &'a [Constant],
+    /// Recordのフィールドの名前の番号。モデル全体で共有する。
+    pub fields: &'a Fields,
 }
 
 // ---- 型 ----
@@ -215,14 +215,7 @@ pub(crate) fn type_name(enums: &[EnumNames], t: &XType) -> String {
     }
 }
 
-/// 値の符号の、スロットごとの中核の値。
-pub(crate) fn const_values(enums: &[EnumNames], st: &SType, codes: &[i64]) -> Vec<CV> {
-    let mut tys = Vec::new();
-    st.slot_types(enums, &mut tys);
-    tys.iter().zip(codes).map(|(t, x)| core_value(t, *x)).collect()
-}
-
-// ---- 下ろし ----
+// ---- 名前解決 ----
 
 impl<'a> Ctx<'a> {
     pub(crate) fn expect(&self, path: &str, t: &XType, want: &XType) -> Res<()> {
@@ -274,50 +267,13 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// 述語（guard、不変条件、遷移契約、終端条件）として下ろす。
-    pub(crate) fn prop(&self, v: &Value, path: &str) -> Res<C> {
-        let r = Resolver::new(self);
-        let e = r.prop(v, path)?;
-        match fmspec_core::lowering::lower_prop(&e, &r.lower_ctx()) {
-            Some(x) => Ok(x),
-            None => type_error(path, "内部エラー: 中核の下ろしが式を受理しません"),
-        }
+    /// 述語（guard、不変条件、遷移契約、終端条件）を名前解決する。
+    pub(crate) fn prop(&self, v: &Value, path: &str) -> Res<TExpr> {
+        Resolver::new(self).prop(v, path)
     }
 
-    /// 値を型 `st` の場所に置くスロット（正規形）。整数の範囲は検査しない（中核の範囲外更新で検出する）。
-    pub(crate) fn stored(&self, v: &Value, path: &str, st: &SType, depth: usize) -> Res<Vec<C>> {
-        let r = Resolver::new(self);
-        let (_, e) = r.stored(v, path, st)?;
-        match fmspec_core::lowering::lower_stored(&e, &r.lower_ctx(), &r.fields().stype(st), depth) {
-            Some(xs) => Ok(xs),
-            None => type_error(path, "内部エラー: 中核の下ろしが式を受理しません"),
-        }
-    }
-}
-
-/// 中核の式を、局所変数のない環境で評価して符号にする（初期値と定数）。
-/// 整数の範囲は検査しない。初期値の範囲は中核のIR検証が検査する。
-pub(crate) fn eval_const(e: &C, ty: &Type) -> Result<i64, fmspec_core::eval::ErrKind> {
-    use fmspec_core::eval::{eval, Ctx as ECtx};
-    let none_t: Vec<Type> = Vec::new();
-    let none_v: Vec<i64> = Vec::new();
-    let ctx = ECtx {
-        st_tys: &none_t,
-        arg_tys: &none_t,
-        pre: &none_v,
-        args: &none_v,
-        post: &none_v,
-        out: None,
-    };
-    let v = eval(e, &ctx)?;
-    let x = crate::types::core_code(&v);
-    let ok = matches!(
-        (ty, v),
-        (Type::Bool, CV::Bool(_)) | (Type::Enum(_), CV::Enum(_, _)) | (Type::Int(_, _), CV::Int(_))
-    );
-    if ok {
-        Ok(x)
-    } else {
-        Err(fmspec_core::eval::ErrKind::TypeMismatch)
+    /// 型 `st` の場所に置く値を名前解決する。
+    pub(crate) fn stored(&self, v: &Value, path: &str, st: &SType) -> Res<TExpr> {
+        Resolver::new(self).stored(v, path, st).map(|(_, e)| e)
     }
 }

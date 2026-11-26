@@ -9,10 +9,9 @@
 //! Recordのフィールドの名前は、モデル全体で共有する [`Fields`] で番号にする。
 
 use crate::json::{array, index, int, object, operands, required, schema, single, string};
-use crate::lower::{const_values, parse_type, type_error, type_name, Ctx, Res};
+use crate::lower::{parse_type, type_error, type_name, Ctx, Res};
 use crate::types::{SType, XType, MAX_KEYS};
 use fmspec_core::encoding::SType as CS;
-use fmspec_core::lowering::{Constant as CConstant, Layout as CLayout, LowerCtx};
 use fmspec_core::model::{BinOp, Value as CV};
 use fmspec_core::source::{Item, Over, SetOp, TExpr};
 use serde_json::Value;
@@ -64,10 +63,9 @@ fn b(e: TExpr) -> Box<TExpr> {
     Box::new(e)
 }
 
-/// 名前解決の文脈。下ろしの文脈に、フィールドの名前の番号を加える。
+/// 名前解決の文脈。
 pub(crate) struct Resolver<'c, 'a> {
     cx: &'c Ctx<'a>,
-    fields: Fields,
 }
 
 impl<'a> std::ops::Deref for Resolver<'_, 'a> {
@@ -79,38 +77,7 @@ impl<'a> std::ops::Deref for Resolver<'_, 'a> {
 
 impl<'c, 'a> Resolver<'c, 'a> {
     pub(crate) fn new(cx: &'c Ctx<'a>) -> Self {
-        Resolver {
-            cx,
-            fields: Fields::default(),
-        }
-    }
-
-    pub(crate) fn fields(&self) -> &Fields {
-        &self.fields
-    }
-
-    /// 中核の下ろしの文脈。
-    pub(crate) fn lower_ctx(&self) -> LowerCtx {
-        let f = &self.fields;
-        let layout = |l: &crate::lower::Layout| CLayout {
-            ty: f.stype(&l.ty),
-            offset: l.offset,
-        };
-        LowerCtx {
-            enums: self.enums.iter().map(|e| e.variants.len() as i64).collect(),
-            states: self.states.map(|ls| ls.iter().map(layout).collect()),
-            args: self.args.iter().map(layout).collect(),
-            next: self.next,
-            out: self.output.map(|t| f.stype(t)),
-            consts: self
-                .constants
-                .iter()
-                .map(|c| CConstant {
-                    ty: f.stype(&c.ty),
-                    slots: const_values(self.enums, &c.ty, &c.codes),
-                })
-                .collect(),
-        }
+        Resolver { cx }
     }
 
     /// 述語を名前解決する。
