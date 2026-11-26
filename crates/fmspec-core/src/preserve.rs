@@ -33,7 +33,7 @@ use crate::ranking::mixed_rank_eval;
 #[cfg(verus_keep_ghost)]
 use crate::slots::{and_s, bool_lit, extends, ite_s, join_s, lits, or_s, tree_s, Block, Join};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, Over, SEnv, TExpr};
+use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, Item, Over, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -1443,7 +1443,7 @@ pub open spec fn kind_expr(kind: u8, i: usize) -> Expr {
     }
 }
 
-/// 意味の保存を証明した式の範囲。証明が進むにつれて広げる。
+/// 下ろしの各関数が意味の保存を示す式の範囲。すべての式を含む（[`lemma_frag_total`]）。
 pub open spec fn frag(e: TExpr) -> bool
     decreases e, 0nat,
 {
@@ -1460,6 +1460,19 @@ pub open spec fn frag(e: TExpr) -> bool
         TExpr::Get(_, a, x) => frag(*a) && frag(*x),
         TExpr::SetBin(_, a, b) => frag(*a) && frag(*b),
         TExpr::SetLit(_, es) => frag_seq(es@),
+        TExpr::ListLit(_, _, es) => frag_seq(es@),
+        TExpr::At(a, i) => frag(*a) && frag(*i),
+        TExpr::First(a) => frag(*a),
+        TExpr::Last(a) => frag(*a),
+        TExpr::Push(_, _, a, x) => frag(*a) && frag(*x),
+        TExpr::Pop(a) => frag(*a),
+        TExpr::Shift(a) => frag(*a),
+        TExpr::ListContains(a, x) => frag(*a) && frag(*x),
+        TExpr::MapLit(_, _, items) => frag_items(items@),
+        TExpr::Put(_, _, a, x, y) => frag(*a) && frag(*x) && frag(*y),
+        TExpr::HasKey(_, a, x) => frag(*a) && frag(*x),
+        TExpr::Delete(_, a, x) => frag(*a) && frag(*x),
+        TExpr::Keys(a) => frag(*a),
         TExpr::SetContains(_, a, x) => frag(*a) && frag(*x),
         TExpr::Insert(_, a, x) => frag(*a) && frag(*x),
         TExpr::Remove(_, a, x) => frag(*a) && frag(*x),
@@ -1480,7 +1493,74 @@ pub open spec fn frag(e: TExpr) -> bool
             Over::Map(_, m) => frag(*m),
             Over::List(l) => frag(*l),
         },
-        _ => false,
+    }
+}
+
+/// すべての式は [`frag`] に含まれる。
+pub proof fn lemma_frag_total(e: TExpr)
+    ensures
+        frag(e),
+    decreases e, 0nat,
+{
+    match e {
+        TExpr::Lit(_) | TExpr::Var(_) | TExpr::Next(_) | TExpr::Arg(_) | TExpr::Out | TExpr::Local(_)
+        | TExpr::Const(_) | TExpr::None(_) => {},
+        TExpr::Bin(_, a, b) | TExpr::Eq(_, a, b) | TExpr::Implies(a, b) | TExpr::Let(a, b) | TExpr::Get(_, a, b)
+        | TExpr::SetBin(_, a, b) | TExpr::At(a, b) | TExpr::Push(_, _, a, b) | TExpr::ListContains(a, b)
+        | TExpr::HasKey(_, a, b) | TExpr::Delete(_, a, b) | TExpr::SetContains(_, a, b) | TExpr::Insert(_, a, b)
+        | TExpr::Remove(_, a, b) => {
+            lemma_frag_total(*a);
+            lemma_frag_total(*b);
+        },
+        TExpr::Ite(p, a, b) | TExpr::Put(_, _, p, a, b) => {
+            lemma_frag_total(*p);
+            lemma_frag_total(*a);
+            lemma_frag_total(*b);
+        },
+        TExpr::Not(a) | TExpr::First(a) | TExpr::Last(a) | TExpr::Pop(a) | TExpr::Shift(a) | TExpr::Keys(a)
+        | TExpr::Size(a) | TExpr::IsEmpty(a) | TExpr::Nth(a, _) | TExpr::Field(a, _, _) | TExpr::Some(a)
+        | TExpr::IsSome(a) | TExpr::IsNone(a) | TExpr::Unwrap(a) => {
+            lemma_frag_total(*a);
+        },
+        TExpr::Fold(_, es) | TExpr::SetLit(_, es) | TExpr::ListLit(_, _, es) | TExpr::Tuple(es)
+        | TExpr::Record(_, es) => {
+            lemma_frag_seq_total(es@);
+        },
+        TExpr::MapLit(_, _, items) => {
+            lemma_frag_items_total(items@);
+        },
+        TExpr::Quant(_, over, body) => {
+            lemma_frag_total(*body);
+            match over {
+                Over::Type(_) => {},
+                Over::Set(_, s) => lemma_frag_total(*s),
+                Over::Map(_, m) => lemma_frag_total(*m),
+                Over::List(l) => lemma_frag_total(*l),
+            }
+        },
+    }
+}
+
+pub proof fn lemma_frag_seq_total(es: Seq<TExpr>)
+    ensures
+        frag_seq(es),
+    decreases es, 1nat,
+{
+    if es.len() > 0 {
+        lemma_frag_seq_total(es.drop_last());
+        lemma_frag_total(es.last());
+    }
+}
+
+pub proof fn lemma_frag_items_total(items: Seq<Item>)
+    ensures
+        frag_items(items),
+    decreases items, 1nat,
+{
+    if items.len() > 0 {
+        lemma_frag_items_total(items.drop_last());
+        lemma_frag_total(items.last().key);
+        lemma_frag_total(items.last().value);
     }
 }
 
@@ -1491,6 +1571,31 @@ pub open spec fn frag_seq(es: Seq<TExpr>) -> bool
         true
     } else {
         frag_seq(es.drop_last()) && frag(es.last())
+    }
+}
+
+pub open spec fn frag_items(items: Seq<Item>) -> bool
+    decreases items, 1nat,
+{
+    if items.len() == 0 {
+        true
+    } else {
+        frag_items(items.drop_last()) && frag(items.last().key) && frag(items.last().value)
+    }
+}
+
+pub proof fn lemma_frag_items(items: Seq<Item>, i: int)
+    requires
+        frag_items(items),
+        0 <= i < items.len(),
+    ensures
+        frag(items[i].key),
+        frag(items[i].value),
+    decreases items.len(),
+{
+    if i < items.len() - 1 {
+        assert(items.drop_last()[i] == items[i]);
+        lemma_frag_items(items.drop_last(), i);
     }
 }
 

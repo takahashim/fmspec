@@ -217,7 +217,26 @@ VERUS_MUTANTS = [
   ["lowering.rs", "                if *positive {", "                if !*positive {", "等しさと等しくなさを入れ替える"],
   ["slots.rs", "Some(and(eq(copy_expr(&x[0]), copy_expr(&y[0])), implies(copy_expr(&x[0]), rest)))", "Some(implies(copy_expr(&x[0]), rest))", "Optionの有無を比べない"],
   ["slots.rs", "XType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "XType::List(e, _) => small_stype(e),", "Listの長さの上限を確かめずに等しさを比べる"],
-  ["equality.rs", "SType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "SType::List(e, _) => small_stype(e),", "入れ子のListの長さの上限を確かめない"]
+  ["equality.rs", "SType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "SType::List(e, _) => small_stype(e),", "入れ子のListの長さの上限を確かめない"],
+  ["lowering.rs", "out.push(ci(es.len() as i64));", "out.push(ci(0));", "Listのリテラルの長さを0にする"],
+  ["lowering.rs", "while p < *max", "while p + 1 < *max", "Listのリテラルを上限まで埋めない"],
+  ["lowering.rs", "let cond = and(bin(BinOp::Ge, copy_expr(&i), ci(0)), bin(BinOp::Lt, copy_expr(&i), len));", "let cond = and(bin(BinOp::Ge, copy_expr(&i), ci(0)), bin(BinOp::Le, copy_expr(&i), len));", "添字の範囲に長さを含める"],
+  ["lowering.rs", "copy_exprs(&rows[0])", "copy_exprs(&rows[rows.len() - 1])", "Listの先頭の代わりに最後の行を返す"],
+  ["lowering.rs", "let i = bind(blk, bin(BinOp::Sub, len, ci(1)))?;", "let i = bind(blk, bin(BinOp::Sub, len, ci(0)))?;", "Listの末尾の添字を長さにする"],
+  ["lowering.rs", "check(blk, bin(BinOp::Lt, copy_expr(&len), ci(max as i64)), FAIL_FULL)?;", "check(blk, bin(BinOp::Le, copy_expr(&len), ci(max as i64)), FAIL_FULL)?;", "満杯のListに要素を加える"],
+  ["lowering.rs", "let new_len = bind(blk, bin(BinOp::Add, copy_expr(&len), ci(1)))?;", "let new_len = bind(blk, bin(BinOp::Add, copy_expr(&len), ci(0)))?;", "要素を加えても長さを増やさない"],
+  ["lowering.rs", "let out = ite_rows(&rows, &new_len, &defs)?;", "let out = ite_rows(&rows, &ci(0), &defs)?;", "末尾でなく先頭の行を既定値にする"],
+  ["lowering.rs", "let mut p = 1;", "let mut p = 0;", "Listの先頭を除かずに詰める"],
+  ["lowering.rs", "hits.push(and(bin(BinOp::Gt, copy_expr(&len), ci(p as i64)), same));", "hits.push(same);", "Listの長さより後ろの行も比べる"],
+  ["lowering.rs", "if !xtype_eq(&tx, &et) {", "if !xtype_eq(&tx, &tx) {", "Listの要素と値の型を確かめずに比べる"],
+  ["lowering.rs", "out.push(and(known, hit));", "out.push(hit);", "型に属さないキーの番号でMapの行を選ぶ"],
+  ["lowering.rs", "alt.push(cb(false));", "alt.push(cb(true));", "Mapから除いたキーを有りのままにする"],
+  ["lowering.rs", "alt.push(cb(true));", "alt.push(cb(false));", "Mapに置いたキーを無しにする"],
+  ["lowering.rs", "if keys_exec(k, enums).is_none() {", "if keys_exec(k, enums).is_none() && items.len() > 0 {", "キーの数が決まらない型の空のMapを下ろす"],
+  ["slots.rs", "c.push(copy_expr(&rows[t][j]));", "c.push(copy_expr(&rows[0][j]));", "どの添字でもListの先頭の行を選ぶ"],
+  ["slots.rs", "        let start = p.checked_mul(w)?.checked_add(1)?;\n        let end = start.checked_add(w)?;\n        if end > slots.len() {\n            return None;\n        }\n        let ghost i0", "        let start = p.checked_mul(w)?;\n        let end = start.checked_add(w)?;\n        if end > slots.len() {\n            return None;\n        }\n        let ghost i0", "Listの長さのスロットを行に含める"],
+  ["slots.rs", "if size != slots.len() {", "if size > slots.len() {", "Mapのスロットの長さを確かめない"],
+  ["slots.rs", "vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&alt[j]), copy_expr(&rows[p][j])));", "vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&rows[p][j]), copy_expr(&alt[j])));", "行の置き換えを逆にする"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -283,7 +302,30 @@ VERUS_CANARIES = [
   ["equality.rs", "            lemma_inj_items(i1, i2, *e, enums);", "lemma_enc_inj のList"],
   ["equality.rs", "            lemma_kinds_rows(rows, *x, enums);", "lemma_kinds のMap"],
   ["equality.rs", "            lemma_enc_inj(vx, vy, st, enums);", "lemma_eq_coll の等しい場合"],
-  ["equality.rs", "            lemma_and(e0, imp, env, l, true, w1 == w2);", "lemma_eq_option の中身がある場合"]
+  ["equality.rs", "            lemma_and(e0, imp, env, l, true, w1 == w2);", "lemma_eq_option の中身がある場合"],
+  ["lowering.rs", "assert(slot_vals(out, env, l2) =~= seq![Value::Int(n)] + enc_items(items, st, enums));", "lemma_listlit_step の値の場合"],
+  ["lowering.rs", "lemma_clean_concat(o2, lits(tail), env, l);", "lemma_listlit_done の値の場合"],
+  ["lowering.rs", "lemma_select(rows, y, out, pad_vals(items, st, max as nat, enums), env, l4, n);", "lemma_at の範囲内の場合"],
+  ["lowering.rs", "lemma_items_member(items, st, enums, 0);", "lemma_first の値の場合"],
+  ["lowering.rs", "lemma_select(rows, i, out, pad_vals(items, st, max as nat, enums), env, l3, n);", "lemma_last の値の場合"],
+  ["lowering.rs", "lemma_list_join(new_len, out, env, l4, items2, st, max, enums);", "lemma_push の値の場合"],
+  ["lowering.rs", "lemma_ite_rows(out, rows, new_len, defs, pad_vals(items, st, max as nat, enums), dv, env, l3, (m - 1) as i64);", "lemma_pop の値の場合"],
+  ["lowering.rs", "lemma_items_drop_first(items, st, enums);", "lemma_shift の値の場合"],
+  ["lowering.rs", "lemma_any_of(hits, env, l2);", "lemma_list_contains の値の場合"],
+  ["lowering.rs", "lemma_none_rows(keys_or_zero(kt, enums), vt, enums);", "lemma_maplit_base"],
+  ["lowering.rs", "assert(denotes(s1, env, l1, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums));", "lemma_maplit_step の値の場合"],
+  ["lowering.rs", "lemma_rows_update(rows, vt, enums, rk as int, Some(vv));", "lemma_put の値の場合"],
+  ["lowering.rs", "assert(denotes(ms, env, l1, SVal::Map(rows), mt, se.enums));", "lemma_put_expr の値の場合"],
+  ["lowering.rs", "assert(slot_vals(h, env, l1) =~= enc(SVal::Set(bits), STy::Set(Box::new(kt)), enums));", "lemma_keys の値の場合"],
+  ["lowering.rs", "assert(eval_src(e, se, sls) == eval_src(es, se, sls));", "lemma_has_key の意味の一致"],
+  ["lowering.rs", "lemma_rows_update(rows, vt, enums, rkk, None);", "lemma_delete のキーがある場合"],
+  ["maps.rs", "lemma_enc_rows_index(rows, vt, enums, p, j);", "lemma_map_parts の各スロット"],
+  ["maps.rs", "lemma_flat_rows(a, b, t, env, l, enums);", "lemma_flat_rows の帰納"],
+  ["maps.rs", "lemma_rows_update(rows.drop_last(), t, enums, r, o);", "lemma_rows_update の帰納"],
+  ["lists.rs", "assert(slot_vals(out[p], env, l) =~= nv[p]);", "lemma_ite_rows の各行"],
+  ["lists.rs", "lemma_flat(a, b, st, env, l, enums);", "lemma_flat の帰納"],
+  ["slots.rs", "assert(ite_row(out@[p as int]@, rows@[p as int]@, *k, alt@, p as int));", "ite_rows のループ"],
+  ["slots.rs", "rows.push(sub_exprs(slots, at, end));", "map_rows のループ"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

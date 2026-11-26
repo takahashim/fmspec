@@ -561,14 +561,6 @@ pub open spec fn eq_seq_ok(ts: Seq<XTy>, x: Seq<Expr>, y: Seq<Expr>, c: Expr, en
         )
 }
 
-pub proof fn lemma_clean_pure(x: Seq<Expr>, env: Env, l: Seq<Value>)
-    requires
-        clean(x, env, l),
-    ensures
-        all_pure(x, l.len()),
-{
-}
-
 /// Bool、整数、列挙型の等しさ。
 pub proof fn lemma_eq_scalar(t: XTy, x: Seq<Expr>, y: Seq<Expr>, enums: Seq<i64>)
     requires

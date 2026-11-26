@@ -26,9 +26,16 @@ use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
+#[cfg(verus_keep_ghost)]
+use crate::lists::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at, rows_view, select_ok};
+#[cfg(verus_keep_ghost)]
+use crate::maps::{mparts_ok, mrow_at};
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
+use crate::quant::pick_slot;
+#[cfg(verus_keep_ghost)]
+use crate::quant::picks;
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
 use vstd::prelude::*;
 
@@ -958,43 +965,67 @@ fn defaults_all(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Vec<E
 
 // ---- スロットの操作 ----
 
-/// 添字 `idx`（`0..rows.len()` に収まる）の行の `j` 番目のスロットを、二分木の `ite` で選ぶ。
-fn pick(rows: &Vec<Vec<Expr>>, lo: usize, hi: usize, j: usize, idx: &Expr) -> (r: Option<Expr>)
-    requires
-        lo < hi <= rows@.len(),
-    decreases hi - lo,
-{
-    if hi - lo == 1 {
-        if j < rows[lo].len() {
-            Some(copy_expr(&rows[lo][j]))
-        } else {
-            None
-        }
-    } else {
-        let mid = lo + (hi - lo) / 2;
-        if mid > 0x7fff_ffffusize {
-            return None;
-        }
-        let x = pick(rows, lo, mid, j, idx)?;
-        let y = pick(rows, mid, hi, j, idx)?;
-        Some(ite(bin(BinOp::Lt, copy_expr(idx), ci(mid as i64)), x, y))
-    }
-}
-
 /// 添字 `idx` の行を選ぶ。行がなければ `fallback`。
-pub fn select(rows: &Vec<Vec<Expr>>, idx: &Expr, fallback: &Vec<Expr>) -> (r: Option<Vec<Expr>>) {
+pub fn select(rows: &Vec<Vec<Expr>>, idx: &Expr, fallback: &Vec<Expr>) -> (r: Option<Vec<Expr>>)
+    ensures
+        r matches Some(out) ==> rows@.len() > 0 ==> select_ok(rows_view(rows@), *idx, out@),
+{
     if rows.len() == 0 {
         return Some(copy_exprs(fallback));
     }
+    if rows.len() > 0x7fff_ffffusize {
+        return None;
+    }
+    let ghost rv = rows_view(rows@);
     let n = rows[0].len();
+    let mut k = 0;
+    while k < rows.len()
+        invariant
+            k <= rows@.len(),
+            rv == rows_view(rows@),
+            forall|t: int| 0 <= t < k ==> (#[trigger] rv[t]).len() == n,
+        decreases rows.len() - k,
+    {
+        if rows[k].len() != n {
+            return None;
+        }
+        k += 1;
+    }
     let mut out: Vec<Expr> = Vec::new();
     let mut j = 0;
     while j < n
         invariant
-            rows@.len() > 0,
+            0 < rows@.len() <= 0x7fff_ffff,
+            rv == rows_view(rows@),
+            forall|t: int| 0 <= t < rows@.len() ==> (#[trigger] rv[t]).len() == n,
+            j <= n,
+            out@.len() == j,
+            forall|q: int| 0 <= q < j ==> #[trigger] picks(out@[q], col(rv, q), *idx),
         decreases n - j,
     {
-        out.push(pick(rows, 0, rows.len(), j, idx)?);
+        let mut c: Vec<Expr> = Vec::new();
+        let mut t = 0;
+        while t < rows.len()
+            invariant
+                0 < rows@.len() <= 0x7fff_ffff,
+                rv == rows_view(rows@),
+                forall|u: int| 0 <= u < rows@.len() ==> (#[trigger] rv[u]).len() == n,
+                j < n,
+                t <= rows@.len(),
+                c@.len() == t,
+                forall|u: int| 0 <= u < t ==> #[trigger] c@[u] == rv[u][j as int],
+            decreases rows.len() - t,
+        {
+            proof {
+                assert(rv[t as int] == rows@[t as int]@);
+            }
+            c.push(copy_expr(&rows[t][j]));
+            t += 1;
+        }
+        proof {
+            assert(c@ =~= col(rv, j as int));
+        }
+        out.push(pick_slot(&c, idx));
         j += 1;
     }
     Some(out)
@@ -1968,16 +1999,33 @@ fn canonical_parts(_parent: &SType, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &
 }
 
 /// Mapのスロットの、キーごとの有無と値。
-pub fn map_parts(k: &SType, v: &SType, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<(Vec<Expr>, Vec<Vec<Expr>>)>) {
+/// Map のスロットの行。行は、有無のBoolと値のスロットである。
+pub fn map_rows(k: &SType, v: &SType, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<Vec<Vec<Expr>>>)
+    ensures
+        r matches Some(rows) ==> mparts_ok(
+            slots@,
+            rows_view(rows@),
+            (1 + width(sty(*v), enums@)) as nat,
+            keys_or_zero(sty(*k), enums@),
+        ),
+{
     let n = keys_or_zero_exec(k, enums);
     let w = stype_width(v, enums)?;
     let stride = w.checked_add(1)?;
-    let mut present: Vec<Expr> = Vec::new();
-    let mut values: Vec<Vec<Expr>> = Vec::new();
+    let size = n.checked_mul(stride)?;
+    if size != slots.len() {
+        return None;
+    }
+    let mut rows: Vec<Vec<Expr>> = Vec::new();
     let mut i = 0;
     while i < n
         invariant
             stride == w + 1,
+            size == n * stride,
+            size == slots@.len(),
+            i <= n,
+            rows@.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] mrow_at(rows@[q]@, slots@, q, stride as nat),
         decreases n - i,
     {
         let at = i.checked_mul(stride)?;
@@ -1985,44 +2033,190 @@ pub fn map_parts(k: &SType, v: &SType, slots: &Vec<Expr>, enums: &Vec<i64>) -> (
         if end > slots.len() {
             return None;
         }
-        present.push(copy_expr(&slots[at]));
-        values.push(sub_exprs(slots, at + 1, end));
-        i += 1;
-    }
-    Some((present, values))
-}
-
-pub fn map_join(present: &Vec<Expr>, values: &Vec<Vec<Expr>>) -> (r: Vec<Expr>) {
-    let n = if present.len() < values.len() {
-        present.len()
-    } else {
-        values.len()
-    };
-    let mut out: Vec<Expr> = Vec::new();
-    let mut i = 0;
-    while i < n
-        invariant
-            n <= present.len(),
-            n <= values.len(),
-        decreases n - i,
-    {
-        out.push(copy_expr(&present[i]));
-        let mut j = 0;
-        while j < values[i].len()
-            invariant
-                i < values.len(),
-            decreases values@[i as int]@.len() - j,
-        {
-            out.push(copy_expr(&values[i][j]));
-            j += 1;
+        let ghost r1 = rows@;
+        rows.push(sub_exprs(slots, at, end));
+        proof {
+            assert forall|q: int| 0 <= q <= i implies #[trigger] mrow_at(rows@[q]@, slots@, q, stride as nat) by {
+                if q < i {
+                    assert(rows@[q] == r1[q]);
+                }
+            }
         }
         i += 1;
+    }
+    proof {
+        let rv = rows_view(rows@);
+        assert forall|q: int| 0 <= q < n implies #[trigger] mrow_at(rv[q], slots@, q, stride as nat) by {
+            assert(rv[q] == rows@[q]@);
+        }
+    }
+    Some(rows)
+}
+
+/// 各行の先頭のスロット。
+pub open spec fn heads_ok(h: Seq<Expr>, rows: Seq<Seq<Expr>>) -> bool {
+    &&& h.len() == rows.len()
+    &&& forall|q: int| 0 <= q < rows.len() ==> #[trigger] head_at(h[q], rows[q])
+}
+
+pub open spec fn head_at(x: Expr, row: Seq<Expr>) -> bool {
+    row.len() > 0 && x == row[0]
+}
+
+pub fn heads(rows: &Vec<Vec<Expr>>) -> (r: Option<Vec<Expr>>)
+    ensures
+        r matches Some(h) ==> heads_ok(h@, rows_view(rows@)),
+{
+    let mut h: Vec<Expr> = Vec::new();
+    let mut i = 0;
+    while i < rows.len()
+        invariant
+            i <= rows@.len(),
+            h@.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] head_at(h@[q], rows@[q]@),
+        decreases rows.len() - i,
+    {
+        if rows[i].len() == 0 {
+            return None;
+        }
+        let ghost h1 = h@;
+        let x = copy_expr(&rows[i][0]);
+        h.push(x);
+        proof {
+            assert(x == rows@[i as int]@[0]);
+            assert forall|q: int| 0 <= q <= i implies #[trigger] head_at(h@[q], rows@[q]@) by {
+                if q < i {
+                    assert(h@[q] == h1[q]);
+                }
+            }
+        }
+        i += 1;
+    }
+    proof {
+        let rv = rows_view(rows@);
+        assert forall|q: int| 0 <= q < rv.len() implies #[trigger] head_at(h@[q], rv[q]) by {
+            assert(rv[q] == rows@[q]@);
+        }
+    }
+    Some(h)
+}
+
+/// 各行のスロットを、`k` が行の番号なら `alt` のスロットに置き換える。
+pub fn ite_rows(rows: &Vec<Vec<Expr>>, k: &Expr, alt: &Vec<Expr>) -> (r: Option<Vec<Vec<Expr>>>)
+    ensures
+        r matches Some(out) ==> ite_rows_ok(rows_view(out@), rows_view(rows@), *k, alt@),
+{
+    if rows.len() > 0x7fff_ffffusize {
+        return None;
+    }
+    let mut out: Vec<Vec<Expr>> = Vec::new();
+    let mut p = 0;
+    while p < rows.len()
+        invariant
+            rows@.len() <= 0x7fff_ffff,
+            p <= rows@.len(),
+            out@.len() == p,
+            forall|q: int| 0 <= q < p ==> #[trigger] ite_row(out@[q]@, rows@[q]@, *k, alt@, q),
+        decreases rows.len() - p,
+    {
+        if rows[p].len() != alt.len() {
+            return None;
+        }
+        let mut vs: Vec<Expr> = Vec::new();
+        let mut j = 0;
+        while j < alt.len()
+            invariant
+                p < rows@.len(),
+                rows@.len() <= 0x7fff_ffff,
+                rows@[p as int]@.len() == alt@.len(),
+                j <= alt@.len(),
+                vs@.len() == j,
+                forall|i: int|
+                    0 <= i < j ==> #[trigger] vs@[i] == ite_s(
+                        Expr::Bin(BinOp::Eq, Box::new(*k), Box::new(Expr::Const(Value::Int(p as i64)))),
+                        alt@[i],
+                        rows@[p as int]@[i],
+                    ),
+            decreases alt.len() - j,
+        {
+            vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&alt[j]), copy_expr(&rows[p][j])));
+            j += 1;
+        }
+        let ghost o1 = out@;
+        out.push(vs);
+        proof {
+            assert(ite_row(out@[p as int]@, rows@[p as int]@, *k, alt@, p as int));
+            assert forall|q: int| 0 <= q < p implies #[trigger] ite_row(out@[q]@, rows@[q]@, *k, alt@, q) by {
+                assert(out@[q] == o1[q]);
+            }
+        }
+        p += 1;
+    }
+    proof {
+        let ov = rows_view(out@);
+        let rv = rows_view(rows@);
+        assert forall|q: int| 0 <= q < rv.len() implies #[trigger] ite_row(ov[q], rv[q], *k, alt@, q) by {
+            assert(ov[q] == out@[q]@);
+            assert(rv[q] == rows@[q]@);
+        }
+    }
+    Some(out)
+}
+
+/// 行をつなげる。
+pub fn join_rows(items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
+    ensures
+        r@ == flat(rows_view(items@)),
+{
+    let ghost rv = rows_view(items@);
+    let mut out: Vec<Expr> = Vec::new();
+    proof {
+        assert(rv.take(0) =~= Seq::<Seq<Expr>>::empty());
+        assert(out@ =~= flat(rv.take(0)));
+    }
+    let mut i = 0;
+    while i < items.len()
+        invariant
+            i <= items@.len(),
+            rv == rows_view(items@),
+            out@ == flat(rv.take(i as int)),
+        decreases items.len() - i,
+    {
+        let ghost o1 = out@;
+        let mut j = 0;
+        while j < items[i].len()
+            invariant
+                i < items.len(),
+                j <= items@[i as int]@.len(),
+                out@ == o1 + items@[i as int]@.take(j as int),
+            decreases items@[i as int]@.len() - j,
+        {
+            out.push(copy_expr(&items[i][j]));
+            proof {
+                assert(o1 + items@[i as int]@.take(j + 1) =~= (o1 + items@[i as int]@.take(j as int)).push(
+                    items@[i as int]@[j as int],
+                ));
+            }
+            j += 1;
+        }
+        proof {
+            assert(rv.take(i + 1).drop_last() =~= rv.take(i as int));
+            assert(rv.take(i + 1).last() == items@[i as int]@);
+            assert(items@[i as int]@.take(items@[i as int]@.len() as int) =~= items@[i as int]@);
+        }
+        i += 1;
+    }
+    proof {
+        assert(rv.take(items@.len() as int) =~= rv);
     }
     out
 }
 
 /// List のスロットの、長さと要素。
-pub fn list_parts(t: &SType, max: usize, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<(Expr, Vec<Vec<Expr>>)>) {
+pub fn list_parts(t: &SType, max: usize, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<(Expr, Vec<Vec<Expr>>)>)
+    ensures
+        r matches Some((len, rows)) ==> parts_ok(slots@, len, rows_view(rows@), width(sty(*t), enums@), max as nat),
+{
     let w = stype_width(t, enums)?;
     if slots.len() == 0 {
         return None;
@@ -2030,6 +2224,12 @@ pub fn list_parts(t: &SType, max: usize, slots: &Vec<Expr>, enums: &Vec<i64>) ->
     let mut items: Vec<Vec<Expr>> = Vec::new();
     let mut p = 0;
     while p < max
+        invariant
+            w == width(sty(*t), enums@),
+            slots@.len() > 0,
+            p <= max,
+            items@.len() == p,
+            forall|q: int| 0 <= q < p ==> #[trigger] row_at(items@[q]@, slots@, q, w as nat),
         decreases max - p,
     {
         let start = p.checked_mul(w)?.checked_add(1)?;
@@ -2037,29 +2237,72 @@ pub fn list_parts(t: &SType, max: usize, slots: &Vec<Expr>, enums: &Vec<i64>) ->
         if end > slots.len() {
             return None;
         }
+        let ghost i0 = items@;
         items.push(sub_exprs(slots, start, end));
+        proof {
+            assert(row_at(items@[p as int]@, slots@, p as int, w as nat));
+            assert forall|q: int| 0 <= q < p implies #[trigger] row_at(items@[q]@, slots@, q, w as nat) by {
+                assert(items@[q] == i0[q]);
+            }
+        }
         p += 1;
+    }
+    proof {
+        let rv = rows_view(items@);
+        assert forall|q: int| 0 <= q < max implies #[trigger] row_at(rv[q], slots@, q, w as nat) by {
+            assert(rv[q] == items@[q]@);
+        }
     }
     Some((copy_expr(&slots[0]), items))
 }
 
-pub fn list_join(len: Expr, items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>) {
+pub fn list_join(len: Expr, items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
+    ensures
+        r@ == seq![len] + flat(rows_view(items@)),
+{
+    let ghost l0 = len;
+    let ghost rv = rows_view(items@);
     let mut out: Vec<Expr> = Vec::new();
     out.push(len);
+    proof {
+        assert(rv.take(0) =~= Seq::<Seq<Expr>>::empty());
+        assert(out@ =~= seq![l0] + flat(rv.take(0)));
+    }
     let mut i = 0;
     while i < items.len()
+        invariant
+            i <= items@.len(),
+            rv == rows_view(items@),
+            out@ == seq![l0] + flat(rv.take(i as int)),
         decreases items.len() - i,
     {
+        let ghost o1 = out@;
         let mut j = 0;
         while j < items[i].len()
             invariant
                 i < items.len(),
+                j <= items@[i as int]@.len(),
+                out@ == o1 + items@[i as int]@.take(j as int),
             decreases items@[i as int]@.len() - j,
         {
             out.push(copy_expr(&items[i][j]));
+            proof {
+                assert(o1 + items@[i as int]@.take(j + 1) =~= (o1 + items@[i as int]@.take(j as int)).push(
+                    items@[i as int]@[j as int],
+                ));
+            }
             j += 1;
         }
+        proof {
+            assert(rv.take(i + 1).drop_last() =~= rv.take(i as int));
+            assert(rv.take(i + 1).last() == items@[i as int]@);
+            assert(items@[i as int]@.take(items@[i as int]@.len() as int) =~= items@[i as int]@);
+            assert(seq![l0] + flat(rv.take(i + 1)) =~= (seq![l0] + flat(rv.take(i as int))) + items@[i as int]@);
+        }
         i += 1;
+    }
+    proof {
+        assert(rv.take(items@.len() as int) =~= rv);
     }
     out
 }

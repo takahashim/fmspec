@@ -9,6 +9,8 @@
 //! - [`source`]：IRの式の型付き構文木と、値の上の意味論（仕様）
 //! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
 //! - [`slots`]：下ろしで使う、スロットの式の組み立て
+//! - [`lists`]：Listのスロットの補題（行への区切り、行の選択、行のつなぎ直し）
+//! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
 //! - [`equality`]：等しさの下ろしの補題（符号化の単射性と、値の種類）
@@ -34,9 +36,11 @@ pub mod gate;
 mod impls;
 pub mod infer;
 pub mod keys;
+pub mod lists;
 pub mod lowering;
 pub mod map_encoding;
 pub mod map_lookup;
+pub mod maps;
 pub mod mbt;
 pub mod model;
 pub mod preserve;

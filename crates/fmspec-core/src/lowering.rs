@@ -24,19 +24,25 @@ use crate::encoding::{enc_items, enc_repeat, lemma_default_len, lemma_enc_items_
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_len, lemma_models_enc, lemma_stys, lemma_xtys, models};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_xwidth_of, models_seq};
+use crate::encoding::{lemma_xwidth_of, list_items_member, models_seq};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xty, xty, xtys, xwidth, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::equality::{eq_ok, lemma_clean_pure};
+use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, binop_spec, eval_l, lookup, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_domain_rank, lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
+use crate::lists::{flat, ite_rows_ok, lemma_ite_rows, lemma_list_join, pad, select_ok};
+#[cfg(verus_keep_ghost)]
+use crate::lists::{lemma_list_parts, lemma_rows_weaken, lemma_select, pad_vals, parts_ok, rows_at, rows_view};
+use crate::map_lookup::select_flat_map_lookup;
+#[cfg(verus_keep_ghost)]
 use crate::map_lookup::{flat_slot, flat_slot_int, key_rank, MISSING_KEY};
-use crate::map_lookup::{put_map_rows_exec, select_flat_map_lookup};
+#[cfg(verus_keep_ghost)]
+use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, lemma_rows_update, mparts_ok, row_vals};
 use crate::model::{BinOp, Expr, Type, Value};
 use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
@@ -52,7 +58,11 @@ use crate::quant::{lemma_select_all, lemma_select_prefix, lemma_vals_weaken, qpr
 use crate::quant::{pick_slot, unrank};
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{count_some, count_true, eval_fold, eval_quant, eval_seq, eval_set_items, eval_src};
+use crate::source::eval_src;
+#[cfg(verus_keep_ghost)]
+use crate::source::{count_some, count_true, eval_elements, eval_fold, eval_quant, eval_seq, eval_set_items};
+#[cfg(verus_keep_ghost)]
+use crate::source::{eval_map_items, put_row, Item};
 #[cfg(verus_keep_ghost)]
 use crate::source::{select_bits, src_bool, SEnv};
 use crate::source::{Over, SetOp, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
@@ -295,32 +305,6 @@ fn copy_usizes(xs: &Vec<usize>) -> (r: Vec<usize>)
     out
 }
 
-/// 長さ `n` の、一つの式を並べた行の列。
-fn singletons(xs: &Vec<Expr>) -> (r: Vec<Vec<Expr>>) {
-    let mut rows: Vec<Vec<Expr>> = Vec::new();
-    let mut i = 0;
-    while i < xs.len()
-        decreases xs.len() - i,
-    {
-        let mut row: Vec<Expr> = Vec::new();
-        row.push(copy_expr(&xs[i]));
-        rows.push(row);
-        i += 1;
-    }
-    rows
-}
-
-/// 行を選び、その唯一のスロットを返す。行がなければ偽。
-fn select_one(rows: &Vec<Vec<Expr>>, idx: &Expr) -> (r: Option<Expr>) {
-    let mut fallback: Vec<Expr> = Vec::new();
-    fallback.push(cb(false));
-    let mut picked = select(rows, idx, &fallback)?;
-    match picked.pop() {
-        Some(x) => Some(x),
-        None => Some(cb(false)),
-    }
-}
-
 /// 式を `blk` の中に下ろす。部分式の束縛は評価の順に `blk` に追加し、失敗しないスロットの式を返す。
 fn low(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
     requires
@@ -342,9 +326,11 @@ fn low(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Op
             sc,
             blk,
         ),
-        TExpr::SetLit(_, _) | TExpr::MapLit(_, _, _) | TExpr::ListLit(_, _, _) | TExpr::SetContains(_, _, _)
-        | TExpr::ListContains(_, _) | TExpr::Insert(_, _, _) | TExpr::Remove(_, _, _) | TExpr::SetBin(_, _, _)
-        | TExpr::Size(_) | TExpr::IsEmpty(_) => low_coll(e, cx, sc, blk),
+        TExpr::SetLit(_, _) => low_set_lit(e, cx, sc, blk),
+        TExpr::MapLit(_, _, _) => low_map_lit(e, cx, sc, blk),
+        TExpr::ListLit(_, _, _) => low_list_lit(e, cx, sc, blk),
+        TExpr::SetContains(_, _, _) | TExpr::ListContains(_, _) | TExpr::Insert(_, _, _) | TExpr::Remove(_, _, _)
+        | TExpr::SetBin(_, _, _) | TExpr::Size(_) | TExpr::IsEmpty(_) => low_coll(e, cx, sc, blk),
         _ => low_access(e, cx, sc, blk),
     }
 }
@@ -493,15 +479,134 @@ fn element(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block, st: &
     ensures
         extends(*old(blk), *final(blk)),
         r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some(xs) ==> frag(*e) ==> elem_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), xs@),
     decreases e, 3nat,
 {
+    let ghost b0 = *blk;
     let (t, slots) = low(e, cx, sc, blk)?;
+    let ghost b1 = *blk;
     if !fits(&t, st) {
         return None;
     }
-    let (cond, slots) = store(&t, &slots, st, &cx.enums)?;
+    let (cond, stored) = store(&t, &slots, st, &cx.enums)?;
+    let ghost cg = cond;
+    let ghost sg = stored@;
     check(blk, cond, FAIL_NOT_IN_DOMAIN)?;
-    atoms(slots, blk)
+    let ghost b2 = *blk;
+    let xs = atoms(stored, blk)?;
+    proof {
+        lemma_extends_trans(b0, b1, b2);
+        if frag(*e) {
+            lemma_element(*e, *cx, sc@, b0, b1, b2, *blk, xty(t), slots@, sty(*st), cg, sg, xs@);
+        }
+    }
+    Some(xs)
+}
+
+/// 要素の下ろしの正しさ。値が型に属さなければ `FAIL_NOT_IN_DOMAIN` で失敗する。
+pub open spec fn elem_lowers(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, st: STy, xs: Seq<Expr>) -> bool {
+    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match eval_src(e, se, sls) {
+            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(v) => if member(v, st, se.enums) {
+                run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+                    cx,
+                    sc,
+                    env,
+                    se,
+                    l,
+                    sls,
+                ) && clean(xs, env, l) && slot_vals(xs, env, l) == enc(v, st, se.enums)
+            } else {
+                run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(FAIL_NOT_IN_DOMAIN))
+            },
+        }
+}
+
+#[verifier::spinoff_prover]
+proof fn lemma_element(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    t: XTy,
+    slots: Seq<Expr>,
+    st: STy,
+    cond: Expr,
+    out: Seq<Expr>,
+    xs: Seq<Expr>,
+)
+    requires
+        lowers(e, cx, sc, b0, b1, t, slots),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        fits_s(t, st),
+        store_spec(t, slots, st, cx.enums@, cond, out),
+        (cond == bool_lit(true) && b2.binds@ == b1.binds@) || b2.binds@ == b1.binds@.push(
+            ite_s(cond, bool_lit(true), Expr::Fail(Type::Bool, FAIL_NOT_IN_DOMAIN)),
+        ),
+        atoms_ok(out, xs, b2, b3),
+    ensures
+        elem_lowers(e, cx, sc, b0, b3, st, xs),
+{
+    let c = ite_s(cond, bool_lit(true), Expr::Fail(Type::Bool, FAIL_NOT_IN_DOMAIN));
+    lemma_extends_trans(b0, b1, b2);
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match eval_src(e, se, sls) {
+        Err(k) => run(fresh(b0, b3), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(v) => if member(v, st, se.enums) {
+            run(fresh(b0, b3), env, ls) matches Ok(l) && l.len() == b3.depth_s() && prefix(ls, l) && ctx_ok(
+                cx,
+                sc,
+                env,
+                se,
+                l,
+                sls,
+            ) && clean(xs, env, l) && slot_vals(xs, env, l) == enc(v, st, se.enums)
+        } else {
+            run(fresh(b0, b3), env, ls) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(FAIL_NOT_IN_DOMAIN))
+        },
+    } by {
+        let enums = se.enums;
+        lemma_one(e, cx, sc, b0, b1, t, slots, env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        lemma_run_fresh(b0, b2, b3, env, ls);
+        if let Ok(v) = eval_src(e, se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(store_ok(cond, out, env, l1, v, st, enums));
+            let m = member(v, st, enums);
+            assert(eval_l(bool_lit(true), env, l1) == Ok::<Value, ErrKind>(Value::Bool(true)));
+            assert(eval_l(Expr::Fail(Type::Bool, FAIL_NOT_IN_DOMAIN), env, l1) == Err::<Value, ErrKind>(
+                ErrKind::Failed(FAIL_NOT_IN_DOMAIN),
+            ));
+            let l2 = if b2.binds@ == b1.binds@ {
+                lemma_fresh_refl(b1);
+                assert(fresh(b1, b2) =~= Seq::<Expr>::empty());
+                assert(run(Seq::<Expr>::empty(), env, l1) == Ok::<Seq<Value>, ErrKind>(l1));
+                assert(m);
+                l1
+            } else {
+                lemma_run_one(b1, b2, c, env, l1);
+                l1.push(Value::Bool(true))
+            };
+            if m {
+                assert(run(fresh(b1, b2), env, l1) == Ok::<Seq<Value>, ErrKind>(l2));
+                assert(prefix(l1, l2));
+                lemma_run_len(fresh(b0, b1), env, ls);
+                lemma_run_fresh_ok(b0, b2, env, ls);
+                lemma_clean_weaken(out, env, l1, l2);
+                assert(atoms_run(out, xs, b2, b3, env, l2));
+                let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                lemma_prefix_trans(ls, l1, l2);
+                lemma_prefix_trans(ls, l2, l3);
+                lemma_ctx_weaken(cx, sc, env, se, ls, l3, sls);
+            }
+        }
+    }
 }
 
 /// 要素の番号。属さなければ `FAIL_NOT_IN_DOMAIN` で失敗する。
@@ -548,10 +653,16 @@ pub open spec fn elem_rank_lowers(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Bl
         #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match eval_src(e, se, sls) {
             Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
             Ok(v) => if member(v, st, se.enums) {
-                run(fresh(b0, b1), env, ls) matches Ok(l) && pure_below(x, l.len()) && eval_l(x, env, l) == Ok::<
-                    Value,
-                    ErrKind,
-                >(Value::Int(rank(v, st, se.enums) as i64))
+                run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+                    cx,
+                    sc,
+                    env,
+                    se,
+                    l,
+                    sls,
+                ) && pure_below(x, l.len()) && eval_l(x, env, l) == Ok::<Value, ErrKind>(
+                    Value::Int(rank(v, st, se.enums) as i64),
+                )
             } else {
                 run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(FAIL_NOT_IN_DOMAIN))
             },
@@ -596,10 +707,16 @@ proof fn lemma_elem_rank(
         #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match eval_src(e, se, sls) {
         Err(k) => run(fresh(b0, b3), env, ls) == Err::<Seq<Value>, ErrKind>(k),
         Ok(v) => if member(v, st, se.enums) {
-            run(fresh(b0, b3), env, ls) matches Ok(l) && pure_below(x, l.len()) && eval_l(x, env, l) == Ok::<
-                Value,
-                ErrKind,
-            >(Value::Int(rank(v, st, se.enums) as i64))
+            run(fresh(b0, b3), env, ls) matches Ok(l) && l.len() == b3.depth_s() && prefix(ls, l) && ctx_ok(
+                cx,
+                sc,
+                env,
+                se,
+                l,
+                sls,
+            ) && pure_below(x, l.len()) && eval_l(x, env, l) == Ok::<Value, ErrKind>(
+                Value::Int(rank(v, st, se.enums) as i64),
+            )
         } else {
             run(fresh(b0, b3), env, ls) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(FAIL_NOT_IN_DOMAIN))
         },
@@ -635,6 +752,10 @@ proof fn lemma_elem_rank(
                 lemma_run_len(fresh(b0, b1), env, ls);
                 lemma_run_fresh_ok(b0, b2, env, ls);
                 lemma_added(b2, b3, r, x, env, l2, Value::Int(rank(v, st, enums) as i64));
+                let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                lemma_prefix_trans(ls, l1, l2);
+                lemma_prefix_trans(ls, l2, l3);
+                lemma_ctx_weaken(cx, sc, env, se, ls, l3, sls);
             }
         }
     }
@@ -720,17 +841,561 @@ fn put(
     ensures
         extends(*old(blk), *final(blk)),
         r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some(out) ==> frag(*key) && frag(*value) ==> put_lowers(
+            *key,
+            *value,
+            *cx,
+            old(sc)@,
+            *old(blk),
+            *final(blk),
+            sty(*k),
+            sty(*v),
+            ms@,
+            out@,
+        ),
     decreases _parent, 0nat,
 {
+    proof {
+        lemma_extends_refl(*blk);
+    }
+    let ghost b0 = *blk;
+    let rows = map_rows(k, v, ms, &cx.enums)?;
+    if rows.len() > 0x7fff_ffffusize {
+        return None;
+    }
     let r = element_rank(key, cx, sc, blk, k)?;
-    let x = element(value, cx, sc, blk, v)?;
-    let rank_local = match bind(blk, r)? {
-        Expr::Local(i) => i,
-        _ => return None,
-    };
-    let rows = keys_or_zero_exec(k, &cx.enums);
-    let width = stype_width(v, &cx.enums)?;
-    put_map_rows_exec(ms, rows, width, rank_local, &x)
+    let ghost b1 = *blk;
+    let xs = element(value, cx, sc, blk, v)?;
+    let mut alt: Vec<Expr> = Vec::new();
+    alt.push(cb(true));
+    append(&mut alt, &xs);
+    let out = ite_rows(&rows, &r, &alt)?;
+    let res = join_rows(&out);
+    proof {
+        lemma_extends_trans(b0, b1, *blk);
+        if frag(*key) && frag(*value) {
+            lemma_put(*key, *value, *cx, sc@, b0, b1, *blk, sty(*k), sty(*v), ms@, rows_view(rows@), r, xs@, alt@, rows_view(out@), res@);
+        }
+    }
+    Some(res)
+}
+
+/// Mapのスロット `ms` にキー `key` と値 `value` を置いた結果が `out` である。
+pub open spec fn put_lowers(
+    key: TExpr,
+    value: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    kt: STy,
+    vt: STy,
+    ms: Seq<Expr>,
+    out: Seq<Expr>,
+) -> bool {
+    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>, rows: Seq<Option<SVal>>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() && #[trigger] denotes(
+            ms,
+            env,
+            ls,
+            SVal::Map(rows),
+            XTy::Map(Box::new(kt), Box::new(vt)),
+            se.enums,
+        ) ==> match put_row(SVal::Map(rows), kt, vt, eval_src(key, se, sls), eval_src(value, se, sls), se.enums) {
+            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(rows2) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+                cx,
+                sc,
+                env,
+                se,
+                l,
+                sls,
+            ) && denotes(out, env, l, SVal::Map(rows2), XTy::Map(Box::new(kt), Box::new(vt)), se.enums),
+        }
+}
+
+/// キーの番号の行だけを、有無が真で値が `xs` の行に置き換える。
+#[verifier::spinoff_prover]
+proof fn lemma_put(
+    key: TExpr,
+    value: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    kt: STy,
+    vt: STy,
+    ms: Seq<Expr>,
+    mrows: Seq<Seq<Expr>>,
+    r: Expr,
+    xs: Seq<Expr>,
+    alt: Seq<Expr>,
+    out: Seq<Seq<Expr>>,
+    res: Seq<Expr>,
+)
+    requires
+        elem_rank_lowers(key, cx, sc, b0, b1, kt, r),
+        elem_lowers(value, cx, sc, b1, b2, vt, xs),
+        extends(b0, b1),
+        extends(b1, b2),
+        mparts_ok(ms, mrows, (1 + width(vt, cx.enums@)) as nat, keys_or_zero(kt, cx.enums@)),
+        mrows.len() <= 0x7fff_ffff,
+        alt == seq![bool_lit(true)] + xs,
+        ite_rows_ok(out, mrows, r, alt),
+        res == flat(out),
+    ensures
+        put_lowers(key, value, cx, sc, b0, b2, kt, vt, ms, res),
+{
+    let mt = XTy::Map(Box::new(kt), Box::new(vt));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>, rows: Seq<Option<SVal>>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() && #[trigger] denotes(
+            ms,
+            env,
+            ls,
+            SVal::Map(rows),
+            mt,
+            se.enums,
+        ) implies match put_row(SVal::Map(rows), kt, vt, eval_src(key, se, sls), eval_src(value, se, sls), se.enums) {
+        Err(k) => run(fresh(b0, b2), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(rows2) => run(fresh(b0, b2), env, ls) matches Ok(l) && l.len() == b2.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && denotes(res, env, l, SVal::Map(rows2), mt, se.enums),
+    } by {
+        let enums = se.enums;
+        lemma_map_parts(ms, mrows, env, ls, rows, kt, vt, enums);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(kv) = eval_src(key, se, sls) {
+            if member(kv, kt, enums) {
+                let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+                assert(ctx_ok(cx, sc, env, se, l1, sls));
+                if let Ok(vv) = eval_src(value, se, sls) {
+                    if member(vv, vt, enums) {
+                        let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                        lemma_prefix_trans(ls, l1, l2);
+                        lemma_rows_weaken(mrows, row_vals(rows, vt, enums), env, ls, l2);
+                        lemma_weaken(r, env, l1, l2);
+                        lemma_pure_mono(r, l1.len(), l2.len());
+                        let rk = rank(kv, kt, enums);
+                        lemma_rank_in_domain(kv, kt, enums);
+                        assert(at_rank(r, env, l2, rk as i64));
+                        let av = row_slots(Some(vv), vt, enums);
+                        lemma_lits(seq![Value::Bool(true)], env, l2);
+                        assert(lits(seq![Value::Bool(true)]) =~= seq![bool_lit(true)]);
+                        lemma_clean_concat(seq![bool_lit(true)], xs, env, l2);
+                        lemma_ite_rows(out, mrows, r, alt, row_vals(rows, vt, enums), av, env, l2, rk as i64);
+                        lemma_rows_update(rows, vt, enums, rk as int, Some(vv));
+                        let rows2 = rows.update(rk as int, Some(vv));
+                        assert(row_vals(rows2, vt, enums) =~= Seq::new(
+                            mrows.len(),
+                            |p: int| if p == rk as i64 { av } else { row_vals(rows, vt, enums)[p] },
+                        ));
+                        lemma_map_join(out, env, l2, rows2, kt, vt, enums);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Mapの更新の下ろし。
+#[verifier::spinoff_prover]
+proof fn lemma_put_expr(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    kt: STy,
+    vt: STy,
+    ms: Seq<Expr>,
+    slots: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Put(skt, svt, a, x, y) && sty(skt) == kt && sty(svt) == vt && lowers(
+            *a,
+            cx,
+            sc,
+            b0,
+            b1,
+            XTy::Map(Box::new(kt), Box::new(vt)),
+            ms,
+        ) && put_lowers(*x, *y, cx, sc, b1, b2, kt, vt, ms, slots),
+        extends(b0, b1),
+        extends(b1, b2),
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Map(Box::new(kt), Box::new(vt)), slots),
+{
+    let a = e->Put_2;
+    let mt = XTy::Map(Box::new(kt), Box::new(vt));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        slots,
+        env,
+        mt,
+        se.enums,
+    ) by {
+        lemma_one(*a, cx, sc, b0, b1, mt, ms, env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(m) = eval_src(*a, se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(member(m, STy::Map(Box::new(kt), Box::new(vt)), se.enums));
+            let rows = m->Map_0;
+            assert(m == SVal::Map(rows));
+            assert(denotes(ms, env, l1, SVal::Map(rows), mt, se.enums));
+            assert(ctx_ok(cx, sc, env, se, l1, sls));
+        }
+    }
+}
+
+/// Mapのリテラルの要素を順に置くと、`slots` は置いた結果のMapを表す。
+pub open spec fn maplit_ok(
+    items: Seq<Item>,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    kt: STy,
+    vt: STy,
+    slots: Seq<Expr>,
+) -> bool {
+    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match eval_map_items(
+            kt,
+            vt,
+            items,
+            se,
+            sls,
+        ) {
+            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(rows) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+                cx,
+                sc,
+                env,
+                se,
+                l,
+                sls,
+            ) && denotes(slots, env, l, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums),
+        }
+}
+
+proof fn lemma_maplit_base(cx: LowerCtx, sc: Seq<Bound>, b0: Block, kt: STy, vt: STy, slots: Seq<Expr>)
+    requires
+        keys(kt, cx.enums@) is Some,
+        slots == lits(
+            enc(default_val(STy::Map(Box::new(kt), Box::new(vt)), cx.enums@), STy::Map(Box::new(kt), Box::new(vt)), cx.enums@),
+        ),
+    ensures
+        maplit_ok(Seq::empty(), cx, sc, b0, b0, kt, vt, slots),
+{
+    let mst = STy::Map(Box::new(kt), Box::new(vt));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match eval_map_items(
+        kt,
+        vt,
+        Seq::<Item>::empty(),
+        se,
+        sls,
+    ) {
+        Err(k) => run(fresh(b0, b0), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(rows) => run(fresh(b0, b0), env, ls) matches Ok(l) && l.len() == b0.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && denotes(slots, env, l, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums),
+    } by {
+        let enums = se.enums;
+        let rows = eval_map_items(kt, vt, Seq::<Item>::empty(), se, sls)->Ok_0;
+        lemma_fresh_refl(b0);
+        assert(fresh(b0, b0) =~= Seq::<Expr>::empty());
+        assert(run(Seq::<Expr>::empty(), env, ls) == Ok::<Seq<Value>, ErrKind>(ls));
+        assert(prefix(ls, ls));
+        lemma_none_rows(keys_or_zero(kt, enums), vt, enums);
+        assert(rows =~= Seq::new(keys_or_zero(kt, enums), |_i: int| None::<SVal>));
+        assert(default_val(mst, enums)->Map_0 =~= rows);
+        lemma_lits(enc(default_val(mst, enums), mst, enums), env, ls);
+    }
+}
+
+proof fn lemma_maplit_step(
+    items: Seq<Item>,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    kt: STy,
+    vt: STy,
+    s1: Seq<Expr>,
+    s2: Seq<Expr>,
+)
+    requires
+        items.len() > 0,
+        maplit_ok(items.drop_last(), cx, sc, b0, b1, kt, vt, s1),
+        put_lowers(items.last().key, items.last().value, cx, sc, b1, b2, kt, vt, s1, s2),
+        extends(b0, b1),
+        extends(b1, b2),
+    ensures
+        maplit_ok(items, cx, sc, b0, b2, kt, vt, s2),
+{
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match eval_map_items(
+        kt,
+        vt,
+        items,
+        se,
+        sls,
+    ) {
+        Err(k) => run(fresh(b0, b2), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(rows) => run(fresh(b0, b2), env, ls) matches Ok(l) && l.len() == b2.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && denotes(s2, env, l, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums),
+    } by {
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(rows) = eval_map_items(kt, vt, items.drop_last(), se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(ctx_ok(cx, sc, env, se, l1, sls));
+            assert(denotes(s1, env, l1, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums));
+            if let Ok(rows2) = eval_map_items(kt, vt, items, se, sls) {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                lemma_prefix_trans(ls, l1, l2);
+            }
+        }
+    }
+}
+
+/// Mapのキーの集合は、各行の有無のスロットである。
+#[verifier::spinoff_prover]
+proof fn lemma_keys(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    kt: STy,
+    vt: STy,
+    ms: Seq<Expr>,
+    mrows: Seq<Seq<Expr>>,
+    h: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Keys(a) && lowers(*a, cx, sc, b0, b1, XTy::Map(Box::new(kt), Box::new(vt)), ms),
+        extends(b0, b1),
+        mparts_ok(ms, mrows, (1 + width(vt, cx.enums@)) as nat, keys_or_zero(kt, cx.enums@)),
+        heads_ok(h, mrows),
+    ensures
+        lowers(e, cx, sc, b0, b1, XTy::Set(Box::new(kt)), h),
+{
+    let a = e->Keys_0;
+    let mt = XTy::Map(Box::new(kt), Box::new(vt));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b1), env, ls),
+        h,
+        env,
+        XTy::Set(Box::new(kt)),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_one(*a, cx, sc, b0, b1, mt, ms, env, se, ls, sls);
+        if let Ok(m) = eval_src(*a, se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(member(m, STy::Map(Box::new(kt), Box::new(vt)), enums));
+            let rows = m->Map_0;
+            assert(m == SVal::Map(rows));
+            lemma_map_parts(ms, mrows, env, l1, rows, kt, vt, enums);
+            let bits = eval_src(e, se, sls)->Ok_0->Set_0;
+            assert(bits.len() == rows.len());
+            let vals = row_vals(rows, vt, enums);
+            assert forall|j: int| 0 <= j < h.len() implies pure_below(#[trigger] h[j], l1.len()) && eval_l(h[j], env, l1)
+                == Ok::<Value, ErrKind>(Value::Bool(bits[j])) by {
+                assert(head_at(h[j], mrows[j]));
+                assert(clean(mrows[j], env, l1) && slot_vals(mrows[j], env, l1) == vals[j]);
+                assert(pure_below(mrows[j][0], l1.len()) && eval_l(mrows[j][0], env, l1) is Ok);
+                assert(slot_vals(mrows[j], env, l1)[0] == eval_l(mrows[j][0], env, l1)->Ok_0);
+                assert(vals[j] == row_slots(rows[j], vt, enums));
+            }
+            assert(slot_vals(h, env, l1) =~= enc(SVal::Set(bits), STy::Set(Box::new(kt)), enums));
+        }
+    }
+}
+
+/// Mapがキーを持つかは、キーの集合がキーを含むかである。
+#[verifier::spinoff_prover]
+proof fn lemma_has_key(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    vt: STy,
+    ms: Seq<Expr>,
+    mrows: Seq<Seq<Expr>>,
+    present: Seq<Expr>,
+    r: Expr,
+    hit: Expr,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::HasKey(t, a, x) && lowers(*a, cx, sc, b0, b1, XTy::Map(Box::new(sty(t)), Box::new(vt)), ms)
+            && rank_lowers(*x, cx, sc, b1, b2, sty(t), r) && mparts_ok(
+            ms,
+            mrows,
+            (1 + width(vt, cx.enums@)) as nat,
+            keys_or_zero(sty(t), cx.enums@),
+        ),
+        extends(b0, b1),
+        extends(b1, b2),
+        heads_ok(present, mrows),
+        present.len() <= 0x7fff_ffff,
+        picks(hit, present, r),
+        out == seq![and_s(Expr::Bin(BinOp::Ge, Box::new(r), Box::new(Expr::Const(Value::Int(0)))), hit)],
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Bool, out),
+{
+    let t = e->HasKey_0;
+    let a = e->HasKey_1;
+    let x = e->HasKey_2;
+    let kt = sty(t);
+    let mt = XTy::Map(Box::new(kt), Box::new(vt));
+    let ek = TExpr::Keys(a);
+    lemma_keys(ek, cx, sc, b0, b1, kt, vt, ms, mrows, present);
+    let es = TExpr::SetContains(t, Box::new(ek), x);
+    lemma_set_contains(es, t, ek, *x, cx, sc, b0, b1, b2, present, r, hit, out);
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        out,
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_one(*a, cx, sc, b0, b1, mt, ms, env, se, ls, sls);
+        if let Ok(m) = eval_src(*a, se, sls) {
+            assert(member(m, STy::Map(Box::new(kt), Box::new(vt)), enums));
+            let rows = m->Map_0;
+            assert(m == SVal::Map(rows));
+            if let Ok(y) = eval_src(*x, se, sls) {
+                if member(y, kt, enums) {
+                    lemma_rank_in_domain(y, kt, enums);
+                }
+            }
+        }
+        assert(eval_src(e, se, sls) == eval_src(es, se, sls));
+    }
+}
+
+/// Mapからキーを除く。キーの番号の行だけを、有無が偽で値が既定値の行に置き換える。
+#[verifier::spinoff_prover]
+proof fn lemma_delete(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    vt: STy,
+    ms: Seq<Expr>,
+    mrows: Seq<Seq<Expr>>,
+    r: Expr,
+    alt: Seq<Expr>,
+    out: Seq<Seq<Expr>>,
+    res: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Delete(t, a, x) && lowers(*a, cx, sc, b0, b1, XTy::Map(Box::new(sty(t)), Box::new(vt)), ms)
+            && rank_lowers(*x, cx, sc, b1, b2, sty(t), r) && mparts_ok(
+            ms,
+            mrows,
+            (1 + width(vt, cx.enums@)) as nat,
+            keys_or_zero(sty(t), cx.enums@),
+        ),
+        extends(b0, b1),
+        extends(b1, b2),
+        mrows.len() <= 0x7fff_ffff,
+        alt == seq![bool_lit(false)] + lits(enc(default_val(vt, cx.enums@), vt, cx.enums@)),
+        ite_rows_ok(out, mrows, r, alt),
+        res == flat(out),
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Map(Box::new(sty(e->Delete_0)), Box::new(vt)), res),
+{
+    let t = e->Delete_0;
+    let a = e->Delete_1;
+    let x = e->Delete_2;
+    let kt = sty(t);
+    let mt = XTy::Map(Box::new(kt), Box::new(vt));
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, ls),
+        res,
+        env,
+        mt,
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_one(*a, cx, sc, b0, b1, mt, ms, env, se, ls, sls);
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(m) = eval_src(*a, se, sls) {
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(member(m, STy::Map(Box::new(kt), Box::new(vt)), enums));
+            let rows = m->Map_0;
+            assert(m == SVal::Map(rows));
+            lemma_map_parts(ms, mrows, env, l1, rows, kt, vt, enums);
+            assert(rank_result(eval_src(*x, se, sls), run(fresh(b1, b2), env, l1), r, env, kt, enums));
+            if let Ok(y) = eval_src(*x, se, sls) {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                lemma_run_fresh_ok(b1, b2, env, l1);
+                lemma_rows_weaken(mrows, row_vals(rows, vt, enums), env, l1, l2);
+                let mem = member(y, kt, enums);
+                let rk: i64 = if mem {
+                    rank(y, kt, enums) as i64
+                } else {
+                    -1i64
+                };
+                assert(at_rank(r, env, l2, rk));
+                let av = row_slots(None, vt, enums);
+                assert(lits(av) =~= alt);
+                lemma_lits(av, env, l2);
+                let vals = row_vals(rows, vt, enums);
+                lemma_ite_rows(out, mrows, r, alt, vals, av, env, l2, rk);
+                if mem {
+                    lemma_rank_in_domain(y, kt, enums);
+                    let rkk = rank(y, kt, enums) as int;
+                    lemma_rows_update(rows, vt, enums, rkk, None);
+                    let rows2 = rows.update(rkk, None);
+                    assert(row_vals(rows2, vt, enums) =~= Seq::new(
+                        mrows.len(),
+                        |p: int| if p == rk { av } else { vals[p] },
+                    ));
+                    lemma_map_join(out, env, l2, rows2, kt, vt, enums);
+                } else {
+                    assert(vals =~= Seq::new(mrows.len(), |p: int| if p == rk { av } else { vals[p] }));
+                    lemma_map_join(out, env, l2, rows, kt, vt, enums);
+                }
+            }
+        }
+    }
 }
 
 /// リテラルと参照。束縛を加えない。
@@ -2650,6 +3315,921 @@ proof fn lemma_unwrap(e: TExpr, a: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Bloc
                     assert(eval_l(c, env, l) == Err::<Value, ErrKind>(ErrKind::Failed(FAIL_NONE)));
                 }
             }
+        }
+    }
+}
+
+/// 検査の束縛。条件が真なら真を加え、偽なら `code` で失敗する。
+pub open spec fn checked(b0: Block, b1: Block, cond: Expr, code: i64) -> bool {
+    ||| cond == bool_lit(true) && b1.binds@ == b0.binds@
+    ||| b1.binds@ == b0.binds@.push(ite_s(cond, bool_lit(true), Expr::Fail(Type::Bool, code)))
+}
+
+proof fn lemma_check(b0: Block, b1: Block, cond: Expr, code: i64, env: Env, l: Seq<Value>, c: bool)
+    requires
+        checked(b0, b1, cond, code),
+        extends(b0, b1),
+        l.len() == b0.depth_s(),
+        eval_l(cond, env, l) == Ok::<Value, ErrKind>(Value::Bool(c)),
+    ensures
+        c ==> (run(fresh(b0, b1), env, l) matches Ok(l2) && l2.len() == b1.depth_s() && prefix(l, l2)),
+        !c ==> run(fresh(b0, b1), env, l) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(code)),
+{
+    lemma_run_fresh_ok(b0, b1, env, l);
+    let x = ite_s(cond, bool_lit(true), Expr::Fail(Type::Bool, code));
+    assert(eval_l(bool_lit(true), env, l) == Ok::<Value, ErrKind>(Value::Bool(true)));
+    assert(eval_l(Expr::Fail(Type::Bool, code), env, l) == Err::<Value, ErrKind>(ErrKind::Failed(code)));
+    if cond == bool_lit(true) && b1.binds@ == b0.binds@ {
+        lemma_fresh_refl(b0);
+        assert(fresh(b0, b1) =~= Seq::<Expr>::empty());
+        assert(run(Seq::<Expr>::empty(), env, l) == Ok::<Seq<Value>, ErrKind>(l));
+    } else {
+        lemma_run_one(b0, b1, x, env, l);
+    }
+}
+
+/// Listの式を下ろした結果を、環境ごとに取り出す。
+proof fn lemma_list_env(
+    a: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    env: Env,
+    se: SEnv,
+    l0: Seq<Value>,
+    sls: Seq<SVal>,
+)
+    requires
+        lowers(a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls),
+        extends(b0, b1),
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        ctx_ok(cx, sc, env, se, l0, sls),
+        l0.len() == b0.depth_s(),
+    ensures
+        match eval_src(a, se, sls) {
+            Err(k) => run(fresh(b0, b1), env, l0) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(v) => v is List && (run(fresh(b0, b1), env, l0) matches Ok(l) && l.len() == b1.depth_s() && prefix(l0, l)
+                && ctx_ok(cx, sc, env, se, l, sls) && v->List_0.len() <= max && list_items_member(v->List_0, st, se.enums)
+                && pure_below(len, l.len()) && eval_l(len, env, l) == Ok::<Value, ErrKind>(
+                Value::Int(v->List_0.len() as i64),
+            ) && rows_at(rows, pad_vals(v->List_0, st, max as nat, se.enums), env, l)),
+        },
+{
+    lemma_one(a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls, env, se, l0, sls);
+    if let Ok(v) = eval_src(a, se, sls) {
+        let l = run(fresh(b0, b1), env, l0)->Ok_0;
+        assert(member(v, STy::List(Box::new(st), max), se.enums));
+        lemma_list_parts(ls, len, rows, env, l, v->List_0, st, max, se.enums);
+    }
+}
+
+/// Listの添字の参照。添字が範囲外なら `FAIL_INDEX` で失敗する。
+#[verifier::spinoff_prover]
+proof fn lemma_at(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    b4: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    x: Expr,
+    y: Expr,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    cond: Expr,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::At(a, ix) && lowers(*a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls) && lowers(
+            *ix,
+            cx,
+            sc,
+            b1,
+            b2,
+            XTy::Int,
+            seq![x],
+        ),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        extends(b3, b4),
+        added(b2, b3, x, y),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        cond == and_s(
+            Expr::Bin(BinOp::Ge, Box::new(y), Box::new(Expr::Const(Value::Int(0)))),
+            Expr::Bin(BinOp::Lt, Box::new(y), Box::new(len)),
+        ),
+        checked(b3, b4, cond, FAIL_INDEX),
+        rows.len() > 0 ==> select_ok(rows, y, out),
+    ensures
+        lowers(e, cx, sc, b0, b4, to_xty(st), out),
+{
+    let a = e->At_0;
+    let ix = e->At_1;
+    let xt = XTy::List(Box::new(st), max);
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b4), env, l0),
+        out,
+        env,
+        to_xty(st),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        lemma_run_fresh(b0, b2, b3, env, l0);
+        lemma_run_fresh(b0, b3, b4, env, l0);
+        lemma_extends_trans(b0, b1, b2);
+        lemma_extends_trans(b0, b2, b3);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            lemma_one(*ix, cx, sc, b1, b2, XTy::Int, seq![x], env, se, l1, sls);
+            if let Ok(vb) = eval_src(*ix, se, sls) {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                lemma_run_fresh_ok(b1, b2, env, l1);
+                lemma_denotes_one(x, env, l2, vb, XTy::Int, enums);
+                let n = vb->Int_0;
+                lemma_added(b2, b3, x, y, env, l2, Value::Int(n));
+                let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                lemma_prefix_trans(l1, l2, l3);
+                lemma_weaken(len, env, l1, l3);
+                lemma_pure_mono(len, l1.len(), l3.len());
+                lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l1, l3);
+                let g0 = Expr::Bin(BinOp::Ge, Box::new(y), Box::new(Expr::Const(Value::Int(0))));
+                let g1 = Expr::Bin(BinOp::Lt, Box::new(y), Box::new(len));
+                assert(eval_l(Expr::Const(Value::Int(0)), env, l3) == Ok::<Value, ErrKind>(Value::Int(0)));
+                assert(eval_l(g0, env, l3) == Ok::<Value, ErrKind>(Value::Bool(n >= 0)));
+                assert(eval_l(g1, env, l3) == Ok::<Value, ErrKind>(Value::Bool(n < items.len() as i64)));
+                lemma_and(g0, g1, env, l3, n >= 0, n < items.len() as i64);
+                let c = 0 <= n < items.len();
+                lemma_check(b3, b4, cond, FAIL_INDEX, env, l3, c);
+                if c {
+                    let l4 = run(fresh(b3, b4), env, l3)->Ok_0;
+                    lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l3, l4);
+                    lemma_weaken(y, env, l3, l4);
+                    lemma_pure_mono(y, l3.len(), l4.len());
+                    assert(at_rank(y, env, l4, n));
+                    lemma_select(rows, y, out, pad_vals(items, st, max as nat, enums), env, l4, n);
+                    lemma_items_member(items, st, enums, n as int);
+                    lemma_models_enc(items[n as int], st, enums);
+                }
+            }
+        }
+    }
+}
+
+/// Listの先頭。空なら `FAIL_EMPTY` で失敗する。
+#[verifier::spinoff_prover]
+proof fn lemma_first(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::First(a) && lowers(*a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls),
+        extends(b0, b1),
+        extends(b1, b2),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        checked(b1, b2, Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0)))), FAIL_EMPTY),
+        rows.len() > 0 ==> out == rows[0],
+    ensures
+        lowers(e, cx, sc, b0, b2, to_xty(st), out),
+{
+    let a = e->First_0;
+    let cond = Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0))));
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, l0),
+        out,
+        env,
+        to_xty(st),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            assert(eval_l(Expr::Const(Value::Int(0)), env, l1) == Ok::<Value, ErrKind>(Value::Int(0)));
+            assert(eval_l(cond, env, l1) == Ok::<Value, ErrKind>(Value::Bool(items.len() as i64 > 0)));
+            lemma_check(b1, b2, cond, FAIL_EMPTY, env, l1, items.len() > 0);
+            if items.len() > 0 {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l1, l2);
+                assert(clean(rows[0], env, l2));
+                lemma_items_member(items, st, enums, 0);
+                lemma_models_enc(items[0], st, enums);
+            }
+        }
+    }
+}
+
+/// Listの末尾。空なら `FAIL_EMPTY` で失敗する。
+#[verifier::spinoff_prover]
+proof fn lemma_last(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    i: Expr,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Last(a) && lowers(*a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        checked(b1, b2, Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0)))), FAIL_EMPTY),
+        i == Expr::Local(b2.depth_s() as usize),
+        b3.binds@ == b2.binds@.push(Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))))),
+        rows.len() > 0 ==> select_ok(rows, i, out),
+    ensures
+        lowers(e, cx, sc, b0, b3, to_xty(st), out),
+{
+    let a = e->Last_0;
+    let cond = Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0))));
+    let d = Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))));
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b3), env, l0),
+        out,
+        env,
+        to_xty(st),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        lemma_run_fresh(b0, b2, b3, env, l0);
+        lemma_extends_trans(b0, b1, b2);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            assert(eval_l(Expr::Const(Value::Int(0)), env, l1) == Ok::<Value, ErrKind>(Value::Int(0)));
+            assert(eval_l(cond, env, l1) == Ok::<Value, ErrKind>(Value::Bool(items.len() as i64 > 0)));
+            lemma_check(b1, b2, cond, FAIL_EMPTY, env, l1, items.len() > 0);
+            if items.len() > 0 {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                let n = (items.len() - 1) as i64;
+                lemma_weaken(len, env, l1, l2);
+                lemma_pure_mono(len, l1.len(), l2.len());
+                assert(eval_l(Expr::Const(Value::Int(1)), env, l2) == Ok::<Value, ErrKind>(Value::Int(1)));
+                assert(eval_l(d, env, l2) == Ok::<Value, ErrKind>(Value::Int(n)));
+                assert(pure_below(Expr::Const(Value::Int(1)), l2.len()));
+                assert(pure_below(d, l2.len()));
+                lemma_added(b2, b3, d, i, env, l2, Value::Int(n));
+                let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                lemma_prefix_trans(l1, l2, l3);
+                lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l1, l3);
+                assert(at_rank(i, env, l3, n));
+                lemma_select(rows, i, out, pad_vals(items, st, max as nat, enums), env, l3, n);
+                lemma_items_member(items, st, enums, n as int);
+                lemma_models_enc(items[n as int], st, enums);
+            }
+        }
+    }
+}
+
+pub open spec fn defaults_s(st: STy, enums: Seq<i64>) -> Seq<Expr> {
+    lits(enc(default_val(st, enums), st, enums))
+}
+
+/// 長さの式が整数 `n` を表すなら、`n` を足し引きした式も表す。
+proof fn lemma_len_step(len: Expr, op: BinOp, k: i64, env: Env, l: Seq<Value>, n: i64)
+    requires
+        pure_below(len, l.len()),
+        eval_l(len, env, l) == Ok::<Value, ErrKind>(Value::Int(n)),
+        0 <= n <= 0x7fff_ffff,
+        0 <= k <= 1,
+        op is Add || op is Sub,
+    ensures
+        pure_below(Expr::Bin(op, Box::new(len), Box::new(Expr::Const(Value::Int(k)))), l.len()),
+        eval_l(Expr::Bin(op, Box::new(len), Box::new(Expr::Const(Value::Int(k)))), env, l) == Ok::<Value, ErrKind>(
+            Value::Int(if op is Add { (n + k) as i64 } else { (n - k) as i64 }),
+        ),
+{
+    assert(at_rank(len, env, l, n));
+    lemma_bin_const(op, len, k, env, l, n);
+}
+
+/// `contains` の `q` 番目の項。`q` が長さより小さく、`q` 番目の要素が値に等しい。
+pub open spec fn hit_at(h: Expr, row: Seq<Expr>, xv: Seq<Expr>, len: Expr, c: Expr, q: int, t: XTy, enums: Seq<i64>) -> bool {
+    &&& h == and_s(Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(q as i64)))), c)
+    &&& eq_ok(t, row, xv, c, enums)
+}
+
+/// Listが値を含むかは、長さより前のどれかの要素が値に等しいことである。
+#[verifier::spinoff_prover]
+proof fn lemma_list_contains(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    t: XTy,
+    xv: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    hits: Seq<Expr>,
+    cs: Seq<Expr>,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::ListContains(a, x) && lowers(*a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls) && lowers(
+            *x,
+            cx,
+            sc,
+            b1,
+            b2,
+            t,
+            xv,
+        ),
+        extends(b0, b1),
+        extends(b1, b2),
+        t == to_xty(st),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        hits.len() == rows.len(),
+        cs.len() == rows.len(),
+        forall|q: int| 0 <= q < rows.len() ==> #[trigger] hit_at(hits[q], rows[q], xv, len, cs[q], q, t, cx.enums@),
+        out == seq![tree_s(hits, bool_lit(false), Join::Or)],
+    ensures
+        lowers(e, cx, sc, b0, b2, XTy::Bool, out),
+{
+    let a = e->ListContains_0;
+    let x = e->ListContains_1;
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b2), env, l0),
+        out,
+        env,
+        XTy::Bool,
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let m = items.len() as i64;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            lemma_one(*x, cx, sc, b1, b2, t, xv, env, se, l1, sls);
+            if let Ok(y) = eval_src(*x, se, sls) {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                let n = l2.len();
+                let vals = pad_vals(items, st, max as nat, enums);
+                lemma_rows_weaken(rows, vals, env, l1, l2);
+                lemma_weaken(len, env, l1, l2);
+                lemma_pure_mono(len, l1.len(), n);
+                lemma_clean_pure(xv, env, l2);
+                assert(at_rank(len, env, l2, m));
+                assert forall|q: int| 0 <= q < hits.len() implies pure_below(#[trigger] hits[q], n) && eval_l(
+                    hits[q],
+                    env,
+                    l2,
+                ) == Ok::<Value, ErrKind>(Value::Bool(q < items.len() && items[q] == y)) by {
+                    assert(hit_at(hits[q], rows[q], xv, len, cs[q], q, t, enums));
+                    lemma_clean_pure(rows[q], env, l2);
+                    assert(pure_below(cs[q], n));
+                    let g = Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(q as i64))));
+                    lemma_bin_const(BinOp::Gt, len, q as i64, env, l2, m);
+                    if q < items.len() {
+                        lemma_items_member(items, st, enums, q);
+                        assert(pad(items, st, max as nat, enums)[q] == items[q]);
+                        lemma_models_enc(items[q], st, enums);
+                        assert(denotes(rows[q], env, l2, items[q], t, enums));
+                        assert(eval_l(cs[q], env, l2) == Ok::<Value, ErrKind>(Value::Bool(items[q] == y)));
+                        lemma_and(g, cs[q], env, l2, true, items[q] == y);
+                    } else if cs[q] == bool_lit(true) {
+                        assert(hits[q] == g);
+                    } else {
+                        assert(hits[q] == Expr::And(Box::new(g), Box::new(cs[q])));
+                    }
+                }
+                assert(all_pure(hits, n));
+                lemma_tree_pure(hits, bool_lit(false), Join::Or, n);
+                lemma_any_of(hits, env, l2);
+                if items.contains(y) {
+                    let k = choose|k: int| 0 <= k < items.len() && items[k] == y;
+                    assert(eval_l(hits[k], env, l2) == Ok::<Value, ErrKind>(Value::Bool(true)));
+                }
+                if any_true(hits, env, l2) {
+                    let k = choose|k: int| 0 <= k < hits.len() && #[trigger] eval_l(hits[k], env, l2) == Ok::<Value, ErrKind>(
+                        Value::Bool(true),
+                    );
+                    assert(items[k] == y);
+                }
+                lemma_one_denotes(out[0], env, l2, Value::Bool(items.contains(y)), XTy::Bool, enums);
+                assert(out == seq![out[0]]);
+            }
+        }
+    }
+}
+
+/// Listの末尾に要素を加える。要素が型に属さなければ `FAIL_NOT_IN_DOMAIN`、満杯なら `FAIL_FULL` で失敗する。
+#[verifier::spinoff_prover]
+proof fn lemma_push(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    b4: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    xs: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    new_len: Expr,
+    out: Seq<Seq<Expr>>,
+    r: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Push(t, n, a, x) && sty(t) == st && n == max && lowers(
+            *a,
+            cx,
+            sc,
+            b0,
+            b1,
+            XTy::List(Box::new(st), max),
+            ls,
+        ) && elem_lowers(*x, cx, sc, b1, b2, st, xs),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        extends(b3, b4),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        checked(b2, b3, Expr::Bin(BinOp::Lt, Box::new(len), Box::new(Expr::Const(Value::Int(max as i64)))), FAIL_FULL),
+        new_len == Expr::Local(b3.depth_s() as usize),
+        b4.binds@ == b3.binds@.push(Expr::Bin(BinOp::Add, Box::new(len), Box::new(Expr::Const(Value::Int(1))))),
+        ite_rows_ok(out, rows, len, xs),
+        r == seq![new_len] + flat(out),
+    ensures
+        lowers(e, cx, sc, b0, b4, XTy::List(Box::new(st), max), r),
+{
+    let a = e->Push_2;
+    let x = e->Push_3;
+    let cond = Expr::Bin(BinOp::Lt, Box::new(len), Box::new(Expr::Const(Value::Int(max as i64))));
+    let d = Expr::Bin(BinOp::Add, Box::new(len), Box::new(Expr::Const(Value::Int(1))));
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b4), env, l0),
+        r,
+        env,
+        XTy::List(Box::new(st), max),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        lemma_run_fresh(b0, b2, b3, env, l0);
+        lemma_run_fresh(b0, b3, b4, env, l0);
+        lemma_extends_trans(b0, b1, b2);
+        lemma_extends_trans(b0, b2, b3);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let m = items.len() as i64;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            assert(ctx_ok(cx, sc, env, se, l1, sls));
+            if let Ok(y) = eval_src(*x, se, sls) {
+                if member(y, st, enums) {
+                    let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                    lemma_weaken(len, env, l1, l2);
+                    lemma_pure_mono(len, l1.len(), l2.len());
+                    lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l1, l2);
+                    assert(at_rank(len, env, l2, m));
+                    lemma_bin_const(BinOp::Lt, len, max as i64, env, l2, m);
+                    lemma_check(b2, b3, cond, FAIL_FULL, env, l2, items.len() < max);
+                    if items.len() < max {
+                        let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                        lemma_weaken(len, env, l2, l3);
+                        lemma_pure_mono(len, l2.len(), l3.len());
+                        lemma_len_step(len, BinOp::Add, 1, env, l3, m);
+                        lemma_added(b3, b4, d, new_len, env, l3, Value::Int((m + 1) as i64));
+                        let l4 = run(fresh(b3, b4), env, l3)->Ok_0;
+                        lemma_prefix_trans(l2, l3, l4);
+                        lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l2, l4);
+                        lemma_clean_weaken(xs, env, l2, l4);
+                        lemma_weaken(len, env, l3, l4);
+                        lemma_pure_mono(len, l3.len(), l4.len());
+                        lemma_ite_rows(out, rows, len, xs, pad_vals(items, st, max as nat, enums), enc(y, st, enums), env, l4, m);
+                        let items2 = items.push(y);
+                        assert(items2.drop_last() =~= items);
+                        assert(list_items_member(items2, st, enums));
+                        assert(pad_vals(items2, st, max as nat, enums) =~= Seq::new(
+                            rows.len(),
+                            |p: int| if p == m { enc(y, st, enums) } else { pad_vals(items, st, max as nat, enums)[p] },
+                        ));
+                        lemma_list_join(new_len, out, env, l4, items2, st, max, enums);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Listの末尾を除く。空なら `FAIL_EMPTY` で失敗する。
+#[verifier::spinoff_prover]
+proof fn lemma_pop(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    new_len: Expr,
+    defs: Seq<Expr>,
+    out: Seq<Seq<Expr>>,
+    r: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Pop(a) && lowers(*a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        checked(b1, b2, Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0)))), FAIL_EMPTY),
+        new_len == Expr::Local(b2.depth_s() as usize),
+        b3.binds@ == b2.binds@.push(Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))))),
+        defs == defaults_s(st, cx.enums@),
+        ite_rows_ok(out, rows, new_len, defs),
+        r == seq![new_len] + flat(out),
+    ensures
+        lowers(e, cx, sc, b0, b3, XTy::List(Box::new(st), max), r),
+{
+    let a = e->Pop_0;
+    let cond = Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0))));
+    let d = Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))));
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b3), env, l0),
+        r,
+        env,
+        XTy::List(Box::new(st), max),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        lemma_run_fresh(b0, b2, b3, env, l0);
+        lemma_extends_trans(b0, b1, b2);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let m = items.len() as i64;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            assert(at_rank(len, env, l1, m));
+            lemma_bin_const(BinOp::Gt, len, 0, env, l1, m);
+            lemma_check(b1, b2, cond, FAIL_EMPTY, env, l1, items.len() > 0);
+            if items.len() > 0 {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                lemma_weaken(len, env, l1, l2);
+                lemma_pure_mono(len, l1.len(), l2.len());
+                lemma_len_step(len, BinOp::Sub, 1, env, l2, m);
+                lemma_added(b2, b3, d, new_len, env, l2, Value::Int((m - 1) as i64));
+                let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                lemma_prefix_trans(l1, l2, l3);
+                lemma_rows_weaken(rows, pad_vals(items, st, max as nat, enums), env, l1, l3);
+                let dv = enc(default_val(st, enums), st, enums);
+                lemma_lits(dv, env, l3);
+                lemma_ite_rows(out, rows, new_len, defs, pad_vals(items, st, max as nat, enums), dv, env, l3, (m - 1) as i64);
+                let items2 = items.drop_last();
+                assert(list_items_member(items2, st, enums));
+                assert(pad_vals(items2, st, max as nat, enums) =~= Seq::new(
+                    rows.len(),
+                    |p: int| if p == m - 1 { dv } else { pad_vals(items, st, max as nat, enums)[p] },
+                ));
+                lemma_list_join(new_len, out, env, l3, items2, st, max, enums);
+            }
+        }
+    }
+}
+
+/// Listの先頭を除く。空なら `FAIL_EMPTY` で失敗する。
+#[verifier::spinoff_prover]
+proof fn lemma_shift(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    b3: Block,
+    st: STy,
+    max: usize,
+    ls: Seq<Expr>,
+    len: Expr,
+    rows: Seq<Seq<Expr>>,
+    new_len: Expr,
+    defs: Seq<Expr>,
+    out: Seq<Seq<Expr>>,
+    r: Seq<Expr>,
+)
+    requires
+        e matches TExpr::Shift(a) && lowers(*a, cx, sc, b0, b1, XTy::List(Box::new(st), max), ls),
+        extends(b0, b1),
+        extends(b1, b2),
+        extends(b2, b3),
+        max <= 0x7fff_ffff,
+        parts_ok(ls, len, rows, width(st, cx.enums@), max as nat),
+        checked(b1, b2, Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0)))), FAIL_EMPTY),
+        new_len == Expr::Local(b2.depth_s() as usize),
+        b3.binds@ == b2.binds@.push(Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))))),
+        defs == defaults_s(st, cx.enums@),
+        rows.len() > 0 ==> out.len() == rows.len() && out[rows.len() - 1] == defs && forall|q: int|
+            0 <= q < rows.len() - 1 ==> #[trigger] out[q] == rows[q + 1],
+        r == seq![new_len] + flat(out),
+    ensures
+        lowers(e, cx, sc, b0, b3, XTy::List(Box::new(st), max), r),
+{
+    let a = e->Shift_0;
+    let cond = Expr::Bin(BinOp::Gt, Box::new(len), Box::new(Expr::Const(Value::Int(0))));
+    let d = Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))));
+    assert forall|env: Env, se: SEnv, l0: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, l0, sls) && l0.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b3), env, l0),
+        r,
+        env,
+        XTy::List(Box::new(st), max),
+        se.enums,
+    ) by {
+        let enums = se.enums;
+        lemma_list_env(*a, cx, sc, b0, b1, st, max, ls, len, rows, env, se, l0, sls);
+        lemma_run_fresh(b0, b1, b2, env, l0);
+        lemma_run_fresh(b0, b2, b3, env, l0);
+        lemma_extends_trans(b0, b1, b2);
+        if let Ok(va) = eval_src(*a, se, sls) {
+            let items = va->List_0;
+            let m = items.len() as i64;
+            let l1 = run(fresh(b0, b1), env, l0)->Ok_0;
+            assert(at_rank(len, env, l1, m));
+            lemma_bin_const(BinOp::Gt, len, 0, env, l1, m);
+            lemma_check(b1, b2, cond, FAIL_EMPTY, env, l1, items.len() > 0);
+            if items.len() > 0 {
+                let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                lemma_weaken(len, env, l1, l2);
+                lemma_pure_mono(len, l1.len(), l2.len());
+                lemma_len_step(len, BinOp::Sub, 1, env, l2, m);
+                lemma_added(b2, b3, d, new_len, env, l2, Value::Int((m - 1) as i64));
+                let l3 = run(fresh(b2, b3), env, l2)->Ok_0;
+                lemma_prefix_trans(l1, l2, l3);
+                let vals = pad_vals(items, st, max as nat, enums);
+                lemma_rows_weaken(rows, vals, env, l1, l3);
+                let dv = enc(default_val(st, enums), st, enums);
+                lemma_lits(dv, env, l3);
+                let items2 = items.drop_first();
+                let nv = pad_vals(items2, st, max as nat, enums);
+                assert(nv =~= Seq::new(rows.len(), |p: int| if p < rows.len() - 1 { vals[p + 1] } else { dv }));
+                assert forall|p: int| 0 <= p < out.len() implies clean(#[trigger] out[p], env, l3) && slot_vals(out[p], env, l3)
+                    == nv[p] by {
+                    if p < rows.len() - 1 {
+                        assert(out[p] == rows[p + 1]);
+                    }
+                }
+                assert(list_items_member(items2, st, enums)) by {
+                    lemma_items_drop_first(items, st, enums);
+                }
+                lemma_list_join(new_len, out, env, l3, items2, st, max, enums);
+            }
+        }
+    }
+}
+
+proof fn lemma_items_drop_first(items: Seq<SVal>, st: STy, enums: Seq<i64>)
+    requires
+        list_items_member(items, st, enums),
+        items.len() > 0,
+    ensures
+        list_items_member(items.drop_first(), st, enums),
+    decreases items.len(),
+{
+    if items.len() > 1 {
+        lemma_items_drop_first(items.drop_last(), st, enums);
+        assert(items.drop_first().drop_last() =~= items.drop_last().drop_first());
+        assert(items.drop_first().last() == items.last());
+    } else {
+        assert(items.drop_first() =~= Seq::<SVal>::empty());
+    }
+}
+
+/// Listのリテラルの要素を順に下ろすと、`out` は長さのスロットと要素のスロットの列を表す。
+pub open spec fn listlit_ok(es: Seq<TExpr>, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, st: STy, n: i64, out: Seq<Expr>) -> bool {
+    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match eval_elements(st, es, se, sls) {
+            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+            Ok(items) => run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
+                cx,
+                sc,
+                env,
+                se,
+                l,
+                sls,
+            ) && items.len() == es.len() && list_items_member(items, st, se.enums) && clean(out, env, l) && slot_vals(
+                out,
+                env,
+                l,
+            ) == seq![Value::Int(n)] + enc_items(items, st, se.enums),
+        }
+}
+
+proof fn lemma_listlit_base(cx: LowerCtx, sc: Seq<Bound>, b: Block, st: STy, n: i64, out: Seq<Expr>)
+    requires
+        out == seq![Expr::Const(Value::Int(n))],
+    ensures
+        listlit_ok(Seq::empty(), cx, sc, b, b, st, n, out),
+{
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b.depth_s() implies match eval_elements(st, Seq::empty(), se, sls) {
+        Err(k) => run(fresh(b, b), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(items) => run(fresh(b, b), env, ls) matches Ok(l) && l.len() == b.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && items.len() == 0 && list_items_member(items, st, se.enums) && clean(out, env, l) && slot_vals(
+            out,
+            env,
+            l,
+        ) == seq![Value::Int(n)] + enc_items(items, st, se.enums),
+    } by {
+        lemma_fresh_refl(b);
+        assert(run(Seq::<Expr>::empty(), env, ls) == Ok::<Seq<Value>, ErrKind>(ls));
+        lemma_prefix_refl(ls);
+        assert(out[0] == Expr::Const(Value::Int(n)));
+        assert(slot_vals(out, env, ls) =~= seq![Value::Int(n)] + enc_items(Seq::empty(), st, se.enums));
+    }
+}
+
+/// Listのリテラルに要素を1つ加える。
+#[verifier::spinoff_prover]
+proof fn lemma_listlit_step(
+    es: Seq<TExpr>,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    b2: Block,
+    st: STy,
+    n: i64,
+    o1: Seq<Expr>,
+    x: Seq<Expr>,
+    out: Seq<Expr>,
+)
+    requires
+        es.len() > 0,
+        listlit_ok(es.drop_last(), cx, sc, b0, b1, st, n, o1),
+        elem_lowers(es.last(), cx, sc, b1, b2, st, x),
+        extends(b0, b1),
+        extends(b1, b2),
+        out == o1 + x,
+    ensures
+        listlit_ok(es, cx, sc, b0, b2, st, n, out),
+{
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies match eval_elements(st, es, se, sls) {
+        Err(k) => run(fresh(b0, b2), env, ls) == Err::<Seq<Value>, ErrKind>(k),
+        Ok(items) => run(fresh(b0, b2), env, ls) matches Ok(l) && l.len() == b2.depth_s() && prefix(ls, l) && ctx_ok(
+            cx,
+            sc,
+            env,
+            se,
+            l,
+            sls,
+        ) && items.len() == es.len() && list_items_member(items, st, se.enums) && clean(out, env, l) && slot_vals(
+            out,
+            env,
+            l,
+        ) == seq![Value::Int(n)] + enc_items(items, st, se.enums),
+    } by {
+        lemma_run_fresh(b0, b1, b2, env, ls);
+        if let Ok(vs) = eval_elements(st, es.drop_last(), se, sls) {
+            let enums = se.enums;
+            let l1 = run(fresh(b0, b1), env, ls)->Ok_0;
+            assert(ctx_ok(cx, sc, env, se, l1, sls));
+            if let Ok(v) = eval_src(es.last(), se, sls) {
+                if member(v, st, enums) {
+                    let l2 = run(fresh(b1, b2), env, l1)->Ok_0;
+                    lemma_prefix_trans(ls, l1, l2);
+                    lemma_clean_weaken(o1, env, l1, l2);
+                    lemma_clean_concat(o1, x, env, l2);
+                    let items = vs.push(v);
+                    assert(items.drop_last() =~= vs);
+                    assert(items.last() == v);
+                    assert(enc_items(items, st, enums) == enc_items(vs, st, enums) + enc(v, st, enums));
+                    assert(slot_vals(out, env, l2) =~= seq![Value::Int(n)] + enc_items(items, st, enums));
+                }
+            }
+        }
+    }
+}
+
+/// Listのリテラルの残りを既定値で埋める。
+#[verifier::spinoff_prover]
+proof fn lemma_listlit_done(
+    e: TExpr,
+    cx: LowerCtx,
+    sc: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    st: STy,
+    max: usize,
+    o2: Seq<Expr>,
+    dv: Seq<Value>,
+    out: Seq<Expr>,
+)
+    requires
+        e matches TExpr::ListLit(t, m, es) && sty(t) == st && m == max && es@.len() <= max && listlit_ok(
+            es@,
+            cx,
+            sc,
+            b0,
+            b1,
+            st,
+            es@.len() as i64,
+            o2,
+        ) && out == o2 + lits(enc_repeat(dv, (max - es@.len()) as nat)),
+        dv == enc(default_val(st, cx.enums@), st, cx.enums@),
+    ensures
+        lowers(e, cx, sc, b0, b1, XTy::List(Box::new(st), max), out),
+{
+    let es = e->ListLit_2@;
+    let xt = XTy::List(Box::new(st), max);
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() implies result_ok(
+        eval_src(e, se, sls),
+        run(fresh(b0, b1), env, ls),
+        out,
+        env,
+        xt,
+        se.enums,
+    ) by {
+        if let Ok(items) = eval_elements(st, es, se, sls) {
+            let enums = se.enums;
+            let l = run(fresh(b0, b1), env, ls)->Ok_0;
+            let tail = enc_repeat(dv, (max - es.len()) as nat);
+            lemma_lits(tail, env, l);
+            lemma_clean_concat(o2, lits(tail), env, l);
+            let v = SVal::List(items);
+            assert(member(v, STy::List(Box::new(st), max), enums));
+            assert(slot_vals(out, env, l) == enc(v, STy::List(Box::new(st), max), enums));
         }
     }
 }
@@ -4680,8 +6260,8 @@ proof fn lemma_quant(
     }
 }
 
-/// Set、Map、Listのリテラルと、Setの演算と大きさ。
-fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
+/// Setのリテラル。
+fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
     requires
         old(blk).wf(),
     ensures
@@ -4757,20 +6337,57 @@ fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             }
             Some((XType::Set(Box::new(copy_stype(t))), bits))
         },
+        _ => {
+            proof {
+                lemma_extends_refl(*blk);
+            }
+            None
+        },
+    }
+}
+
+/// Mapのリテラル。
+fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
+    requires
+        old(blk).wf(),
+    ensures
+        extends(*old(blk), *final(blk)),
+        r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+    decreases e, 1nat,
+{
+    let enums = &cx.enums;
+    match e {
         TExpr::MapLit(k, v, items) => {
             proof {
                 assert(decreases_to!(*e => *items));
                 lemma_extends_refl(*blk);
             }
+            if keys_exec(k, enums).is_none() {
+                return None;
+            }
             let map = SType::Map(Box::new(copy_stype(k)), Box::new(copy_stype(v)));
             let mut slots = defaults(&map, enums);
             let ghost sc0 = sc@;
+            let ghost b0 = *blk;
+            let ghost kt = sty(*k);
+            let ghost vt = sty(*v);
+            proof {
+                lemma_maplit_base(*cx, sc0, b0, kt, vt, slots@);
+                assert(items@.take(0) =~= Seq::<Item>::empty());
+            }
             let mut i = 0;
             while i < items.len()
                 invariant
                     decreases_to!(*e => *items),
                     sc@ == sc0,
+                    b0 == *old(blk),
                     extends(*old(blk), *blk),
+                    i <= items@.len(),
+                    kt == sty(*k),
+                    vt == sty(*v),
+                    e is MapLit && e->MapLit_2 == *items,
+                    frag(*e) ==> maplit_ok(items@.take(i as int), *cx, sc0, b0, *blk, kt, vt, slots@),
                 decreases items.len() - i,
             {
                 proof {
@@ -4781,11 +6398,45 @@ fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                     assert(decreases_to!(*e => item.key));
                     assert(decreases_to!(*e => item.value));
                 }
+                let ghost b1 = *blk;
+                let ghost s1 = slots@;
                 slots = put(e, &slots, k, v, &item.key, &item.value, cx, sc, blk)?;
+                proof {
+                    lemma_extends_trans(*old(blk), b1, *blk);
+                    assert(items@.take(i + 1).drop_last() =~= items@.take(i as int));
+                    if frag(*e) {
+                        lemma_frag_items(items@, i as int);
+                        lemma_maplit_step(items@.take(i + 1), *cx, sc0, b0, b1, *blk, kt, vt, s1, slots@);
+                    }
+                }
                 i += 1;
+            }
+            proof {
+                assert(items@.take(items@.len() as int) =~= items@);
             }
             Some((to_xtype(&map), slots))
         },
+        _ => {
+            proof {
+                lemma_extends_refl(*blk);
+            }
+            None
+        },
+    }
+}
+
+/// Listのリテラル。
+fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
+    requires
+        old(blk).wf(),
+    ensures
+        extends(*old(blk), *final(blk)),
+        r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+    decreases e, 1nat,
+{
+    let enums = &cx.enums;
+    match e {
         TExpr::ListLit(t, max, es) => {
             proof {
                 assert(decreases_to!(*e => *es));
@@ -4797,31 +6448,100 @@ fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             let mut out: Vec<Expr> = Vec::new();
             out.push(ci(es.len() as i64));
             let ghost sc0 = sc@;
+            let ghost b0 = *blk;
+            let ghost st = sty(*t);
+            let ghost n = es.len() as i64;
+            proof {
+                lemma_listlit_base(*cx, sc0, b0, st, n, out@);
+                assert(es@.take(0) =~= Seq::<TExpr>::empty());
+            }
             let mut i = 0;
             while i < es.len()
                 invariant
                     decreases_to!(*e => *es),
                     sc@ == sc0,
+                    b0 == *old(blk),
                     extends(*old(blk), *blk),
+                    i <= es@.len(),
+                    st == sty(*t),
+                    n == es.len() as i64,
+                    e is ListLit && e->ListLit_2 == *es && e->ListLit_0 == *t,
+                    frag(*e) ==> listlit_ok(es@.take(i as int), *cx, sc0, b0, *blk, st, n, out@),
                 decreases es.len() - i,
             {
                 proof {
                     vstd::std_specs::vec::axiom_vec_index_decreases(*es, i as int);
                 }
+                let ghost b1 = *blk;
+                let ghost o1 = out@;
                 let x = element(&es[i], cx, sc, blk, t)?;
                 append(&mut out, &x);
+                proof {
+                    lemma_extends_trans(*old(blk), b1, *blk);
+                    assert(es@.take(i + 1).drop_last() =~= es@.take(i as int));
+                    if frag(*e) {
+                        lemma_frag_seq(es@, i as int);
+                        lemma_listlit_step(es@.take(i + 1), *cx, sc0, b0, b1, *blk, st, n, o1, x@, out@);
+                    }
+                }
                 i += 1;
             }
+            proof {
+                assert(es@.take(es@.len() as int) =~= es@);
+            }
             let defs = defaults(t, enums);
+            let ghost o2 = out@;
+            let ghost dv = enc(default_val(st, enums@), st, enums@);
+            let ghost b2 = *blk;
+            proof {
+                assert(o2 =~= o2 + lits(enc_repeat(dv, 0)));
+            }
             let mut p = es.len();
             while p < *max
+                invariant
+                    es.len() <= p <= *max,
+                    defs@ == lits(dv),
+                    out@ == o2 + lits(enc_repeat(dv, (p - es.len()) as nat)),
                 decreases *max - p,
             {
+                let ghost o3 = out@;
                 append(&mut out, &defs);
+                proof {
+                    let k = (p - es.len()) as nat;
+                    assert(enc_repeat(dv, (k + 1) as nat) == enc_repeat(dv, k) + dv);
+                    assert(lits(enc_repeat(dv, k) + dv) =~= lits(enc_repeat(dv, k)) + lits(dv));
+                    assert(out@ =~= o2 + lits(enc_repeat(dv, (k + 1) as nat)));
+                }
                 p += 1;
+            }
+            proof {
+                if frag(*e) {
+                    lemma_listlit_done(*e, *cx, sc0, b0, b2, st, *max, o2, dv, out@);
+                }
             }
             Some((XType::List(Box::new(copy_stype(t)), *max), out))
         },
+        _ => {
+            proof {
+                lemma_extends_refl(*blk);
+            }
+            None
+        },
+    }
+}
+
+/// Setの要素の判定と更新、Setの演算、Listの要素の判定、大きさ。
+fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Option<(XType, Vec<Expr>)>)
+    requires
+        old(blk).wf(),
+    ensures
+        extends(*old(blk), *final(blk)),
+        r is Some ==> final(sc)@ == old(sc)@,
+        r matches Some((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+    decreases e, 1nat,
+{
+    let enums = &cx.enums;
+    match e {
         TExpr::SetContains(t, a, x) => {
             let ghost b0 = *blk;
             let (tc, cs) = low(a, cx, sc, blk)?;
@@ -4847,34 +6567,67 @@ fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             Some((XType::Bool, out))
         },
         TExpr::ListContains(a, x) => {
+            let ghost b0 = *blk;
             let (tc, cs) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (elem, max) = match tc {
                 XType::List(u, max) => (*u, max),
                 _ => return None,
             };
+            if max > 0x7fff_ffffusize {
+                return None;
+            }
+            let et = to_xtype(&elem);
             let (tx, xv) = low(x, cx, sc, blk)?;
-            if !fits(&tx, &elem) {
+            if !xtype_eq(&tx, &et) {
                 return None;
             }
             let (len, rows) = list_parts(&elem, max, &cs, enums)?;
-            let et = to_xtype(&elem);
-            if rows.len() > 0x7fff_ffffusize {
-                return None;
-            }
+            let ghost lg = len;
+            let ghost t = xty(et);
             let mut hits: Vec<Expr> = Vec::new();
+            let ghost mut cg: Seq<Expr> = Seq::empty();
             let mut p = 0;
             while p < rows.len()
                 invariant
-                    rows.len() <= 0x7fff_ffffusize,
                     extends(*old(blk), *blk),
+                    rows@.len() == max,
+                    max <= 0x7fff_ffff,
+                    lg == len,
+                    t == xty(et),
+                    p <= rows@.len(),
+                    hits@.len() == p,
+                    cg.len() == p,
+                    forall|q: int| 0 <= q < p ==> #[trigger] hit_at(hits@[q], rows@[q]@, xv@, lg, cg[q], q, t, enums@),
                 decreases rows.len() - p,
             {
                 let same = eq_slots(&et, &rows[p], &xv, enums)?;
-                hits.push(and(bin(BinOp::Lt, ci(p as i64), copy_expr(&len)), same));
+                let ghost h1 = hits@;
+                let ghost c1 = cg;
+                proof {
+                    cg = cg.push(same);
+                }
+                hits.push(and(bin(BinOp::Gt, copy_expr(&len), ci(p as i64)), same));
+                proof {
+                    assert(hit_at(hits@[p as int], rows@[p as int]@, xv@, lg, cg[p as int], p as int, t, enums@));
+                    assert forall|q: int| 0 <= q < p implies #[trigger] hit_at(hits@[q], rows@[q]@, xv@, lg, cg[q], q, t, enums@) by {
+                        assert(hits@[q] == h1[q]);
+                        assert(cg[q] == c1[q]);
+                    }
+                }
                 p += 1;
             }
             let mut out: Vec<Expr> = Vec::new();
             out.push(any_of(&hits));
+            proof {
+                let rv = rows_view(rows@);
+                assert forall|q: int| 0 <= q < rv.len() implies #[trigger] hit_at(hits@[q], rv[q], xv@, lg, cg[q], q, t, enums@) by {
+                    assert(rv[q] == rows@[q]@);
+                }
+                if frag(*e) {
+                    lemma_list_contains(*e, *cx, sc@, b0, b1, *blk, sty(elem), max, cs@, t, xv@, lg, rv, hits@, cg, out@);
+                }
+            }
             Some((XType::Bool, out))
         },
         TExpr::Insert(t, a, x) | TExpr::Remove(t, a, x) => {
@@ -5391,7 +7144,9 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
     let enums = &cx.enums;
     match e {
         TExpr::HasKey(t, a, x) => {
+            let ghost b0 = *blk;
             let (tm, ms) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (k, v) = match tm {
                 XType::Map(k, v) => (*k, *v),
                 _ => return None,
@@ -5399,16 +7154,30 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
             if !stype_eq(&k, t) {
                 return None;
             }
+            let rows = map_rows(&k, &v, &ms, enums)?;
+            let present = heads(&rows)?;
+            if present.len() > 0x7fff_ffffusize {
+                return None;
+            }
             let r = lookup_rank(x, cx, sc, blk, &k)?;
+            let ghost rg = r;
+            let hit = pick_slot(&present, &r);
+            let ghost hg = hit;
+            let known = bin(BinOp::Ge, r, ci(0));
             let mut out: Vec<Expr> = Vec::new();
-            let (present, _) = map_parts(&k, &v, &ms, enums)?;
-            let hit = select_one(&singletons(&present), &r)?;
-            out.push(and(bin(BinOp::Ge, copy_expr(&r), ci(0)), hit));
+            out.push(and(known, hit));
+            proof {
+                if frag(*e) {
+                    lemma_has_key(*e, *cx, sc@, b0, b1, *blk, sty(v), ms@, rows_view(rows@), present@, rg, hg, out@);
+                }
+            }
             Some((XType::Bool, out))
         },
         TExpr::Get(_, _, _) => low_get(e, cx, sc, blk),
         TExpr::Put(kt, vt, a, x, y) => {
+            let ghost b0 = *blk;
             let (tm, ms) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (k, v) = match &tm {
                 XType::Map(k, v) => (copy_stype(k), copy_stype(v)),
                 _ => return None,
@@ -5417,10 +7186,17 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
                 return None;
             }
             let slots = put(e, &ms, &k, &v, x, y, cx, sc, blk)?;
+            proof {
+                if frag(*e) {
+                    lemma_put_expr(*e, *cx, sc@, b0, b1, *blk, sty(k), sty(v), ms@, slots@);
+                }
+            }
             Some((tm, slots))
         },
         TExpr::Delete(t, a, x) => {
+            let ghost b0 = *blk;
             let (tm, ms) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (k, v) = match &tm {
                 XType::Map(k, v) => (copy_stype(k), copy_stype(v)),
                 _ => return None,
@@ -5428,81 +7204,83 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
             if !stype_eq(&k, t) {
                 return None;
             }
-            let r = lookup_rank(x, cx, sc, blk, &k)?;
-            let (present, values) = map_parts(&k, &v, &ms, enums)?;
-            let defs = defaults(&v, enums);
-            let n = if present.len() < values.len() {
-                present.len()
-            } else {
-                values.len()
-            };
-            if n > 0x7fff_ffffusize {
+            let rows = map_rows(&k, &v, &ms, enums)?;
+            if rows.len() > 0x7fff_ffffusize {
                 return None;
             }
-            let mut p2: Vec<Expr> = Vec::new();
-            let mut v2: Vec<Vec<Expr>> = Vec::new();
-            let mut i = 0;
-            while i < n
-                invariant
-                    n <= present.len(),
-                    n <= values.len(),
-                    n <= 0x7fff_ffffusize,
-                decreases n - i,
-            {
-                p2.push(and(copy_expr(&present[i]), bin(BinOp::Ne, copy_expr(&r), ci(i as i64))));
-                let row = &values[i];
-                let m = if row.len() < defs.len() {
-                    row.len()
-                } else {
-                    defs.len()
-                };
-                let mut vs: Vec<Expr> = Vec::new();
-                let mut j = 0;
-                while j < m
-                    invariant
-                        m <= row.len(),
-                        m <= defs.len(),
-                        i < 0x7fff_ffffusize,
-                    decreases m - j,
-                {
-                    vs.push(ite(eq(copy_expr(&r), ci(i as i64)), copy_expr(&defs[j]), copy_expr(&row[j])));
-                    j += 1;
+            let r = lookup_rank(x, cx, sc, blk, &k)?;
+            let mut alt: Vec<Expr> = Vec::new();
+            alt.push(cb(false));
+            append(&mut alt, &defaults(&v, enums));
+            let out = ite_rows(&rows, &r, &alt)?;
+            let res = join_rows(&out);
+            proof {
+                if frag(*e) {
+                    lemma_delete(*e, *cx, sc@, b0, b1, *blk, sty(v), ms@, rows_view(rows@), r, alt@, rows_view(out@), res@);
                 }
-                v2.push(vs);
-                i += 1;
             }
-            Some((tm, map_join(&p2, &v2)))
+            Some((tm, res))
         },
         TExpr::Keys(a) => {
+            let ghost b0 = *blk;
             let (tm, ms) = low(a, cx, sc, blk)?;
             let (k, v) = match tm {
                 XType::Map(k, v) => (*k, *v),
                 _ => return None,
             };
-            let (present, _) = map_parts(&k, &v, &ms, enums)?;
+            let rows = map_rows(&k, &v, &ms, enums)?;
+            let present = heads(&rows)?;
+            proof {
+                if frag(*e) {
+                    lemma_keys(*e, *cx, sc@, b0, *blk, sty(k), sty(v), ms@, rows_view(rows@), present@);
+                }
+            }
             Some((XType::Set(Box::new(k)), present))
         },
-        TExpr::At(a, i) => {
+        TExpr::At(a, ix) => {
+            let ghost b0 = *blk;
             let (tl, ls) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (t, max) = match tl {
                 XType::List(u, max) => (*u, max),
                 _ => return None,
             };
-            let i = sub_scalar(i, cx, sc, blk, &XType::Int)?;
-            let i = atom(blk, i)?;
+            if max > 0x7fff_ffffusize {
+                return None;
+            }
+            let i0 = sub_scalar(ix, cx, sc, blk, &XType::Int)?;
+            let ghost b2 = *blk;
+            let ghost ig = i0;
+            let i = atom(blk, i0)?;
+            let ghost b3 = *blk;
             let (len, rows) = list_parts(&t, max, &ls, enums)?;
-            check(blk, and(bin(BinOp::Ge, copy_expr(&i), ci(0)), bin(BinOp::Lt, copy_expr(&i), len)), FAIL_INDEX)?;
+            let ghost lg = len;
+            let cond = and(bin(BinOp::Ge, copy_expr(&i), ci(0)), bin(BinOp::Lt, copy_expr(&i), len));
+            let ghost cg = cond;
+            check(blk, cond, FAIL_INDEX)?;
             let slots = select(&rows, &i, &defaults(&t, enums))?;
+            proof {
+                if frag(*e) {
+                    lemma_at(*e, *cx, sc@, b0, b1, b2, b3, *blk, sty(t), max, ls@, ig, i, lg, rows_view(rows@), cg, slots@);
+                }
+            }
             Some((to_xtype(&t), slots))
         },
         TExpr::First(a) | TExpr::Last(a) => {
+            let ghost b0 = *blk;
             let (tl, ls) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (t, max) = match tl {
                 XType::List(u, max) => (*u, max),
                 _ => return None,
             };
+            if max > 0x7fff_ffffusize {
+                return None;
+            }
             let (len, rows) = list_parts(&t, max, &ls, enums)?;
+            let ghost lg = len;
             check(blk, bin(BinOp::Gt, copy_expr(&len), ci(0)), FAIL_EMPTY)?;
+            let ghost b2 = *blk;
             match e {
                 TExpr::First(_) => {
                     let slots = if rows.len() > 0 {
@@ -5510,16 +7288,28 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
                     } else {
                         defaults(&t, enums)
                     };
+                    proof {
+                        if frag(*e) {
+                            lemma_first(*e, *cx, sc@, b0, b1, b2, sty(t), max, ls@, lg, rows_view(rows@), slots@);
+                        }
+                    }
                     return Some((to_xtype(&t), slots));
                 },
                 _ => {},
             }
             let i = bind(blk, bin(BinOp::Sub, len, ci(1)))?;
             let slots = select(&rows, &i, &defaults(&t, enums))?;
+            proof {
+                if frag(*e) {
+                    lemma_last(*e, *cx, sc@, b0, b1, b2, *blk, sty(t), max, ls@, lg, rows_view(rows@), i, slots@);
+                }
+            }
             Some((to_xtype(&t), slots))
         },
         TExpr::Push(t, n, a, x) => {
+            let ghost b0 = *blk;
             let (tl, ls) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (u, max) = match &tl {
                 XType::List(u, max) => (copy_stype(u), *max),
                 _ => return None,
@@ -5527,101 +7317,101 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
             if max != *n || !stype_eq(&u, t) || max > 0x7fff_ffffusize {
                 return None;
             }
-            let x = element(x, cx, sc, blk, &u)?;
+            let xs = element(x, cx, sc, blk, &u)?;
+            let ghost b2 = *blk;
             let (len, rows) = list_parts(&u, max, &ls, enums)?;
+            let ghost lg = len;
             check(blk, bin(BinOp::Lt, copy_expr(&len), ci(max as i64)), FAIL_FULL)?;
+            let ghost b3 = *blk;
             let new_len = bind(blk, bin(BinOp::Add, copy_expr(&len), ci(1)))?;
-            if rows.len() > 0x7fff_ffffusize {
-                return None;
-            }
-            let mut out: Vec<Vec<Expr>> = Vec::new();
-            let mut p = 0;
-            while p < rows.len()
-                invariant
-                    rows.len() <= 0x7fff_ffffusize,
-                decreases rows.len() - p,
-            {
-                let row = &rows[p];
-                let m = if row.len() < x.len() {
-                    row.len()
-                } else {
-                    x.len()
-                };
-                let mut vs: Vec<Expr> = Vec::new();
-                let mut j = 0;
-                while j < m
-                    invariant
-                        m <= row.len(),
-                        m <= x.len(),
-                        p < 0x7fff_ffffusize,
-                    decreases m - j,
-                {
-                    vs.push(ite(eq(copy_expr(&len), ci(p as i64)), copy_expr(&x[j]), copy_expr(&row[j])));
-                    j += 1;
+            let ghost ng = new_len;
+            let out = ite_rows(&rows, &len, &xs)?;
+            let ghost og = rows_view(out@);
+            let r = list_join(new_len, &out);
+            proof {
+                let rv = rows_view(rows@);
+                if frag(*e) {
+                    lemma_push(*e, *cx, sc@, b0, b1, b2, b3, *blk, sty(u), max, ls@, xs@, lg, rv, ng, og, r@);
                 }
-                out.push(vs);
-                p += 1;
             }
-            Some((tl, list_join(new_len, &out)))
+            Some((tl, r))
         },
         TExpr::Pop(a) | TExpr::Shift(a) => {
+            let ghost b0 = *blk;
             let (tl, ls) = low(a, cx, sc, blk)?;
+            let ghost b1 = *blk;
             let (t, max) = match &tl {
                 XType::List(u, max) => (copy_stype(u), *max),
                 _ => return None,
             };
-            let (len, rows) = list_parts(&t, max, &ls, enums)?;
-            check(blk, bin(BinOp::Gt, copy_expr(&len), ci(0)), FAIL_EMPTY)?;
-            let new_len = bind(blk, bin(BinOp::Sub, len, ci(1)))?;
-            let defs = defaults(&t, enums);
-            if rows.len() > 0x7fff_ffffusize {
+            if max > 0x7fff_ffffusize {
                 return None;
             }
-            let mut out: Vec<Vec<Expr>> = Vec::new();
+            let (len, rows) = list_parts(&t, max, &ls, enums)?;
+            let ghost lg = len;
+            check(blk, bin(BinOp::Gt, copy_expr(&len), ci(0)), FAIL_EMPTY)?;
+            let ghost b2 = *blk;
+            let new_len = bind(blk, bin(BinOp::Sub, len, ci(1)))?;
+            let ghost ng = new_len;
+            let defs = defaults(&t, enums);
             match e {
                 TExpr::Pop(_) => {
-                    let mut p = 0;
-                    while p < rows.len()
-                        invariant
-                            rows.len() <= 0x7fff_ffffusize,
-                        decreases rows.len() - p,
-                    {
-                        let row = &rows[p];
-                        let m = if row.len() < defs.len() {
-                            row.len()
-                        } else {
-                            defs.len()
-                        };
-                        let mut vs: Vec<Expr> = Vec::new();
-                        let mut j = 0;
-                        while j < m
-                            invariant
-                                m <= row.len(),
-                                m <= defs.len(),
-                                p < 0x7fff_ffffusize,
-                            decreases m - j,
-                        {
-                            vs.push(
-                                ite(eq(copy_expr(&new_len), ci(p as i64)), copy_expr(&defs[j]), copy_expr(&row[j])),
-                            );
-                            j += 1;
+                    let out = ite_rows(&rows, &new_len, &defs)?;
+                    let ghost og = rows_view(out@);
+                    let r = list_join(new_len, &out);
+                    proof {
+                        let rv = rows_view(rows@);
+                        if frag(*e) {
+                            lemma_pop(*e, *cx, sc@, b0, b1, b2, *blk, sty(t), max, ls@, lg, rv, ng, defs@, og, r@);
                         }
-                        out.push(vs);
-                        p += 1;
                     }
+                    Some((tl, r))
                 },
                 _ => {
+                    let mut out: Vec<Vec<Expr>> = Vec::new();
                     let mut p = 1;
                     while p < rows.len()
+                        invariant
+                            1 <= p,
+                            p <= rows@.len() || rows@.len() == 0,
+                            rows@.len() > 0 ==> out@.len() == p - 1,
+                            rows@.len() == 0 ==> out@.len() == 0,
+                            forall|q: int| 0 <= q < out@.len() ==> #[trigger] out@[q]@ == rows@[q + 1]@,
                         decreases rows.len() - p,
                     {
+                        let ghost o1 = out@;
                         out.push(copy_exprs(&rows[p]));
+                        proof {
+                            assert forall|q: int| 0 <= q < out@.len() implies #[trigger] out@[q]@ == rows@[q + 1]@ by {
+                                if q < o1.len() {
+                                    assert(out@[q] == o1[q]);
+                                }
+                            }
+                        }
                         p += 1;
                     }
+                    let ghost o1 = out@;
                     out.push(defs);
+                    let ghost og = rows_view(out@);
+                    let r = list_join(new_len, &out);
+                    proof {
+                        let rv = rows_view(rows@);
+                        if rv.len() > 0 {
+                            assert(og.len() == rv.len());
+                            assert forall|q: int| 0 <= q < rv.len() - 1 implies #[trigger] og[q] == rv[q + 1] by {
+                                assert(og[q] == out@[q]@);
+                                assert(out@[q] == o1[q]);
+                                assert(rv[q + 1] == rows@[q + 1]@);
+                            }
+                            assert(og[rv.len() - 1] == out@[rv.len() - 1]@);
+                        }
+                        if frag(*e) {
+                            lemma_shift(*e, *cx, sc@, b0, b1, b2, *blk, sty(t), max, ls@, lg, rv, ng, defaults_s(sty(t), enums@), og, r@);
+                        }
+                    }
+                    Some((tl, r))
                 },
             }
-            Some((tl, list_join(new_len, &out)))
         },
         _ => None,
     }
@@ -5632,7 +7422,7 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
 /// 環境が対応するとき、下ろした式の値は、値の上の意味論の値と一致する（失敗するなら同じ失敗）。
 pub fn lower_prop(e: &TExpr, cx: &LowerCtx) -> (r: Option<Expr>)
     ensures
-        r matches Some(c) ==> frag(*e) ==> forall|env: Env, se: SEnv|
+        r matches Some(c) ==> forall|env: Env, se: SEnv|
             #[trigger] env_rel(*cx, env, se) ==> prop_result(
                 eval_src(*e, se, Seq::empty()),
                 eval_l(c, env, Seq::empty()),
@@ -5641,6 +7431,7 @@ pub fn lower_prop(e: &TExpr, cx: &LowerCtx) -> (r: Option<Expr>)
     let mut sc: Vec<Bound> = Vec::new();
     let r = bool_in(e, cx, &mut sc, 0);
     proof {
+        lemma_frag_total(*e);
         if r is Some {
             let c = r->Some_0;
             if frag(*e) {
@@ -5663,7 +7454,7 @@ pub fn lower_prop(e: &TExpr, cx: &LowerCtx) -> (r: Option<Expr>)
 /// 失敗するなら、各スロットは同じ失敗になる。
 pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: Option<Vec<Expr>>)
     ensures
-        r matches Some(out) ==> frag(*e) ==> forall|env: Env, se: SEnv, ls: Seq<Value>|
+        r matches Some(out) ==> forall|env: Env, se: SEnv, ls: Seq<Value>|
             #[trigger] top_ok(*cx, env, se, ls, depth as nat) ==> stored_result(
                 eval_src(*e, se, Seq::empty()),
                 out@,
@@ -5699,6 +7490,7 @@ pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: O
     }
     proof {
         assert(fresh(b0, blk) =~= blk.binds@);
+        lemma_frag_total(*e);
         if frag(*e) {
             assert forall|env: Env, se: SEnv, ls: Seq<Value>| #[trigger] top_ok(*cx, env, se, ls, depth as nat) implies stored_result(
                 eval_src(*e, se, Seq::empty()),
