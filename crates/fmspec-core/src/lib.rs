@@ -5,6 +5,7 @@
 //!
 //! - [`model`]：IR検証前のモデル、値、型、式
 //! - [`encoding`]：IRの複合型と値の意味、スロットの列への符号化（仕様）
+//! - [`keys`]：キーの型の値の正規順と番号（仕様）
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
 //! - [`typing`]：型規則、整形式性、`validate`、型健全性
 //! - [`step`]：遷移の意味論と遷移列挙
@@ -23,6 +24,7 @@ pub mod evidence;
 pub mod expr_copy;
 pub mod gate;
 mod impls;
+pub mod keys;
 pub mod map_encoding;
 pub mod map_lookup;
 pub mod mbt;
