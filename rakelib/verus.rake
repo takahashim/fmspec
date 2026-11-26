@@ -39,17 +39,25 @@ end
 
 # 変異。[ファイル, 元の文字列, 置き換え, 説明]。元の文字列はファイルにちょうど1回現れなければならない。
 VERUS_MUTANTS = [
+  ["infer.rs", "BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(XType::Bool),",
+   "BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(XType::Int),", "比較の型を整数にする"],
+  ["encoding.rs", "(SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2 && *h1 == *h2,",
+   "(SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2,", "整数の型の上端を比べない"],
+  ["encoding.rs", "        SType::Option(x) => match keys_exec(x, enums) {\n            Some(k) => Some(k + 1),",
+   "        SType::Option(x) => match keys_exec(x, enums) {\n            Some(k) => Some(k),", "Optionの値の数に空を数えない"],
+  ["encoding.rs", "            if names[j] == names[i] {", "            if names[j] == names[i] && j > 0 {",
+   "名前の重複検査で先頭を比べない"],
   ["keys.rs", "p[i / d.len() as int].push(d[i % d.len() as int])", "p[i % p.len() as int].push(d[i / p.len() as int])",
    "Tupleの正規順で最初の要素を最も速く変える"],
   ["keys.rs", "seq![SVal::None] + domain(*x, enums).map_values(|v: SVal| SVal::Some(Box::new(v))),",
    "domain(*x, enums).map_values(|v: SVal| SVal::Some(Box::new(v))) + seq![SVal::None],", "Optionの空を最後に並べる"],
-  ["keys.rs", "(SType::Int(lo, _), SVal::Int(x)) => x - lo,", "(SType::Int(lo, _), SVal::Int(x)) => x as int,", "整数の番号から下端を引かない"],
-  ["encoding.rs", "        SType::Option(x) => 1 + width(*x, enums),", "        SType::Option(x) => width(*x, enums),",
+  ["keys.rs", "(STy::Int(lo, _), SVal::Int(x)) => x - lo,", "(STy::Int(lo, _), SVal::Int(x)) => x as int,", "整数の番号から下端を引かない"],
+  ["encoding.rs", "        STy::Option(x) => 1 + width(*x, enums),", "        STy::Option(x) => width(*x, enums),",
    "Optionの幅に有無のスロットを数えない"],
   ["encoding.rs", "SVal::List(items) => seq![Value::Int(items.len() as i64)] + enc_items(", "SVal::List(items) => enc_items(",
    "Listの符号化に長さを入れない"],
-  ["encoding.rs", "        SType::Enum(id) => id < enums.len() && enums[id as int] >= 1,",
-   "        SType::Enum(id) => id < enums.len() && enums[id as int] >= 0,", "ラベルのない列挙型を整形式とする"],
+  ["encoding.rs", "        STy::Enum(id) => id < enums.len() && enums[id as int] >= 1,",
+   "        STy::Enum(id) => id < enums.len() && enums[id as int] >= 0,", "ラベルのない列挙型を整形式とする"],
   ["map_encoding.rs", "let tag: i64 = if present { 1 } else { 0 };",
    "let tag: i64 = if present { 0 } else { 1 };", "Mapの符号化でキーの有無を反転する"],
   ["ranking.rs", "prefix.checked_mul(radix)?.checked_add(digit)",
@@ -182,6 +190,7 @@ VERUS_MUTANTS = [
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
 # 前提や不変条件が矛盾していて証明が空虚に通っているなら、ここの assert(false) も通ってしまう。
 VERUS_CANARIES = [
+  ["infer.rs", "            assert(decreases_to!(*_parent => item.value));", "check_items のループ"],
   ["keys.rs", "        assert(pre.push(vs.last()) == vs);", "lemma_rank_seq_in_product の帰納"],
   ["keys.rs", "        assert(vs.drop_last() == p[q]);", "lemma_product_rank の帰納"],
   ["encoding.rs", "        assert(s.skip(prefix.len() as int) == last);", "lemma_models_enc_seq の帰納"],

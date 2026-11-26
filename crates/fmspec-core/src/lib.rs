@@ -7,6 +7,7 @@
 //! - [`encoding`]：IRの複合型と値の意味、スロットの列への符号化（仕様）
 //! - [`keys`]：キーの型の値の正規順と番号（仕様）
 //! - [`source`]：IRの式の型付き構文木と、値の上の意味論（仕様）
+//! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
 //! - [`typing`]：型規則、整形式性、`validate`、型健全性
 //! - [`step`]：遷移の意味論と遷移列挙
@@ -25,6 +26,7 @@ pub mod evidence;
 pub mod expr_copy;
 pub mod gate;
 mod impls;
+pub mod infer;
 pub mod keys;
 pub mod map_encoding;
 pub mod map_lookup;

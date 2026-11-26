@@ -15,9 +15,11 @@
 //!
 //! 下ろしの正しさは、下ろした中核の式の評価が、この意味論の値の符号化になることとして述べる。
 
-use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys_or_zero, member};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{sty, STy};
+use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, ErrKind};
 #[cfg(verus_keep_ghost)]
@@ -302,15 +304,15 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
         },
         TExpr::Quant(all, over, body) => {
             let values: Result<Seq<SVal>, ErrKind> = match over {
-                Over::Type(t) => Ok(domain(t, enums)),
+                Over::Type(t) => Ok(domain(sty(t), enums)),
                 Over::Set(t, s) => match eval_src(*s, env, ls) {
-                    Ok(SVal::Set(bits)) => Ok(select_bits(domain(t, enums), bits)),
+                    Ok(SVal::Set(bits)) => Ok(select_bits(domain(sty(t), enums), bits)),
                     Ok(_) => Err(ErrKind::TypeMismatch),
                     Err(k) => Err(k),
                 },
                 Over::Map(t, m) => match eval_src(*m, env, ls) {
                     Ok(SVal::Map(rows)) => Ok(
-                        select_bits(domain(t, enums), Seq::new(rows.len(), |i: int| rows[i] is Some)),
+                        select_bits(domain(sty(t), enums), Seq::new(rows.len(), |i: int| rows[i] is Some)),
                     ),
                     Ok(_) => Err(ErrKind::TypeMismatch),
                     Err(k) => Err(k),
@@ -370,15 +372,15 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(_) => Err(ErrKind::TypeMismatch),
             Err(k) => Err(k),
         },
-        TExpr::SetLit(t, es) => match eval_set_items(t, es@, env, ls) {
+        TExpr::SetLit(t, es) => match eval_set_items(sty(t), es@, env, ls) {
             Err(k) => Err(k),
             Ok(bits) => Ok(SVal::Set(bits)),
         },
-        TExpr::MapLit(k, v, items) => match eval_map_items(k, v, items@, env, ls) {
+        TExpr::MapLit(k, v, items) => match eval_map_items(sty(k), sty(v), items@, env, ls) {
             Err(err) => Err(err),
             Ok(rows) => Ok(SVal::Map(rows)),
         },
-        TExpr::ListLit(t, _, es) => match eval_elements(t, es@, env, ls) {
+        TExpr::ListLit(t, _, es) => match eval_elements(sty(t), es@, env, ls) {
             Err(k) => Err(k),
             Ok(items) => Ok(SVal::List(items)),
         },
@@ -387,7 +389,7 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(s) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match s {
-                    SVal::Set(bits) => Ok(SVal::Bool(member(y, t, enums) && bits[rank(y, t, enums)])),
+                    SVal::Set(bits) => Ok(SVal::Bool(member(y, sty(t), enums) && bits[rank(y, sty(t), enums)])),
                     _ => Err(ErrKind::TypeMismatch),
                 },
             },
@@ -407,8 +409,8 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(s) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match s {
-                    SVal::Set(bits) => if member(y, t, enums) {
-                        Ok(SVal::Set(bits.update(rank(y, t, enums), true)))
+                    SVal::Set(bits) => if member(y, sty(t), enums) {
+                        Ok(SVal::Set(bits.update(rank(y, sty(t), enums), true)))
                     } else {
                         fail(FAIL_NOT_IN_DOMAIN)
                     },
@@ -421,8 +423,8 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(s) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match s {
-                    SVal::Set(bits) => if member(y, t, enums) {
-                        Ok(SVal::Set(bits.update(rank(y, t, enums), false)))
+                    SVal::Set(bits) => if member(y, sty(t), enums) {
+                        Ok(SVal::Set(bits.update(rank(y, sty(t), enums), false)))
                     } else {
                         Ok(SVal::Set(bits))
                     },
@@ -470,7 +472,7 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(m) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match m {
-                    SVal::Map(rows) => Ok(SVal::Bool(member(y, t, enums) && rows[rank(y, t, enums)] is Some)),
+                    SVal::Map(rows) => Ok(SVal::Bool(member(y, sty(t), enums) && rows[rank(y, sty(t), enums)] is Some)),
                     _ => Err(ErrKind::TypeMismatch),
                 },
             },
@@ -480,8 +482,8 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(m) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match m {
-                    SVal::Map(rows) => if member(y, t, enums) {
-                        match rows[rank(y, t, enums)] {
+                    SVal::Map(rows) => if member(y, sty(t), enums) {
+                        match rows[rank(y, sty(t), enums)] {
                             Some(v) => Ok(v),
                             None => fail(FAIL_MISSING_KEY),
                         }
@@ -494,7 +496,7 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
         },
         TExpr::Put(kt, vt, a, x, y) => match eval_src(*a, env, ls) {
             Err(k) => Err(k),
-            Ok(m) => match put_row(m, kt, vt, eval_src(*x, env, ls), eval_src(*y, env, ls), enums) {
+            Ok(m) => match put_row(m, sty(kt), sty(vt), eval_src(*x, env, ls), eval_src(*y, env, ls), enums) {
                 Err(k) => Err(k),
                 Ok(rows) => Ok(SVal::Map(rows)),
             },
@@ -504,8 +506,8 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(m) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match m {
-                    SVal::Map(rows) => if member(y, t, enums) {
-                        Ok(SVal::Map(rows.update(rank(y, t, enums), None)))
+                    SVal::Map(rows) => if member(y, sty(t), enums) {
+                        Ok(SVal::Map(rows.update(rank(y, sty(t), enums), None)))
                     } else {
                         Ok(SVal::Map(rows))
                     },
@@ -555,7 +557,7 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             Ok(l) => match eval_src(*x, env, ls) {
                 Err(k) => Err(k),
                 Ok(y) => match l {
-                    SVal::List(items) => if !member(y, t, enums) {
+                    SVal::List(items) => if !member(y, sty(t), enums) {
                         fail(FAIL_NOT_IN_DOMAIN)
                     } else if items.len() >= max {
                         fail(FAIL_FULL)
@@ -623,7 +625,7 @@ pub open spec fn eval_seq(es: Seq<TExpr>, env: SEnv, ls: Seq<SVal>) -> Result<Se
 }
 
 /// 要素の式の列を左から評価し、各要素が型 `t` に属することを確かめる。
-pub open spec fn eval_elements(t: SType, es: Seq<TExpr>, env: SEnv, ls: Seq<SVal>) -> Result<Seq<SVal>, ErrKind>
+pub open spec fn eval_elements(t: STy, es: Seq<TExpr>, env: SEnv, ls: Seq<SVal>) -> Result<Seq<SVal>, ErrKind>
     decreases es, 1nat,
 {
     if es.len() == 0 {
@@ -644,7 +646,7 @@ pub open spec fn eval_elements(t: SType, es: Seq<TExpr>, env: SEnv, ls: Seq<SVal
 }
 
 /// Setのリテラルの要素を左から評価し、空のSetに順に加える。
-pub open spec fn eval_set_items(t: SType, es: Seq<TExpr>, env: SEnv, ls: Seq<SVal>) -> Result<Seq<bool>, ErrKind>
+pub open spec fn eval_set_items(t: STy, es: Seq<TExpr>, env: SEnv, ls: Seq<SVal>) -> Result<Seq<bool>, ErrKind>
     decreases es, 1nat,
 {
     if es.len() == 0 {
@@ -665,7 +667,7 @@ pub open spec fn eval_set_items(t: SType, es: Seq<TExpr>, env: SEnv, ls: Seq<SVa
 }
 
 /// Mapのリテラルの項目を左から評価し、空のMapに順に置く。
-pub open spec fn eval_map_items(kt: SType, vt: SType, items: Seq<Item>, env: SEnv, ls: Seq<SVal>) -> Result<
+pub open spec fn eval_map_items(kt: STy, vt: STy, items: Seq<Item>, env: SEnv, ls: Seq<SVal>) -> Result<
     Seq<Option<SVal>>,
     ErrKind,
 >
@@ -692,8 +694,8 @@ pub open spec fn eval_map_items(kt: SType, vt: SType, items: Seq<Item>, env: SEn
 /// キーのエラーとキーの型の検査が、値のエラーより先に来る（キーを評価して型を確かめてから、値を評価する）。
 pub open spec fn put_row(
     m: SVal,
-    kt: SType,
-    vt: SType,
+    kt: STy,
+    vt: STy,
     key: Result<SVal, ErrKind>,
     value: Result<SVal, ErrKind>,
     enums: Seq<i64>,

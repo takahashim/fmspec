@@ -9,7 +9,7 @@
 //! `domain` は型に属する値と番号 `0..keys` の1対1の対応である。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, keys_product, member, members, SType, SVal};
+use crate::encoding::{keys, keys_product, member, members, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use vstd::arithmetic::div_mod::{lemma_fundamental_div_mod, lemma_fundamental_div_mod_converse};
 #[cfg(verus_keep_ghost)]
@@ -19,26 +19,26 @@ use vstd::prelude::*;
 verus! {
 
 /// キーの型の値を正規順に並べた列。キーの型でなければ空。
-pub open spec fn domain(t: SType, enums: Seq<i64>) -> Seq<SVal>
+pub open spec fn domain(t: STy, enums: Seq<i64>) -> Seq<SVal>
     decreases t, 0nat,
 {
     if keys(t, enums) is None {
         Seq::empty()
     } else {
         match t {
-            SType::Bool => seq![SVal::Bool(false), SVal::Bool(true)],
-            SType::Int(lo, hi) => Seq::new((hi - lo + 1) as nat, |i: int| SVal::Int((lo + i) as i64)),
-            SType::Enum(id) => Seq::new(enums[id as int] as nat, |i: int| SVal::Enum(id, i as i64)),
-            SType::Tuple(ts) => product(ts@, enums).map_values(|vs: Seq<SVal>| SVal::Tuple(vs)),
-            SType::Record(_, ts) => product(ts@, enums).map_values(|vs: Seq<SVal>| SVal::Tuple(vs)),
-            SType::Option(x) => seq![SVal::None] + domain(*x, enums).map_values(|v: SVal| SVal::Some(Box::new(v))),
+            STy::Bool => seq![SVal::Bool(false), SVal::Bool(true)],
+            STy::Int(lo, hi) => Seq::new((hi - lo + 1) as nat, |i: int| SVal::Int((lo + i) as i64)),
+            STy::Enum(id) => Seq::new(enums[id as int] as nat, |i: int| SVal::Enum(id, i as i64)),
+            STy::Tuple(ts) => product(ts, enums).map_values(|vs: Seq<SVal>| SVal::Tuple(vs)),
+            STy::Record(_, ts) => product(ts, enums).map_values(|vs: Seq<SVal>| SVal::Tuple(vs)),
+            STy::Option(x) => seq![SVal::None] + domain(*x, enums).map_values(|v: SVal| SVal::Some(Box::new(v))),
             _ => Seq::empty(),
         }
     }
 }
 
 /// 要素の型の列の値の組を、辞書順に並べた列。最後の要素が最も速く変わる。
-pub open spec fn product(ts: Seq<SType>, enums: Seq<i64>) -> Seq<Seq<SVal>>
+pub open spec fn product(ts: Seq<STy>, enums: Seq<i64>) -> Seq<Seq<SVal>>
     decreases ts, 1nat,
 {
     if ts.len() == 0 {
@@ -51,27 +51,27 @@ pub open spec fn product(ts: Seq<SType>, enums: Seq<i64>) -> Seq<Seq<SVal>>
 }
 
 /// 値の番号。値が型に属し、型がキーの型のときに意味を持つ。
-pub open spec fn rank(v: SVal, t: SType, enums: Seq<i64>) -> int
+pub open spec fn rank(v: SVal, t: STy, enums: Seq<i64>) -> int
     decreases t, 0nat,
 {
     match (t, v) {
-        (SType::Bool, SVal::Bool(b)) => if b {
+        (STy::Bool, SVal::Bool(b)) => if b {
             1
         } else {
             0
         },
-        (SType::Int(lo, _), SVal::Int(x)) => x - lo,
-        (SType::Enum(_), SVal::Enum(_, k)) => k as int,
-        (SType::Tuple(ts), SVal::Tuple(vs)) => rank_seq(vs, ts@, enums),
-        (SType::Record(_, ts), SVal::Tuple(vs)) => rank_seq(vs, ts@, enums),
-        (SType::Option(_), SVal::None) => 0,
-        (SType::Option(x), SVal::Some(w)) => 1 + rank(*w, *x, enums),
+        (STy::Int(lo, _), SVal::Int(x)) => x - lo,
+        (STy::Enum(_), SVal::Enum(_, k)) => k as int,
+        (STy::Tuple(ts), SVal::Tuple(vs)) => rank_seq(vs, ts, enums),
+        (STy::Record(_, ts), SVal::Tuple(vs)) => rank_seq(vs, ts, enums),
+        (STy::Option(_), SVal::None) => 0,
+        (STy::Option(x), SVal::Some(w)) => 1 + rank(*w, *x, enums),
         _ => 0,
     }
 }
 
 /// 要素の番号を、混合基数の桁として左から順にたたむ。
-pub open spec fn rank_seq(vs: Seq<SVal>, ts: Seq<SType>, enums: Seq<i64>) -> int
+pub open spec fn rank_seq(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>) -> int
     decreases ts, 1nat,
 {
     if ts.len() == 0 || vs.len() == 0 {
@@ -81,7 +81,7 @@ pub open spec fn rank_seq(vs: Seq<SVal>, ts: Seq<SType>, enums: Seq<i64>) -> int
     }
 }
 
-pub open spec fn radix(t: SType, enums: Seq<i64>) -> int {
+pub open spec fn radix(t: STy, enums: Seq<i64>) -> int {
     match keys(t, enums) {
         Some(k) => k as int,
         None => 0,
@@ -91,7 +91,7 @@ pub open spec fn radix(t: SType, enums: Seq<i64>) -> int {
 // ---- 補題 ----
 
 /// 正規順の列の長さは、値の数である。
-pub proof fn lemma_domain_len(t: SType, enums: Seq<i64>)
+pub proof fn lemma_domain_len(t: STy, enums: Seq<i64>)
     requires
         keys(t, enums) is Some,
     ensures
@@ -99,14 +99,14 @@ pub proof fn lemma_domain_len(t: SType, enums: Seq<i64>)
     decreases t, 0nat,
 {
     match t {
-        SType::Tuple(ts) => lemma_product_len(ts@, enums),
-        SType::Record(_, ts) => lemma_product_len(ts@, enums),
-        SType::Option(x) => lemma_domain_len(*x, enums),
+        STy::Tuple(ts) => lemma_product_len(ts, enums),
+        STy::Record(_, ts) => lemma_product_len(ts, enums),
+        STy::Option(x) => lemma_domain_len(*x, enums),
         _ => {},
     }
 }
 
-proof fn lemma_product_len(ts: Seq<SType>, enums: Seq<i64>)
+proof fn lemma_product_len(ts: Seq<STy>, enums: Seq<i64>)
     requires
         keys_product(ts, enums) is Some,
     ensures
@@ -120,7 +120,7 @@ proof fn lemma_product_len(ts: Seq<SType>, enums: Seq<i64>)
 }
 
 /// 型に属する値の番号は `0..keys` にあり、正規順の列のその位置に値がある。
-pub proof fn lemma_rank_in_domain(v: SVal, t: SType, enums: Seq<i64>)
+pub proof fn lemma_rank_in_domain(v: SVal, t: STy, enums: Seq<i64>)
     requires
         member(v, t, enums),
         keys(t, enums) is Some,
@@ -131,15 +131,15 @@ pub proof fn lemma_rank_in_domain(v: SVal, t: SType, enums: Seq<i64>)
 {
     lemma_domain_len(t, enums);
     match (t, v) {
-        (SType::Tuple(ts), SVal::Tuple(vs)) => {
-            lemma_rank_seq_in_product(vs, ts@, enums);
-            lemma_product_len(ts@, enums);
+        (STy::Tuple(ts), SVal::Tuple(vs)) => {
+            lemma_rank_seq_in_product(vs, ts, enums);
+            lemma_product_len(ts, enums);
         },
-        (SType::Record(_, ts), SVal::Tuple(vs)) => {
-            lemma_rank_seq_in_product(vs, ts@, enums);
-            lemma_product_len(ts@, enums);
+        (STy::Record(_, ts), SVal::Tuple(vs)) => {
+            lemma_rank_seq_in_product(vs, ts, enums);
+            lemma_product_len(ts, enums);
         },
-        (SType::Option(x), SVal::Some(w)) => {
+        (STy::Option(x), SVal::Some(w)) => {
             lemma_rank_in_domain(*w, *x, enums);
             lemma_domain_len(*x, enums);
         },
@@ -147,7 +147,7 @@ pub proof fn lemma_rank_in_domain(v: SVal, t: SType, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_rank_seq_in_product(vs: Seq<SVal>, ts: Seq<SType>, enums: Seq<i64>)
+proof fn lemma_rank_seq_in_product(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
     requires
         members(vs, ts, enums),
         keys_product(ts, enums) is Some,
@@ -185,7 +185,7 @@ proof fn lemma_rank_seq_in_product(vs: Seq<SVal>, ts: Seq<SType>, enums: Seq<i64
 }
 
 /// 正規順の列の位置 `i` の値は型に属し、その番号は `i` である。
-pub proof fn lemma_domain_rank(t: SType, enums: Seq<i64>, i: int)
+pub proof fn lemma_domain_rank(t: STy, enums: Seq<i64>, i: int)
     requires
         keys(t, enums) is Some,
         0 <= i < keys(t, enums)->0,
@@ -196,15 +196,15 @@ pub proof fn lemma_domain_rank(t: SType, enums: Seq<i64>, i: int)
 {
     lemma_domain_len(t, enums);
     match t {
-        SType::Tuple(ts) => {
-            lemma_product_len(ts@, enums);
-            lemma_product_rank(ts@, enums, i);
+        STy::Tuple(ts) => {
+            lemma_product_len(ts, enums);
+            lemma_product_rank(ts, enums, i);
         },
-        SType::Record(_, ts) => {
-            lemma_product_len(ts@, enums);
-            lemma_product_rank(ts@, enums, i);
+        STy::Record(_, ts) => {
+            lemma_product_len(ts, enums);
+            lemma_product_rank(ts, enums, i);
         },
-        SType::Option(x) => {
+        STy::Option(x) => {
             if i > 0 {
                 lemma_domain_len(*x, enums);
                 lemma_domain_rank(*x, enums, i - 1);
@@ -214,7 +214,7 @@ pub proof fn lemma_domain_rank(t: SType, enums: Seq<i64>, i: int)
     }
 }
 
-proof fn lemma_product_rank(ts: Seq<SType>, enums: Seq<i64>, i: int)
+proof fn lemma_product_rank(ts: Seq<STy>, enums: Seq<i64>, i: int)
     requires
         keys_product(ts, enums) is Some,
         0 <= i < keys_product(ts, enums)->0,
