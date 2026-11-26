@@ -119,10 +119,15 @@ class SessionTest < Minitest::Test
 
   def test_candidates_are_kept_until_an_observation_tells_them_apart
     s = session(workflow(ping: true, reveal: true))
-    assert_equal({ "status" => "continue", "candidates" => 1, "matched" => 0 },
+    # covered は、確実に通った状態と遷移（状態と引数の符号の列）。phase は列挙型のラベルの添字で表す。
+    assert_equal({ "status" => "continue", "candidates" => 1, "matched" => 0,
+                   "covered" => { "state" => [0, 0, 0], "transition" => nil } },
                  ask(s.initial('{"started": false, "shown": false}')))
     assert_equal({ "status" => "input", "action" => "start", "args" => {}, "choices" => {} }, ask(s.next_input))
-    assert_equal 2, observe(s, "start", started: true)["candidates"]
+    started = observe(s, "start", started: true)
+    assert_equal 2, started["candidates"]
+    # 候補が2つに分かれたので、遷移も遷移先も1つに定まらない。
+    assert_equal({ "state" => nil, "transition" => nil }, started["covered"])
     assert_equal %w[a b], phases(s)
     # 候補を任意に1つへ絞らない。共通の操作のあとも、両方が残る。
     assert_equal 2, observe(s, "ping", started: true)["candidates"]
@@ -132,7 +137,10 @@ class SessionTest < Minitest::Test
     assert_equal "valid", ask(s.check_input('{"action": "reveal", "args": {}}'))["status"]
     assert_equal "invalid_input", observe(s, "approve", started: true)["status"]
     # 観測が候補を区別すれば、一致する候補だけが残る。
-    assert_equal({ "status" => "continue", "candidates" => 1, "matched" => 3 }, observe(s, "reveal", started: true, shown: true))
+    revealed = observe(s, "reveal", started: true, shown: true)
+    assert_equal({ "status" => "continue", "candidates" => 1, "matched" => 3 }, revealed.except("covered"))
+    # 観測と一致する遷移は、候補 A からの reveal だけである。
+    assert_equal({ "state" => [1, 1, 1], "transition" => [[1, 1, 0], 4, []] }, revealed["covered"])
     assert_equal %w[a], phases(s)
     assert_equal "valid", ask(s.check_input('{"action": "approve", "args": {}}'))["status"]
   end

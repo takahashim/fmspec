@@ -5,6 +5,7 @@
 //!
 //! 結果の形式は docs/ir.md にある。オプションの誤り（未定義の名前、未知のキーなど）は `Err` で返す。
 
+mod coverage;
 mod human;
 mod report;
 mod session;
@@ -20,6 +21,7 @@ use fmspec_search::{
 use serde_json::{json, Map, Value};
 use std::time::Instant;
 
+pub use coverage::{coverage, test_paths};
 pub use fmspec_ir::{load, Model};
 pub use human::human;
 pub use session::Session;

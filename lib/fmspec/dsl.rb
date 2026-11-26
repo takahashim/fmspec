@@ -13,6 +13,7 @@ require_relative "model"
 require_relative "result"
 require_relative "binding"
 require_relative "testing"
+require_relative "coverage"
 
 # Ruby で書く実行可能な形式仕様と、モデル検査。
 #

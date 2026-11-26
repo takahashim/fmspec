@@ -76,20 +76,38 @@ module Fmspec
     #   steps    1ケースの最大ステップ数
     #   seed     省略すると無作為に選び、結果に記録する
     #   replay   操作列（`TestResult#inputs`）。指定すると、生成せずにその操作列を1回だけ再実行する
+    #   paths    操作列の配列。指定すると、生成せずに各操作列を1ケースとして再実行する。
+    #            true なら `test_paths` で作る（steps が1経路の最大ステップ数）
     #   shrink   失敗した操作列を縮小する
     #   actions  対象の操作の名前の配列。省略時はすべて
     #   max_candidates  候補状態の数の上限。超える場合は :inconclusive
-    def test(binding, cases: 100, steps: 20, seed: nil, replay: nil, shrink: true, shrink_runs: 200, actions: nil,
-             max_candidates: nil)
-      raise ArgumentError, "この仕様の binding ではありません" unless binding.is_a?(Binding) && binding.model.equal?(self)
-      raise ArgumentError, "cases と steps は0以上の整数です" unless [cases, steps].all? { |n| n.is_a?(Integer) && n >= 0 }
+    #
+    # 結果の `coverage` で、テストが確実に通ったモデルの状態と遷移の割合を確かめられる。
+    def test(binding, cases: 100, steps: 20, seed: nil, replay: nil, paths: nil, shrink: true, shrink_runs: 200,
+             actions: nil, max_candidates: nil)
+      raise ArgumentError, "replay と paths は同時に指定できません" if replay && paths
 
-      options = {}
-      options["actions"] = Array(actions).map(&:to_s) if actions
-      options["max_candidates"] = max_candidates if max_candidates
-      run = TestRun.new(self, native, binding, cases: cases, steps: steps, seed: seed || Random.new_seed % (2**64),
-                                               shrink: shrink, shrink_runs: shrink_runs, options: options)
-      replay ? run.replay(replay) : run.run
+      run = test_run(binding, cases: cases, steps: steps, seed: seed, shrink: shrink, shrink_runs: shrink_runs,
+                              actions: actions, max_candidates: max_candidates)
+      return run.replay(replay) if replay
+      return run.run_paths(paths == true ? run.paths(max_steps: steps, max_states: nil) : paths) if paths
+
+      run.run
+    end
+
+    # テスト経路を作る（仕様書 §11.3）。到達可能な状態と入力の組を覆う操作列の配列を返す。
+    # 各操作列は `Model#test(binding, paths: ...)` で再実行できる。
+    #
+    #   max_steps   1経路の最大ステップ数
+    #   max_states  到達可能な状態の探索の、状態数の上限
+    #   actions     対象の操作の名前の配列。省略時はすべて
+    #
+    # binding が注入する内部選択は入力に含める。注入しない内部選択がある操作では、モデルが最初に列挙した
+    # 遷移をたどる前提で経路を作るので、実装が別の遷移を選ぶと、その経路は :inconclusive（invalid_input）になる。
+    def test_paths(binding, max_steps: 20, max_states: nil, actions: nil)
+      raise ArgumentError, "max_steps は1以上の整数です" unless max_steps.is_a?(Integer) && max_steps >= 1
+
+      test_run(binding, actions: actions).paths(max_steps: max_steps, max_states: max_states)
     end
 
     def inspect = "#<Fmspec::Model #{name}>"
@@ -115,6 +133,17 @@ module Fmspec
     end
 
     def describe = JSON.parse(native.describe)
+
+    def test_run(binding, cases: 0, steps: 0, seed: nil, shrink: true, shrink_runs: 200, actions: nil, max_candidates: nil)
+      raise ArgumentError, "この仕様の binding ではありません" unless binding.is_a?(Binding) && binding.model.equal?(self)
+      raise ArgumentError, "cases と steps は0以上の整数です" unless [cases, steps].all? { |n| n.is_a?(Integer) && n >= 0 }
+
+      options = {}
+      options["actions"] = Array(actions).map(&:to_s) if actions
+      options["max_candidates"] = max_candidates if max_candidates
+      TestRun.new(self, native, binding, cases: cases, steps: steps, seed: seed || Random.new_seed % (2**64),
+                                         shrink: shrink, shrink_runs: shrink_runs, options: options)
+    end
 
     def condition_options(conditions)
       unknown = conditions.keys - %i[deadlock actions invariants contracts]

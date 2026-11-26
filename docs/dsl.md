@@ -399,6 +399,7 @@ result.assert_passed!
 | `actions:` | 対象の操作の名前の配列 |
 | `shrink:`、`shrink_runs:` | 失敗した操作列を縮小するか、縮小で再実行する回数の上限 |
 | `replay:` | 操作列。生成せずに、その操作列を1回だけ再実行する |
+| `paths:` | 操作列の配列。生成せずに、各操作列を1ケースとして再実行する。`true` なら `test_paths` で作る（`steps:` が1経路の最大ステップ数） |
 | `max_candidates:` | 候補状態の数の上限 |
 
 ### 非決定性と部分観測
@@ -451,3 +452,60 @@ Conformance failure: tickets / sold
 
 `TestResult#inputs` は失敗に至る操作列で、`Tickets.test(binding, replay: result.inputs)` でそのまま再実行できる。
 `matched_steps` は、`command` を実行して戻り値と状態の照合まで完了した回数である。
+
+### カバレッジ
+
+`TestResult#coverage` は、テストが確実に通った仕様の状態と遷移を、到達可能な状態と遷移と比べる。
+到達可能な状態と遷移は、`coverage` を呼んだときに探索する（`max_states:` でその探索の状態数の上限を指定できる）。
+対象の操作は、`test` の `actions:` と同じである。
+
+```ruby
+result = Tickets.test(binding, cases: 10, steps: 2, seed: 42)
+puts result.coverage
+```
+
+```text
+Coverage:
+  states: 4/4 (100.0%)
+  transitions: 6/8 (75.0%)
+  purchase: 14 steps, transitions 4/5 (80.0%)
+  cancel: 6 steps, transitions 2/3 (66.7%)
+  覆っていない遷移（2 件）:
+    purchase(quantity: 1) from {"sold":1}
+    cancel() from {"sold":3}
+```
+
+| メソッド | 内容 |
+|---|---|
+| `states`、`transitions` | 覆った数と到達可能な数（`covered`、`reachable`、`ratio`） |
+| `actions` | 操作ごとの、実行したステップ数（`steps`）と、その操作の遷移のカバレッジ（`transitions`） |
+| `uncovered`、`uncovered_count` | 覆っていない遷移（先頭20件）と、その数 |
+| `ambiguous_steps` | 遷移が1つに定まらなかったステップの数 |
+| `complete?` | 到達可能な状態と遷移をすべて数えたか |
+
+数えるのは、確実に通ったと分かる状態と遷移だけである。
+候補が複数ある状態や、応答を説明できる遷移が複数あるステップ（観測しない状態変数や、注入しない内部選択による）は数えない。
+そのため、部分観測や非決定性のある仕様では、実装が実際に通った数より少なく数えることはあっても、多く数えることはない。
+失敗した操作列の縮小で行う再実行は、カバレッジに数えない。
+
+仕様の状態と遷移をすべて覆っても、実装の全経路を検査したことにはならない。
+同じ仕様の状態に至る異なる操作列が、実装の内部状態に異なる影響を与えることがある（仕様書 §11.3）。
+
+### テスト経路
+
+`test_paths` は、到達可能な状態と入力の組を覆う操作列を、仕様から作る。
+
+```ruby
+paths = Tickets.test_paths(binding, max_steps: 20)
+Tickets.test(binding, paths: paths).assert_passed!
+# 同じこと
+Tickets.test(binding, paths: true, steps: 20).assert_passed!
+```
+
+まだ覆っていない組を探索順に1つずつ取り、その状態への最短の操作列にその入力を続け、さらに遷移先から覆っていない組を貪欲にたどって延ばす。
+初期状態から `max_steps:` 以内で届かない組は覆わない。
+オプションは `max_steps:`、`max_states:`（探索の状態数の上限）、`actions:` である。
+
+入力は、公開引数と、binding が注入する内部選択の値である。
+注入しない内部選択がある操作では、仕様が最初に列挙した遷移をたどる前提で操作列を作る。
+実装が別の遷移を選んで操作列をたどれなくなったケースは、実装に適用せずに未完了（`:inconclusive`、理由は `:invalid_input`）とし、残りの操作列の実行を続ける。

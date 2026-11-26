@@ -147,6 +147,40 @@ fn model_verify_certificate(ruby: &Ruby, this: Value, certificate: Value, option
     text(ruby, &result)
 }
 
+/// `#coverage(options_json)`: テストで確実に通った状態と遷移を、到達可能な状態と遷移と比べる。
+fn model_coverage(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(this)?;
+    let options = read_json(ruby, options)?;
+    let model: &fmspec_api::Model = &handle.data().model;
+    // `model_check` と同じ理由の例外。
+    #[cfg_attr(
+        dylint_lib = "nupur_lints",
+        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
+    )]
+    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
+        let interrupt = || cancel.requested();
+        fmspec_api::to_text(fmspec_api::coverage(model, &options, Some(&interrupt)))
+    })?;
+    text(ruby, &result)
+}
+
+/// `#test_paths(options_json)`: 到達可能な状態と入力の組を覆うテスト経路を作る。
+fn model_test_paths(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(this)?;
+    let options = read_json(ruby, options)?;
+    let model: &fmspec_api::Model = &handle.data().model;
+    // `model_check` と同じ理由の例外。
+    #[cfg_attr(
+        dylint_lib = "nupur_lints",
+        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
+    )]
+    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
+        let interrupt = || cancel.requested();
+        fmspec_api::to_text(fmspec_api::test_paths(model, &options, Some(&interrupt)))
+    })?;
+    text(ruby, &result)
+}
+
 /// `#replay(trace_json)`: 提示されたトレースを再生する。
 fn model_replay(ruby: &Ruby, this: Value, trace: Value) -> Result<Value, Error> {
     let handle = MODEL.check(this)?;
@@ -271,6 +305,8 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     model.define_method("verify_certificate", method!(model_verify_certificate, 2))?;
     model.define_method("replay", method!(model_replay, 1))?;
     model.define_method("shrink", method!(model_shrink, 2))?;
+    model.define_method("coverage", method!(model_coverage, 1))?;
+    model.define_method("test_paths", method!(model_test_paths, 1))?;
 
     let session = native.define_data_class(ruby, "Session", None)?;
     SESSION_CLASS.set(session)?;

@@ -24,7 +24,7 @@ module Fmspec
     attr_reader :status, :seed, :cases, :matched_steps, :steps, :original_steps, :detail, :exception
 
     def initialize(model:, binding:, status:, seed:, cases:, matched_steps:, steps: [], original_steps: nil, detail: nil,
-                   exception: nil, case_seed: nil)
+                   exception: nil, case_seed: nil, coverage: nil)
       @model = model
       @binding = binding
       @status = status
@@ -36,6 +36,7 @@ module Fmspec
       @original_steps = original_steps
       @detail = detail
       @exception = exception
+      @coverage = coverage
     end
 
     STATUSES.each do |name|
@@ -47,6 +48,15 @@ module Fmspec
 
     # 失敗に至る操作列。`Model#test(binding, replay: result.inputs)` で再実行できる。
     def inputs = steps.map { |s| [s.action, s.args] }
+
+    # テストが確実に通ったモデルの状態と遷移を、到達可能な状態と遷移と比べる（仕様書 §11.3）。
+    # 到達可能な状態と遷移は、呼び出したときに探索する。`max_states` はその探索の状態数の上限。
+    # 縮小や再実行の試行は数えない。
+    def coverage(max_states: nil)
+      raise ArgumentError, "この結果はカバレッジを記録していません" unless @coverage
+
+      @coverage.call(max_states)
+    end
 
     # :inconclusive の理由。
     def reason = detail && detail["reason"]&.to_sym
@@ -179,8 +189,8 @@ module Fmspec
     end
 
     # `seed` で入力を選びながら、最大 `max_steps` ステップ実行する。
-    def generate(seed, max_steps)
-      run(seed) do |session, steps|
+    def generate(seed, max_steps, collector = nil)
+      run(seed, collector) do |session, steps|
         next nil if steps.length >= max_steps
 
         answer = ask(session.next_input)
@@ -193,8 +203,8 @@ module Fmspec
     end
 
     # 記録した操作列を再実行する。入力がどれかの候補で無効なら、実装に適用せずに :invalid で終える。
-    def replay(inputs)
-      run(0) do |session, steps|
+    def replay(inputs, collector = nil)
+      run(0, collector) do |session, steps|
         input = inputs[steps.length]
         next nil unless input
 
@@ -207,6 +217,14 @@ module Fmspec
         end
       end
     end
+
+    # 注入する内部選択。操作名から、内部選択の名前の配列。
+    def inject
+      @binding.commands.reject { |_, h| h.inject.empty? }.to_h { |name, h| [name.to_s, h.inject.map(&:to_s)] }
+    end
+
+    # エンジンが返した入力（`{"action", "args", "choices"}`）を、[操作名, キーワード引数] にする。
+    def decode_input(input) = decode(input["action"], input["args"].merge(input["choices"]))
 
     private
 
@@ -228,14 +246,14 @@ module Fmspec
 
     def arg_types(action) = @arg_types.fetch(action) { raise ArgumentError, "未定義の操作 #{action}" }
 
-    def run(seed, &next_input)
+    def run(seed, collector, &next_input)
       context = begin
         @binding.setup_block.call
       rescue StandardError => e
         return Outcome.new(:setup_error, [], 0, nil, e)
       end
       result = begin
-        catch(:finished) { drive(context, seed, &next_input) }
+        catch(:finished) { drive(context, seed, collector, &next_input) }
       ensure
         failed = teardown(context)
       end
@@ -250,8 +268,7 @@ module Fmspec
       Outcome.new(:setup_error, [], 0, nil, e)
     end
 
-    def drive(context, seed)
-      inject = @binding.commands.reject { |_, h| h.inject.empty? }.to_h { |name, h| [name.to_s, h.inject.map(&:to_s)] }
+    def drive(context, seed, collector)
       options = @options.merge("seed" => seed, "observe" => @binding.observers.keys.map(&:to_s), "inject" => inject)
       session = Native::Session.start(@native, JSON.generate(options))
       raise ArgumentError, JSON.parse(session)["message"] if session.is_a?(String)
@@ -261,6 +278,7 @@ module Fmspec
       answer = ask(session.initial(JSON.generate(wire(observation))))
       return outcome(answer["status"].to_sym, steps, answer) unless answer["status"] == "continue"
 
+      collector&.initial(answer["covered"])
       while (input = yield(session, steps))
         action, args = input
         output = begin
@@ -275,6 +293,8 @@ module Fmspec
         report = wire_input(action, args).merge("output" => wire_output(action, output), "observation" => wire(observation))
         answer = ask(session.observe(JSON.generate(report)))
         return outcome(answer["status"].to_sym, steps, answer) unless answer["status"] == "continue"
+
+        collector&.step(action, answer["covered"])
       end
       Outcome.new(:passed, steps, steps.length, nil, nil)
     end
@@ -325,8 +345,11 @@ module Fmspec
 
     def initialize(model, native, binding, cases:, steps:, seed:, shrink:, shrink_runs:, options:)
       @model = model
+      @native = native
       @binding = binding
+      @options = options
       @case = TestCase.new(model, native, binding, options)
+      @collector = Coverage::Collector.new
       @cases = cases
       @steps = steps
       @seed = seed
@@ -339,7 +362,7 @@ module Fmspec
       inconclusive = nil
       @cases.times do |i|
         case_seed = (@seed + i) % (2**64)
-        outcome = @case.generate(case_seed, @steps)
+        outcome = @case.generate(case_seed, @steps, @collector)
         matched += outcome.matched
         next if outcome.status == :passed
 
@@ -351,23 +374,78 @@ module Fmspec
       end
       return result(inconclusive[0], inconclusive[1], @cases, matched) if inconclusive
 
-      TestResult.new(model: @model, binding: @binding, status: :passed, seed: @seed, cases: @cases, matched_steps: matched)
+      passed(@cases, matched)
     end
 
     # 記録した操作列を1回だけ再実行する。
     def replay(inputs)
-      outcome = @case.replay(inputs)
-      status = outcome.status == :invalid ? :inconclusive : outcome.status
-      detail = outcome.status == :invalid ? { "reason" => "invalid_input" } : outcome.detail
-      result(TestCase::Outcome.new(status, outcome.steps, outcome.matched, detail, outcome.exception), @seed, 1, outcome.matched)
+      outcome = invalid_as_inconclusive(@case.replay(inputs, @collector))
+      result(outcome, @seed, 1, outcome.matched)
+    end
+
+    # 操作列を1つずつケースとして再実行する。最初の失敗を縮小して報告する。
+    # 実装が別の遷移を選んで操作列をたどれなくなったケースは :inconclusive（invalid_input）として記録し、残りを続ける。
+    def run_paths(paths)
+      matched = 0
+      inconclusive = nil
+      paths.each_with_index do |inputs, i|
+        outcome = invalid_as_inconclusive(@case.replay(inputs, @collector))
+        matched += outcome.matched
+        next if outcome.status == :passed
+
+        if outcome.status == :inconclusive
+          inconclusive ||= [outcome, i + 1]
+          next
+        end
+        return failure(outcome, @seed, i + 1, matched)
+      end
+      return result(inconclusive[0], @seed, paths.length, matched) if inconclusive
+
+      passed(paths.length, matched)
+    end
+
+    # 到達可能な状態と入力の組を覆う操作列を、モデルから作る。
+    def paths(max_steps:, max_states:)
+      options = @options.slice("actions").merge("max_steps" => max_steps, "inject" => @case.inject)
+      options["max_states"] = max_states if max_states
+      body = JSON.parse(@native.test_paths(JSON.generate(options)))
+      raise ArgumentError, body["message"] if body["status"] == "usage_error"
+
+      body["paths"].map { |path| path["inputs"].map { |input| @case.decode_input(input) } }
     end
 
     private
 
+    def passed(cases, matched)
+      TestResult.new(model: @model, binding: @binding, status: :passed, seed: @seed, cases: cases, matched_steps: matched,
+                     coverage: coverage)
+    end
+
     def result(outcome, case_seed, cases, matched, original_steps: nil)
       TestResult.new(model: @model, binding: @binding, status: outcome.status, seed: @seed, case_seed: case_seed,
                      cases: cases, matched_steps: matched, steps: outcome.steps, original_steps: original_steps,
-                     detail: outcome.detail, exception: outcome.exception)
+                     detail: outcome.detail, exception: outcome.exception, coverage: coverage)
+    end
+
+    def invalid_as_inconclusive(outcome)
+      return outcome unless outcome.status == :invalid
+
+      TestCase::Outcome.new(:inconclusive, outcome.steps, outcome.matched, { "reason" => "invalid_input" }, outcome.exception)
+    end
+
+    # 記録した状態と遷移から、カバレッジを作る関数。探索は呼び出したときに行う。
+    def coverage
+      collected = @collector
+      options = @options.slice("actions")
+      native = @native
+      lambda do |max_states|
+        request = options.merge("seen" => collected.seen)
+        request["max_states"] = max_states if max_states
+        body = JSON.parse(native.coverage(JSON.generate(request)))
+        raise ArgumentError, body["message"] if body["status"] == "usage_error"
+
+        Coverage.new(body, collected)
+      end
     end
 
     def failure(outcome, case_seed, cases, matched)

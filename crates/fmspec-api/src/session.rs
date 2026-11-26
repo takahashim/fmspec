@@ -35,6 +35,76 @@ fn seen(model: &Model, var: usize, v: Option<&Value>) -> Vec<Seen> {
     }
 }
 
+/// `inject` オプション（操作名から、注入する内部選択の名前の配列へのオブジェクト）を、
+/// 操作ごとの内部選択の添字（昇順）にする。
+pub(crate) fn parse_inject(model: &Model, v: Option<&Value>) -> Result<Vec<Vec<usize>>, String> {
+    let mut injected: Vec<Vec<usize>> = vec![Vec::new(); model.names.actions.len()];
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Ok(injected);
+    };
+    let message = "inject は、操作名から内部選択の名前の配列へのオブジェクトです";
+    for (action_name, choices) in v.as_object().ok_or(message)? {
+        let a = model
+            .names
+            .action_index(action_name)
+            .ok_or(format!("未定義の操作 {action_name:?}"))?;
+        for choice in choices.as_array().ok_or(message)? {
+            let choice = choice.as_str().ok_or(message)?;
+            let k = model.names.actions[a]
+                .choices
+                .iter()
+                .position(|n| n == choice)
+                .ok_or(format!("操作 {action_name:?} に内部選択 {choice:?} はありません"))?;
+            if !injected[a].contains(&k) {
+                injected[a].push(k);
+            }
+        }
+        injected[a].sort_unstable();
+    }
+    Ok(injected)
+}
+
+/// 注入する内部選択の、引数の列（公開引数に続けて内部選択）での添字。
+pub(crate) fn inject_slots(model: &Model, injected: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    injected
+        .iter()
+        .enumerate()
+        .map(|(a, ks)| {
+            let act = &model.names.actions[a];
+            ks.iter()
+                .flat_map(|k| {
+                    let i = act.params.len() + k;
+                    let start = act.arg_offsets[i];
+                    start..start + act.arg_types[i].width(&model.names.enums)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// 入力（公開引数に、注入する選択の値を続けた列）を、公開引数（`args`）と注入する選択（`choices`）の
+/// 名前付きのJSONにする。
+pub(crate) fn input_json(model: &Model, injected: &[Vec<usize>], action: usize, values: &[i64]) -> Value {
+    let enums = &model.names.enums;
+    let names = &model.names.actions[action];
+    let mut args = Map::new();
+    let mut choices = Map::new();
+    let mut at = 0;
+    let order = (0..names.params.len()).chain(injected[action].iter().map(|k| names.params.len() + k));
+    for i in order {
+        let ty = &names.arg_types[i];
+        let w = ty.width(enums);
+        let v = value_to_json(&model.names, ty, values.get(at..at + w).unwrap_or(&[]));
+        at += w;
+        if i < names.params.len() {
+            args.insert(names.params[i].clone(), v);
+        } else {
+            choices.insert(names.choices[i - names.params.len()].clone(), v);
+        }
+    }
+    json!({"action": names.name, "args": args, "choices": choices})
+}
+
 impl Session {
     /// セッションを作る。
     ///
@@ -65,46 +135,10 @@ impl Session {
                 observed
             }
         };
-        let mut injected: Vec<Vec<usize>> = vec![Vec::new(); model.names.actions.len()];
-        let observed: Vec<usize> = observed;
-        if let Some(v) = map.get("inject").filter(|v| !v.is_null()) {
-            let message = "inject は、操作名から内部選択の名前の配列へのオブジェクトです";
-            for (action_name, choices) in v.as_object().ok_or(message)? {
-                let a = model
-                    .names
-                    .action_index(action_name)
-                    .ok_or(format!("未定義の操作 {action_name:?}"))?;
-                for choice in choices.as_array().ok_or(message)? {
-                    let choice = choice.as_str().ok_or(message)?;
-                    let k = model.names.actions[a]
-                        .choices
-                        .iter()
-                        .position(|n| n == choice)
-                        .ok_or(format!("操作 {action_name:?} に内部選択 {choice:?} はありません"))?;
-                    if !injected[a].contains(&k) {
-                        injected[a].push(k);
-                    }
-                }
-                injected[a].sort_unstable();
-            }
-        }
+        let injected = parse_inject(&model, map.get("inject"))?;
         let max = usize::try_from(max).unwrap_or(usize::MAX);
         let slots: Vec<usize> = observed.iter().flat_map(|v| model.names.state_slots(*v)).collect();
-        let injected_slots: Vec<Vec<usize>> = injected
-            .iter()
-            .enumerate()
-            .map(|(a, ks)| {
-                let act = &model.names.actions[a];
-                ks.iter()
-                    .flat_map(|k| {
-                        let i = act.params.len() + k;
-                        let start = act.arg_offsets[i];
-                        start..start + act.arg_types[i].width(&model.names.enums)
-                    })
-                    .collect()
-            })
-            .collect();
-        let inner = fmspec_search::Session::new(cond, slots, injected_slots, seed, max);
+        let inner = fmspec_search::Session::new(cond, slots, inject_slots(&model, &injected), seed, max);
         Ok(Session {
             model,
             inner,
@@ -196,24 +230,16 @@ impl Session {
 
     /// 入力を、公開引数（`args`）と注入する選択（`choices`）の名前付きのJSONにする。
     fn input_json(&self, action: usize, values: &[i64]) -> Value {
-        let enums = &self.model.names.enums;
-        let names = &self.model.names.actions[action];
-        let mut args = Map::new();
-        let mut choices = Map::new();
-        let mut at = 0;
-        let order = (0..names.params.len()).chain(self.injected[action].iter().map(|k| names.params.len() + k));
-        for i in order {
-            let ty = &names.arg_types[i];
-            let w = ty.width(enums);
-            let v = value_to_json(&self.model.names, ty, values.get(at..at + w).unwrap_or(&[]));
-            at += w;
-            if i < names.params.len() {
-                args.insert(names.params[i].clone(), v);
-            } else {
-                choices.insert(names.choices[i - names.params.len()].clone(), v);
-            }
-        }
-        json!({"action": names.name, "args": args, "choices": choices})
+        input_json(&self.model, &self.injected, action, values)
+    }
+
+    /// 直前の照合で確実に分かった状態と遷移。値は状態と引数の符号の列で、`coverage` に渡す。
+    fn covered(&self) -> Value {
+        let c = self.inner.covered();
+        json!({
+            "state": c.state,
+            "transition": c.transition.as_ref().map(|(s, a, args)| json!([s, a, args])),
+        })
     }
 
     /// 観測した値のうち、モデルが許すどの結果とも一致しない項目。
@@ -249,7 +275,9 @@ impl Session {
         self.started = true;
         let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.shared(), &seen) {
             Observed::Continue => {
-                return Ok(json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0}));
+                return Ok(
+                    json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0, "covered": self.covered()}),
+                );
             }
             Observed::TooManyCandidates => {
                 return Ok(json!({"status": "inconclusive", "reason": "max_candidates", "matched": 0}));
@@ -324,7 +352,7 @@ impl Session {
         let before = self.inner.candidates();
         Ok(match self.inner.observe(action, &params, output, &seen) {
             Observed::Continue => {
-                json!({"status": "continue", "candidates": self.inner.candidates(), "matched": self.inner.matched()})
+                json!({"status": "continue", "candidates": self.inner.candidates(), "matched": self.inner.matched(), "covered": self.covered()})
             }
             Observed::Failure { possible } => {
                 let mut expected: Vec<Value> = Vec::new();

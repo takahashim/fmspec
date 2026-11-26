@@ -17,6 +17,7 @@
 //! 候補集合の更新と、全候補で有効な入力の計算は、検証済みの中核（`fmspec_core::mbt`）が行う。
 //! ここでは、入力の無作為な選択と、不適合の診断（モデルが許す結果の列挙）だけを行う。
 
+use crate::graph;
 use crate::simulate::SplitMix64;
 use fmspec_core::eval::ErrKind;
 use fmspec_core::gate::CheckedModel;
@@ -112,6 +113,16 @@ pub struct Session {
     max_candidates: usize,
     /// command を実行して、戻り値と状態の照合まで完了した回数。
     matched: usize,
+    covered: Covered,
+}
+
+/// 直前の照合で、実装が確実に通ったと分かるモデルの状態と遷移。カバレッジの計測に使う。
+/// 候補が1つに定まらない、または応答を説明できる遷移が1つに定まらないときは `None` である。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Covered {
+    pub state: Option<Vec<i64>>,
+    /// 遷移元の状態、操作、引数の列（公開引数に続けて内部選択）。
+    pub transition: Option<(Vec<i64>, usize, Vec<i64>)>,
 }
 
 /// 診断に含める「モデルが許す結果」の数の上限。
@@ -133,6 +144,7 @@ impl Session {
             rng: SplitMix64::new(seed),
             max_candidates,
             matched: 0,
+            covered: Covered::default(),
         }
     }
 
@@ -143,10 +155,61 @@ impl Session {
 
     /// 遷移の引数の列から、入力（公開引数と、注入する選択の値）を取り出す。診断に使う。
     fn input_of(&self, model: &CheckedModel, action: usize, args: &[i64]) -> Vec<i64> {
-        let n = model.raw().actions[action].n_params.min(args.len());
-        let mut input = args[..n].to_vec();
-        input.extend(self.injected(action).iter().filter_map(|i| args.get(*i)));
-        input
+        graph::input_of(model, &self.injected, action, args)
+    }
+
+    /// 直前の照合で確実に分かった状態と遷移。
+    pub fn covered(&self) -> &Covered {
+        &self.covered
+    }
+
+    /// 候補が1つなら、その状態。
+    fn single(&self) -> Option<Vec<i64>> {
+        match self.core.as_ref().map(|core| core.candidates().as_slice()) {
+            Some([only]) => Some(only.clone()),
+            _ => None,
+        }
+    }
+
+    /// 状態の観測するスロットが、観測と一致する。
+    fn agrees(&self, state: &[i64], seen: &[Seen]) -> bool {
+        self.observed.len() == seen.len()
+            && self
+                .observed
+                .iter()
+                .zip(seen)
+                .all(|(var, seen)| state.get(*var).map(|x| Seen::Value(*x)) == Some(*seen))
+    }
+
+    /// 候補 `before` からの遷移のうち、入力と応答を説明できるものが1つだけなら、その遷移。
+    fn explanation(
+        &self,
+        model: &CheckedModel,
+        before: &[Vec<i64>],
+        action: usize,
+        params: &[i64],
+        output: SeenOutput,
+        seen: &[Seen],
+    ) -> Option<(Vec<i64>, usize, Vec<i64>)> {
+        let mut found = None;
+        for s in before {
+            let Some(Enumerated::Ok(ts)) = model.successors(action, s) else {
+                return None;
+            };
+            for t in ts {
+                let output_ok = match output {
+                    SeenOutput::Unchecked => true,
+                    SeenOutput::Returned(y) => t.output.map(Seen::Value) == Some(y),
+                };
+                if output_ok && self.agrees(&t.state, seen) && self.input_of(model, action, &t.args) == params {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some((s.clone(), action, t.args));
+                }
+            }
+        }
+        found
     }
 
     pub fn candidates(&self) -> usize {
@@ -170,6 +233,7 @@ impl Session {
     pub fn start(&mut self, model: Arc<CheckedModel>, seen: &[Seen]) -> Observed {
         self.core = None;
         self.matched = 0;
+        self.covered = Covered::default();
         let begun = mbt::Session::start(
             Arc::clone(&model),
             self.cond.clone(),
@@ -181,6 +245,10 @@ impl Session {
         match begun {
             Begun::Started(core) => {
                 self.core = Some(core);
+                self.covered = Covered {
+                    state: self.single(),
+                    transition: None,
+                };
                 Observed::Continue
             }
             Begun::TooMany => Observed::TooManyCandidates,
@@ -233,9 +301,19 @@ impl Session {
         let Some(core) = &mut self.core else {
             return Observed::Failure { possible: Vec::new() };
         };
-        match core.observe(action, &params.to_vec(), output, &seen.to_vec()) {
+        let before = core.candidates().clone();
+        let update = core.observe(action, &params.to_vec(), output, &seen.to_vec());
+        match update {
             Update::Continue => {
                 self.matched += 1;
+                let transition = self
+                    .core
+                    .as_ref()
+                    .and_then(|core| self.explanation(core.model(), &before, action, params, output, seen));
+                self.covered = Covered {
+                    state: self.single(),
+                    transition,
+                };
                 Observed::Continue
             }
             Update::Failure => Observed::Failure {
