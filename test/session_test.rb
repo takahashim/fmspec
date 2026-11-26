@@ -4,6 +4,7 @@ require_relative "test_helper"
 require "fmspec"
 require_relative "../reference/fmspec_reference"
 require_relative "../reference/test/model_generator"
+require_relative "../reference/test/composite_generator"
 
 # 非決定性と部分観測のもとでの適合性判定（仕様書 §12.2、§17.2.1）。
 class SessionTest < Minitest::Test
@@ -255,14 +256,18 @@ class SessionTest < Minitest::Test
     200.times do |n|
       seed = 9_000_000 + n
       rng = Random.new(seed)
-      ir = n.even? ? ModelGenerator.new(seed).model : nondeterministic_ir(rng)
+      ir = case n % 3
+           when 0 then ModelGenerator.new(seed).model
+           when 1 then nondeterministic_ir(rng)
+           else CompositeGenerator.new(seed).model
+           end
       ir["contracts"] = []
       ir["invariants"] = []
       reference = FmspecReference::Model.new(ir)
       cond = reference.conditions
       names = ir["states"].map { |s| s["name"] }
       observed = (0...names.length).select { rng.rand < 0.5 }
-      project = ->(state) { observed.to_h { |i| [names[i], reference.json_value(state[i])] } }
+      project = ->(state) { observed.to_h { |i| [names[i], reference.json_value(ir["states"][i]["type"], state[i])] } }
       # 内部選択の一部を、テストが決める（障害注入）。
       injected = ir["actions"].to_h { |a| [a["name"], (0...(a["choices"] || []).length).select { rng.rand < 0.4 }] }
                               .reject { |_, indices| indices.empty? }
@@ -291,7 +296,7 @@ class SessionTest < Minitest::Test
         end
         assert_equal "input", answer["status"], context
         action = reference.action_named(answer["action"])
-        value = ->(binding, v) { binding["type"].key?("enum") ? FmspecReference::EnumValue.new(binding["type"]["enum"], v) : v }
+        value = ->(binding, v) { reference.from_json(binding["type"], v) }
         params = (action["params"] || []).map { |p| value.(p, answer["args"].fetch(p["name"])) }
         chosen_values = (injected[action["name"]] || []).map do |i|
           choice = action["choices"][i]
@@ -307,7 +312,7 @@ class SessionTest < Minitest::Test
         truth = chosen["state"]
         candidates = reference.next_candidates(candidates, input, chosen["output"], observed, observed.map { |i| truth[i] }, injected)
         report = { "action" => action["name"], "args" => answer["args"], "choices" => answer["choices"],
-                   "output" => reference.json_value(chosen["output"]), "observation" => project.(truth) }
+                   "output" => action["output"] && reference.json_value(action["output"]["type"], chosen["output"]), "observation" => project.(truth) }
         observed_answer = ask(session.observe(JSON.generate(report)))
         assert_equal ["continue", candidates.length], observed_answer.values_at("status", "candidates"), context
         assert_equal reference.sort_states(candidates).map { |s| reference.json_state(s) }, ask(session.candidates), context

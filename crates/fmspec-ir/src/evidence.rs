@@ -230,9 +230,12 @@ pub fn claim_to_json(model: &Model, claim: &Claim) -> Value {
                 Site::Output => ("output", act.and_then(|a| a.output.as_ref()).map(|o| &o.ty)),
                 Site::Update(u) => {
                     let owner = names.actions.get(*a).and_then(|n| n.updates.get(*u));
+                    // 評価の失敗は、どのスロットでも同じ（最初のスロットで起きる）なので、
+                    // スロットは範囲外更新にだけ付ける。
                     if let Some(o) = owner {
                         out["target"] = name_of(&names.states, o.var);
-                        if names.state_types.get(o.var).map(|t| t.width(&names.enums)).unwrap_or(1) > 1 {
+                        let wide = names.state_types.get(o.var).map(|t| t.width(&names.enums)).unwrap_or(1) > 1;
+                        if wide && matches!(e, ErrKind::OutOfRange(_)) {
                             out["slot"] = json!(o.slot);
                         }
                     }

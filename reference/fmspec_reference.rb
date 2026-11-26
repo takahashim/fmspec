@@ -6,6 +6,10 @@
 # Rust の実装とは独立に書いてあり、比較テストで両者の結果を突き合わせる。
 # 速度や診断は考えない。入力は整形式のIRとし、IR検証は行わない。
 #
+# 複合型の値は、スロットの列に下ろさず、そのまま持つ。
+# Tuple は Array、Record はフィールド名から値への Hash、Option は nil か Some で表す。
+# Set、Map、List は、要素の型を持つ構造体で表す（要素の検査と、正規順の整列に使う）。
+#
 # 結果は `fmspec check --json` と同じ形のHashで返す（比較に使う項目だけ）。
 require "json"
 require "set"
@@ -16,12 +20,28 @@ module FmspecReference
   # 列挙型の値。型名とラベルで持つ。
   EnumValue = Struct.new(:type, :label)
 
-  # 式の評価、または状態・出力の更新の失敗。
-  class EvalError < StandardError
-    attr_reader :detail
+  # Option の値のうち、空でないもの。空は nil。
+  Some = Struct.new(:value)
 
-    def initialize(detail)
+  # 有限集合。`elem` は要素の型、`items` は Set。
+  SetValue = Struct.new(:elem, :items)
+
+  # 有限写像。`key`、`value` は型、`entries` はキーから値への Hash。
+  MapValue = Struct.new(:key, :value, :entries)
+
+  # 長さに上限のある列。`elem` は要素の型、`items` は Array。
+  ListValue = Struct.new(:elem, :max, :items)
+
+  ABSENT = Object.new.freeze
+
+  # 式の評価、または状態・出力の更新の失敗。
+  # `slot` は、範囲外更新が起きた、状態変数の中のスロットの位置。
+  class EvalError < StandardError
+    attr_reader :detail, :slot
+
+    def initialize(detail, slot = nil)
       @detail = detail
+      @slot = slot
       super(detail.inspect)
     end
   end
@@ -36,7 +56,11 @@ module FmspecReference
     end
   end
 
-  Env = Struct.new(:pre, :params, :choices, :post, :output)
+  Env = Struct.new(:pre, :params, :choices, :post, :output, :locals) do
+    def with_local(name, value)
+      Env.new(pre, params, choices, post, output, (locals || {}).merge(name => value))
+    end
+  end
 
   class Model
     attr_reader :ir
@@ -49,6 +73,9 @@ module FmspecReference
       @invariants = ir["invariants"] || []
       @contracts = ir["contracts"] || []
       @terminal = ir["terminal"]
+      @domains = {}
+      @constants = {}
+      (ir["constants"] || []).each { |c| @constants[c["name"]] = ev(c["value"], Env.new) }
     end
 
     # ---- 値 ----
@@ -59,16 +86,43 @@ module FmspecReference
     end
 
     def initial
-      @states.map { |s| literal(s["initial"]) }
+      @states.map { |s| ev(s["initial"], Env.new) }
     end
 
-    # 型に属する値を、列挙の順に並べる。
+    def product(lists)
+      lists.reduce([[]]) { |acc, values| acc.flat_map { |prefix| values.map { |v| prefix + [v] } } }
+    end
+
+    # 型に属する値を、正規順に並べる。
+    # 正規順は、Bool は偽が先、Int は小さい順、Enum はラベルの順で、Tuple と Record は辞書式、
+    # Option は空が先、Set は要素ごとの有無（要素の正規順に並べた、偽が先の真偽値の列）の辞書式、
+    # Map はキーごとの「なし、または値」（なしが先）の辞書式、List は長さの順で、同じ長さなら辞書式。
     def domain(type)
-      kind, body = type.first
-      case kind
-      when "bool" then [false, true]
-      when "int" then (body["min"]..body["max"]).to_a
-      when "enum" then @enums.fetch(body).map { |label| EnumValue.new(body, label) }
+      @domains[type] ||= begin
+        kind, body = type.first
+        case kind
+        when "bool" then [false, true]
+        when "int" then (body["min"]..body["max"]).to_a
+        when "enum" then @enums.fetch(body).map { |label| EnumValue.new(body, label) }
+        when "tuple" then product(body.map { |t| domain(t) })
+        when "record"
+          product(body.map { |f| domain(f["type"]) }).map { |vs| body.map { |f| f["name"] }.zip(vs).to_h }
+        when "option" then [nil] + domain(body).map { |v| Some.new(v) }
+        when "set"
+          elems = domain(body)
+          product(elems.map { [false, true] }).map do |bits|
+            SetValue.new(body, elems.zip(bits).select(&:last).map(&:first).to_set)
+          end
+        when "map"
+          keys = domain(body["key"])
+          product(keys.map { [ABSENT] + domain(body["value"]) }).map do |row|
+            MapValue.new(body["key"], body["value"], keys.zip(row).reject { |_, v| v.equal?(ABSENT) }.to_h)
+          end
+        when "list"
+          (0..body["max"]).flat_map do |n|
+            product([domain(body["of"])] * n).map { |items| ListValue.new(body["of"], body["max"], items) }
+          end
+        end
       end
     end
 
@@ -78,37 +132,105 @@ module FmspecReference
       when "bool" then [true, false].include?(value)
       when "int" then value.is_a?(Integer) && value.between?(body["min"], body["max"])
       when "enum" then value.is_a?(EnumValue) && value.type == body && @enums.fetch(body).include?(value.label)
+      when "tuple"
+        value.is_a?(Array) && value.length == body.length && body.zip(value).all? { |t, v| member?(t, v) }
+      when "record"
+        value.is_a?(Hash) && value.keys == body.map { |f| f["name"] } &&
+          body.all? { |f| member?(f["type"], value[f["name"]]) }
+      when "option" then value.nil? || (value.is_a?(Some) && member?(body, value.value))
+      when "set" then value.is_a?(SetValue) && value.items.all? { |v| member?(body, v) }
+      when "map"
+        value.is_a?(MapValue) &&
+          value.entries.all? { |k, v| member?(body["key"], k) && member?(body["value"], v) }
+      when "list"
+        value.is_a?(ListValue) && value.items.length <= body["max"] && value.items.all? { |v| member?(body["of"], v) }
       end
     end
 
-    # 状態の整列に使う符号。Bool は 0/1、Enum はラベルの添字。
-    def code(value)
-      case value
-      when true then 1
-      when false then 0
-      when EnumValue then @enums.fetch(value.type).index(value.label)
-      else value
+    # 正規順の整列に使うキー。
+    def order_key(type, value)
+      kind, body = type.first
+      case kind
+      when "bool" then value ? 1 : 0
+      when "int" then value
+      when "enum" then @enums.fetch(body).index(value.label)
+      when "tuple" then body.each_with_index.map { |t, i| order_key(t, value[i]) }
+      when "record" then body.map { |f| order_key(f["type"], value[f["name"]]) }
+      when "option" then value.nil? ? [0] : [1, order_key(body, value.value)]
+      when "set" then domain(body).map { |e| value.items.include?(e) ? 1 : 0 }
+      when "map"
+        domain(body["key"]).map do |k|
+          value.entries.key?(k) ? [1, order_key(body["value"], value.entries[k])] : [0]
+        end
+      when "list" then [value.items.length] + value.items.map { |v| order_key(body["of"], v) }
+      end
+    end
+
+    def sorted(type, values)
+      values.sort_by { |v| order_key(type, v) }
+    end
+
+    # 値が占めるスロットの数。範囲外更新の位置を、エンジンと同じ形で示すのに使う。
+    def width(type)
+      kind, body = type.first
+      case kind
+      when "tuple" then body.sum { |t| width(t) }
+      when "record" then body.sum { |f| width(f["type"]) }
+      when "option" then 1 + width(body)
+      when "set" then domain(body).length
+      when "map" then domain(body["key"]).length * (1 + width(body["value"]))
+      when "list" then 1 + body["max"] * width(body["of"])
+      else 1
       end
     end
 
     def sort_states(states)
-      states.sort_by { |s| s.map { |v| code(v) } }
+      states.sort_by { |s| s.each_with_index.map { |v, i| order_key(@states[i]["type"], v) } }
     end
 
-    def json_value(value)
-      value.is_a?(EnumValue) ? value.label : value
+    def json_value(type, value)
+      kind, body = type.first
+      case kind
+      when "enum" then value.label
+      when "tuple" then body.each_with_index.map { |t, i| json_value(t, value[i]) }
+      when "record" then body.to_h { |f| [f["name"], json_value(f["type"], value[f["name"]])] }
+      when "option" then value.nil? ? nil : { "some" => json_value(body, value.value) }
+      when "set" then sorted(body, value.items.to_a).map { |v| json_value(body, v) }
+      when "map"
+        sorted(body["key"], value.entries.keys).map do |k|
+          [json_value(body["key"], k), json_value(body["value"], value.entries[k])]
+        end
+      when "list" then value.items.map { |v| json_value(body["of"], v) }
+      else value
+      end
+    end
+
+    def from_json(type, json)
+      kind, body = type.first
+      case kind
+      when "enum" then EnumValue.new(body, json)
+      when "tuple" then body.each_with_index.map { |t, i| from_json(t, json[i]) }
+      when "record" then body.to_h { |f| [f["name"], from_json(f["type"], json[f["name"]])] }
+      when "option" then json.nil? ? nil : Some.new(from_json(body, json["some"]))
+      when "set" then SetValue.new(body, json.map { |v| from_json(body, v) }.to_set)
+      when "map"
+        MapValue.new(body["key"], body["value"],
+                     json.to_h { |k, v| [from_json(body["key"], k), from_json(body["value"], v)] })
+      when "list" then ListValue.new(body["of"], body["max"], json.map { |v| from_json(body["of"], v) })
+      else json
+      end
     end
 
     def json_state(state)
-      @states.each_with_index.to_h { |s, i| [s["name"], json_value(state[i])] }
+      @states.each_with_index.to_h { |s, i| [s["name"], json_value(s["type"], state[i])] }
     end
 
     def json_bindings(bindings, values)
-      (bindings || []).each_with_index.to_h { |b, i| [b["name"], json_value(values[i])] }
+      (bindings || []).each_with_index.to_h { |b, i| [b["name"], json_value(b["type"], values[i])] }
     end
 
     def json_output(action, output)
-      action["output"] ? { "value" => json_value(output) } : { "unit" => true }
+      action["output"] ? { "value" => json_value(action["output"]["type"], output) } : { "unit" => true }
     end
 
     # ---- 式の評価（仕様書 §4.2）----
@@ -137,13 +259,29 @@ module FmspecReference
       result
     end
 
+    def scalar?(value)
+      value.is_a?(Integer) || value.is_a?(EnumValue) || value == true || value == false
+    end
+
     def same_kind(left, right)
+      return unless scalar?(left) || scalar?(right)
+
       same = if left.is_a?(EnumValue) || right.is_a?(EnumValue)
                left.is_a?(EnumValue) && right.is_a?(EnumValue) && left.type == right.type
              else
                left.is_a?(Integer) == right.is_a?(Integer)
              end
       raise EvalError, { "kind" => "type_mismatch" } unless same
+    end
+
+    def fail!(kind)
+      raise EvalError, { "kind" => kind }
+    end
+
+    # 要素の型に属さなければ失敗する。
+    def element(type, value)
+      fail!("not_in_domain") unless member?(type, value)
+      value
     end
 
     def ev(node, env)
@@ -164,6 +302,14 @@ module FmspecReference
         int(left)
         int(right)
         arith({ "add" => left + right, "sub" => left - right, "mul" => left * right }.fetch(op))
+      when "div", "mod"
+        left = ev(body[0], env)
+        right = ev(body[1], env)
+        int(left)
+        int(right)
+        fail!("division_by_zero") if right.zero?
+        # Ruby の整数の除算と剰余は、負の無限大の方向に丸める。
+        arith(op == "div" ? left / right : left % right)
       when "lt", "le", "gt", "ge"
         left = ev(body[0], env)
         right = ev(body[1], env)
@@ -182,18 +328,166 @@ module FmspecReference
         false
       when "implies" then bool(ev(body[0], env)) ? bool(ev(body[1], env)) : true
       when "ite" then bool(ev(body[0], env)) ? ev(body[1], env) : ev(body[2], env)
+      when "local" then env.locals.fetch(body)
+      when "const" then @constants.fetch(body)
+      when "let" then ev(body["body"], env.with_local(body["name"], ev(body["value"], env)))
+      when "forall", "exists" then quantify(op == "forall", body, env)
+      else composite(op, body, env)
+      end
+    end
+
+    def quantify(all, body, env)
+      values = if body.key?("in")
+                 c = ev(body["in"], env)
+                 case c
+                 when SetValue then sorted(c.elem, c.items.to_a)
+                 when MapValue then sorted(c.key, c.entries.keys)
+                 else c.items
+                 end
+               else
+                 domain(body["type"])
+               end
+      values.each do |x|
+        holds = bool(ev(body["body"], env.with_local(body["name"], x)))
+        return holds if holds != all
+      end
+      all
+    end
+
+    # 複合型の値を作る演算と、取り出す演算。部分式は左から順に評価する。
+    def composite(op, body, env)
+      case op
+      when "tuple" then body.map { |e| ev(e, env) }
+      when "record" then body.to_h { |f| [f["name"], ev(f["expr"], env)] }
+      when "nth" then ev(body["of"], env)[body["index"]]
+      when "field" then ev(body["of"], env)[body["name"]]
+      when "none" then nil
+      when "some" then Some.new(ev(body[0], env))
+      when "is_some" then !ev(body[0], env).nil?
+      when "is_none" then ev(body[0], env).nil?
+      when "unwrap"
+        x = ev(body[0], env)
+        fail!("none") if x.nil?
+        x.value
+      when "set"
+        items = body["items"].map { |e| element(body["of"], ev(e, env)) }
+        SetValue.new(body["of"], items.to_set)
+      when "map"
+        body["items"].reduce(MapValue.new(body["key"], body["value"], {})) do |m, (k, v)|
+          put(m, k, v, env)
+        end
+      when "list"
+        ListValue.new(body["of"], body["max"], body["items"].map { |e| element(body["of"], ev(e, env)) })
+      when "contains"
+        c = ev(body[0], env)
+        x = ev(body[1], env)
+        c.items.include?(x)
+      when "insert", "remove"
+        s = ev(body[0], env)
+        x = ev(body[1], env)
+        op == "insert" ? SetValue.new(s.elem, s.items | [element(s.elem, x)]) : SetValue.new(s.elem, s.items - [x])
+      when "union", "intersection", "difference", "subset"
+        a = ev(body[0], env)
+        b = ev(body[1], env)
+        case op
+        when "union" then SetValue.new(a.elem, a.items | b.items)
+        when "intersection" then SetValue.new(a.elem, a.items & b.items)
+        when "difference" then SetValue.new(a.elem, a.items - b.items)
+        else a.items.subset?(b.items)
+        end
+      when "size", "is_empty"
+        c = ev(body[0], env)
+        n = c.is_a?(MapValue) ? c.entries.size : c.items.size
+        op == "size" ? n : n.zero?
+      when "has_key", "get"
+        m = ev(body[0], env)
+        k = ev(body[1], env)
+        return m.entries.key?(k) if op == "has_key"
+
+        fail!("missing_key") unless m.entries.key?(k)
+        m.entries[k]
+      when "put" then put(ev(body[0], env), body[1], body[2], env)
+      when "delete"
+        m = ev(body[0], env)
+        k = ev(body[1], env)
+        MapValue.new(m.key, m.value, m.entries.except(k))
+      when "keys"
+        m = ev(body[0], env)
+        SetValue.new(m.key, m.entries.keys.to_set)
+      when "at"
+        l = ev(body[0], env)
+        i = int(ev(body[1], env))
+        fail!("index_out_of_range") unless i >= 0 && i < l.items.length
+        l.items[i]
+      when "first", "last"
+        l = ev(body[0], env)
+        fail!("empty") if l.items.empty?
+        op == "first" ? l.items.first : l.items.last
+      when "push"
+        l = ev(body[0], env)
+        x = element(l.elem, ev(body[1], env))
+        fail!("full") if l.items.length >= l.max
+        ListValue.new(l.elem, l.max, l.items + [x])
+      when "pop", "shift"
+        l = ev(body[0], env)
+        fail!("empty") if l.items.empty?
+        ListValue.new(l.elem, l.max, op == "pop" ? l.items[0...-1] : l.items[1..])
       else raise ArgumentError, "未知の演算子 #{op}"
       end
     end
 
+    # キーを評価して検査し、値を評価して検査してから置く。
+    def put(map, key_node, value_node, env)
+      k = element(map.key, ev(key_node, env))
+      v = element(map.value, ev(value_node, env))
+      MapValue.new(map.key, map.value, map.entries.merge(k => v))
+    end
+
     # ---- 遷移（仕様書 §5.1）----
 
-    # 型の範囲を検査して値を格納する。
+    # 型の範囲を検査して値を格納する。複合型では、整数の部分の範囲を、スロットの順に検査する。
     def store(type, value)
       return value if member?(type, value)
-      raise EvalError, { "kind" => "type_mismatch" } unless type.key?("int") && value.is_a?(Integer)
+      if %w[bool int enum].include?(type.keys.first)
+        raise EvalError, { "kind" => "type_mismatch" } unless type.key?("int") && value.is_a?(Integer)
 
-      raise EvalError, { "kind" => "out_of_range", "value" => value, "type" => type }
+        raise EvalError, { "kind" => "out_of_range", "value" => value, "type" => type }
+      end
+      x, int_type, slot = out_of_range(type, value, 0)
+      raise EvalError.new({ "kind" => "out_of_range", "value" => x, "type" => int_type }, slot)
+    end
+
+    # 型の範囲の外にある最初の整数を、[値, 整数の型, スロットの位置] で返す。
+    def out_of_range(type, value, at)
+      kind, body = type.first
+      found = lambda do |parts|
+        parts.each do |t, v, offset|
+          bad = out_of_range(t, v, offset)
+          return bad if bad
+        end
+        nil
+      end
+      case kind
+      when "int" then value.between?(body["min"], body["max"]) ? nil : [value, type, at]
+      when "tuple"
+        offsets = body.each_with_index.map { |_, i| at + body.take(i).sum { |t| width(t) } }
+        found.call(body.each_with_index.map { |t, i| [t, value[i], offsets[i]] })
+      when "record"
+        types = body.map { |f| f["type"] }
+        found.call(body.each_with_index.map do |f, i|
+          [f["type"], value[f["name"]], at + types.take(i).sum { |t| width(t) }]
+        end)
+      when "option" then value.nil? ? nil : out_of_range(body, value.value, at + 1)
+      when "map"
+        w = width(body["value"])
+        parts = domain(body["key"]).each_with_index.filter_map do |k, i|
+          [body["value"], value.entries[k], at + i * (1 + w) + 1] if value.entries.key?(k)
+        end
+        found.call(parts)
+      when "list"
+        w = width(body["of"])
+        found.call(value.items.each_with_index.map { |v, p| [body["of"], v, at + 1 + p * w] })
+      end
     end
 
     def failing(action, params, choices, site, target = nil)
@@ -206,7 +500,10 @@ module FmspecReference
         "site" => site,
         "error" => e.detail
       }
-      property["target"] = target if target
+      if target
+        property["target"] = @states[target]["name"]
+        property["slot"] = e.slot if e.slot && width(@states[target]["type"]) > 1
+      end
       raise StepError, property
     end
 
@@ -221,7 +518,7 @@ module FmspecReference
       nxt = state.dup
       (action["updates"] || []).each do |update|
         target = update["target"]
-        failing(action, params, choices, "update", @states[target]["name"]) do
+        failing(action, params, choices, "update", target) do
           nxt[target] = store(@states[target]["type"], ev(update["expr"], env))
         end
       end
@@ -381,7 +678,7 @@ module FmspecReference
 
       states = sort_states(parents.keys)
       { "status" => "verified", "visited_states" => states.length,
-        "certificate" => states.map { |s| s.map { |v| json_value(v) } } }
+        "certificate" => states.map { |s| s.each_with_index.map { |v, i| json_value(@states[i]["type"], v) } } }
     end
 
     # ---- ランダムシミュレーション（仕様書 §9）----
@@ -546,10 +843,7 @@ module FmspecReference
 
     # JSONの値の配列で書かれた状態を、参照実装の値に戻す。
     def state_from_json(row)
-      row.each_with_index.map do |v, i|
-        type = @states[i]["type"]
-        type.key?("enum") ? EnumValue.new(type["enum"], v) : v
-      end
+      row.each_with_index.map { |v, i| from_json(@states[i]["type"], v) }
     end
   end
 

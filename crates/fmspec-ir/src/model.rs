@@ -444,6 +444,17 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             constants: &constants,
         };
         let codes = constant_codes(&ctx, required(c, &path, "value")?, &format!("{path}.value"), &ty)?;
+        let mut tys = Vec::new();
+        ty.slot_types(&enums, &mut tys);
+        if let Some(x) = tys.iter().zip(&codes).find_map(|(t, x)| match t {
+            Type::Int(lo, hi) if x < lo || x > hi => Some(*x),
+            _ => None,
+        }) {
+            return schema(
+                &format!("{path}.value"),
+                format!("定数 {name:?} の値 {x} が型の範囲の外です"),
+            );
+        }
         constants.push(Constant { name, ty, codes });
     }
 
