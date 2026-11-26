@@ -413,3 +413,50 @@ fn map_transitions_preserve_public_arguments_internal_choices_and_pre_state_outp
         }
     }
 }
+
+#[test]
+fn map_encoding_and_get_agree_on_composite_key_rows() {
+    let bit = json!({"int": {"min": -1, "max": 0}});
+    let key = json!({"option": {"record": [
+        {"name": "n", "type": bit}, {"name": "flag", "type": {"bool": {}}}
+    ]}});
+    let value = json!({"int": {"min": 0, "max": 9}});
+    let some = |n, flag| {
+        json!({"some": [{"record": [
+            {"name": "n", "expr": {"int": n}}, {"name": "flag", "expr": {"bool": flag}}
+        ]}]})
+    };
+    let ir = json!({
+        "ir_version": 1, "name": "map_read",
+        "states": [{"name": "map", "type": {"map": {"key": key, "value": value}},
+            "initial": {"map": {"key": key, "value": value, "items": []}}}],
+        "actions": [
+            {"name": "first", "output": {"type": value, "expr": {"get": [{"var": 0}, some(-1, false)]}}},
+            {"name": "last", "output": {"type": value, "expr": {"get": [{"var": 0}, some(0, true)]}}},
+            {"name": "missing", "output": {"type": value, "expr": {"get": [{"var": 0}, {"none": key["option"]}]}}}
+        ]
+    });
+    let model = load(&ir.to_string()).unwrap();
+    let ty = &model.names.state_types[0];
+    let last = json!({"some": {"n": 0, "flag": true}});
+    let first = json!({"some": {"n": -1, "flag": false}});
+    let entries = json!([[last, 9], [first, 4]]);
+    let slots = value_from_json(&model.names.enums, ty, &entries).unwrap();
+    // None, Some(-1,false), Some(-1,true), Some(0,false), Some(0,true).
+    assert_eq!(slots, vec![0, 0, 1, 4, 0, 0, 0, 0, 1, 9]);
+    for (action, expected) in [(0, 4), (1, 9)] {
+        let Some(Enumerated::Ok(transitions)) = model.checked().successors(action, &slots) else {
+            panic!("Mapの存在するキーを読み取れません");
+        };
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].output, Some(expected));
+    }
+    assert!(matches!(
+        model.checked().successors(2, &slots),
+        Some(Enumerated::Fail(
+            _,
+            Site::Output,
+            ErrKind::Failed(fmspec_core::map_lookup::MISSING_KEY)
+        ))
+    ));
+}

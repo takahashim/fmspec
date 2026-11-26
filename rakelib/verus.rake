@@ -39,6 +39,10 @@ end
 
 # 変異。[ファイル, 元の文字列, 置き換え, 説明]。元の文字列はファイルにちょうど1回現れなければならない。
 VERUS_MUTANTS = [
+  ["map_encoding.rs", "let tag: i64 = if present { 1 } else { 0 };",
+   "let tag: i64 = if present { 0 } else { 1 };", "Mapの符号化でキーの有無を反転する"],
+  ["ranking.rs", "prefix.checked_mul(radix)?.checked_add(digit)",
+   "prefix.checked_mul(radix)?.checked_add(0)", "キー値を符号化する順位計算で末尾の成分を落とす"],
   ["bindings.rs", "out = Expr::Let(Box::new(binding), Box::new(out));",
    "out = Expr::Let(Box::new(out), Box::new(binding));", "束縛より先に本体を評価する"],
   ["map_lookup.rs", "let offset = base + column;", "let offset = base;", "Mapの値列でも有無フラグを読む"],

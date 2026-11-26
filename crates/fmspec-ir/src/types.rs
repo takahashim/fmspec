@@ -22,6 +22,7 @@
 
 use crate::model::EnumNames;
 use fmspec_core::model::{Type, Value as CoreValue};
+use fmspec_core::ranking::append_rank_digit;
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
 pub const MAX_KEYS: u64 = 4096;
@@ -273,7 +274,7 @@ fn rank_all<'a>(ts: impl Iterator<Item = &'a SType>, enums: &[EnumNames], codes:
     for t in ts {
         let w = t.width(enums);
         let n = t.keys(enums)?;
-        r = r * n + t.rank(enums, codes.get(at..at + w)?)?;
+        r = append_rank_digit(r, n, t.rank(enums, codes.get(at..at + w)?)?)?;
         at += w;
     }
     Some(r)
