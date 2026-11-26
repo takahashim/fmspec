@@ -2,17 +2,16 @@
 //!
 //! 名前を番号に解決し、型を検査する。型の誤りのメッセージと位置は、下ろし（`lower`）と同じである。
 //! 構文木は、意味論が必要とする要素の型を注釈として持つ。
-//! 構文木の型は、中核の検証済みの型検査器（[`fmspec_core::infer::check`]）がもう一度検査する。
+//! 構文木は、中核の検証済みの下ろし（[`fmspec_core::lowering`]）が型を検査し直してから中核の式にする。
 //! したがって、この名前解決の型検査は信頼の基盤に入らない。信頼の基盤に入るのは、名前を正しい番号に
 //! 解決することだけである。
 //!
 //! Recordのフィールドの名前は、モデル全体で共有する [`Fields`] で番号にする。
 
 use crate::json::{array, index, int, object, operands, required, schema, single, string};
-use crate::lower::{const_values, parse_type, type_error, type_name, Ctx, Error, Res};
+use crate::lower::{const_values, parse_type, type_error, type_name, Ctx, Res};
 use crate::types::{SType, XType, MAX_KEYS};
-use fmspec_core::encoding::{SType as CS, XType as CX};
-use fmspec_core::infer::Scope;
+use fmspec_core::encoding::SType as CS;
 use fmspec_core::lowering::{Constant as CConstant, Layout as CLayout, LowerCtx};
 use fmspec_core::model::{BinOp, Value as CV};
 use fmspec_core::source::{Item, Over, SetOp, TExpr};
@@ -51,24 +50,6 @@ impl Fields {
             SType::Set(t) => CS::Set(Box::new(self.stype(t))),
             SType::Map(k, v) => CS::Map(Box::new(self.stype(k)), Box::new(self.stype(v))),
             SType::List(t, n) => CS::List(Box::new(self.stype(t)), *n),
-        }
-    }
-
-    /// 式の型を、中核の型にする。
-    pub(crate) fn xtype(&self, t: &XType) -> CX {
-        match t {
-            XType::Bool => CX::Bool,
-            XType::Int => CX::Int,
-            XType::Enum(id) => CX::Enum(*id),
-            XType::Tuple(ts) => CX::Tuple(ts.iter().map(|t| self.xtype(t)).collect()),
-            XType::Record(fs) => CX::Record(
-                fs.iter().map(|(n, _)| self.id(n)).collect(),
-                fs.iter().map(|(_, t)| self.xtype(t)).collect(),
-            ),
-            XType::Option(t) => CX::Option(Box::new(self.xtype(t))),
-            XType::Set(t) => CX::Set(Box::new(self.stype(t))),
-            XType::Map(k, v) => CX::Map(Box::new(self.stype(k)), Box::new(self.stype(v))),
-            XType::List(t, n) => CX::List(Box::new(self.stype(t)), *n),
         }
     }
 }
@@ -129,19 +110,6 @@ impl<'c, 'a> Resolver<'c, 'a> {
                     slots: const_values(self.enums, &c.ty, &c.codes),
                 })
                 .collect(),
-        }
-    }
-
-    /// 中核の型検査の文脈。
-    pub(crate) fn scope(&self) -> Scope {
-        let f = &self.fields;
-        Scope {
-            enums: self.enums.iter().map(|e| e.variants.len() as i64).collect(),
-            states: self.states.map(|ls| ls.iter().map(|l| f.stype(&l.ty)).collect()),
-            args: self.args.iter().map(|l| f.stype(&l.ty)).collect(),
-            next: self.next,
-            out: self.output.map(|t| f.stype(t)),
-            consts: self.constants.iter().map(|c| f.stype(&c.ty)).collect(),
         }
     }
 
@@ -629,64 +597,5 @@ impl<'c, 'a> Resolver<'c, 'a> {
         let r = self.closed_bool(body_v, &body_path, sc);
         sc.pop();
         Ok((XType::Bool, TExpr::Quant(all, over, b(r?))))
-    }
-}
-
-/// 中核の型が等しい。
-fn same_s(a: &CS, b: &CS) -> bool {
-    match (a, b) {
-        (CS::Bool, CS::Bool) => true,
-        (CS::Int(a, b), CS::Int(c, d)) => a == c && b == d,
-        (CS::Enum(a), CS::Enum(b)) => a == b,
-        (CS::Tuple(a), CS::Tuple(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_s(x, y)),
-        (CS::Record(n, a), CS::Record(m, b)) => {
-            n == m && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_s(x, y))
-        }
-        (CS::Option(a), CS::Option(b)) | (CS::Set(a), CS::Set(b)) => same_s(a, b),
-        (CS::Map(a, b), CS::Map(c, d)) => same_s(a, c) && same_s(b, d),
-        (CS::List(a, n), CS::List(b, m)) => n == m && same_s(a, b),
-        _ => false,
-    }
-}
-
-fn same_x(a: &CX, b: &CX) -> bool {
-    match (a, b) {
-        (CX::Bool, CX::Bool) | (CX::Int, CX::Int) => true,
-        (CX::Enum(a), CX::Enum(b)) => a == b,
-        (CX::Tuple(a), CX::Tuple(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_x(x, y)),
-        (CX::Record(n, a), CX::Record(m, b)) => {
-            n == m && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same_x(x, y))
-        }
-        (CX::Option(a), CX::Option(b)) => same_x(a, b),
-        (CX::Set(a), CX::Set(b)) => same_s(a, b),
-        (CX::Map(a, b), CX::Map(c, d)) => same_s(a, c) && same_s(b, d),
-        (CX::List(a, n), CX::List(b, m)) => n == m && same_s(a, b),
-        _ => false,
-    }
-}
-
-/// 下ろしと名前解決の結果を突き合わせる。名前解決の構文木は、中核の型検査器に型 `t` を認められなければならない。
-/// 下ろしが誤りを返したなら、名前解決も同じ誤りを返さなければならない。
-pub(crate) fn agree<T>(lowered: Res<T>, resolved: Res<(XType, TExpr)>, r: &Resolver, path: &str) -> Res<(T, TExpr)> {
-    let internal = |m: String| Err(Error::Type(format!("{path}: 内部エラー: {m}")));
-    match (lowered, resolved) {
-        (Ok(x), Ok((t, e))) => {
-            let want = r.fields().xtype(&t);
-            match fmspec_core::infer::check(&e, &r.scope(), &mut Vec::new()) {
-                Some(got) if same_x(&got, &want) => Ok((x, e)),
-                Some(_) => internal("中核の型検査器の型が名前解決の型と異なります".to_string()),
-                None => internal("中核の型検査器が名前解決の構文木を受理しません".to_string()),
-            }
-        }
-        (Err(a), Err(b)) => {
-            let (da, db) = (format!("{a:?}"), format!("{b:?}"));
-            if da == db {
-                Err(a)
-            } else {
-                internal(format!("下ろしの誤り {da} と名前解決の誤り {db} が異なります"))
-            }
-        }
-        (Ok(_), Err(b)) => internal(format!("名前解決だけが誤りを返しました: {b:?}")),
-        (Err(a), Ok(_)) => internal(format!("下ろしだけが誤りを返しました: {a:?}")),
     }
 }

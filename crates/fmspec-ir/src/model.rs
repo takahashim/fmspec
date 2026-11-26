@@ -389,7 +389,11 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
     let mut canon = Vec::new();
     for l in &args {
         let slots: Vec<Expr> = (l.offset..l.offset + l.ty.width(enums)).map(Expr::Arg).collect();
-        let c = lower::canonical(enums, &l.ty, &slots);
+        let core = crate::resolve::Resolver::new(&ctx);
+        let Some(c) = fmspec_core::slots::canonical(&core.fields().stype(&l.ty), &slots, &core.lower_ctx().enums)
+        else {
+            return schema(path, "内部エラー: 中核が引数の型の正規形を扱えません");
+        };
         if !matches!(c, Expr::Const(CoreValue::Bool(true))) {
             canon.push(c);
         }
