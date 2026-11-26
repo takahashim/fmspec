@@ -184,7 +184,13 @@ VERUS_MUTANTS = [
   ["mbt.rs", "                                *violation = Some((true, k, copy_vec(&tr.state)));", "                                *violation = Some((true, k, copy_vec(s)));", "不変条件の違反に遷移前の状態を記録する"],
   ["mbt.rs", "        while i < self.cands.states.len()\n", "        while i < self.cands.states.len() && i < 1\n", "2番目以降の候補を更新に使わない"],
   ["mbt.rs", "                Absorbed::TooMany => {\n                    return Update::TooMany;", "                Absorbed::TooMany => {\n                    return Update::Failure;", "候補数の上限超過を不適合とする"],
-  ["mbt.rs", "                Absorbed::Disabled => {\n                    assert(s0.possible(s@));\n                    return Update::InvalidInput;\n                },", "                Absorbed::Disabled => {},", "入力が無効な候補を無視する"]
+  ["mbt.rs", "                Absorbed::Disabled => {\n                    assert(s0.possible(s@));\n                    return Update::InvalidInput;\n                },", "                Absorbed::Disabled => {},", "入力が無効な候補を無視する"],
+  ["lowering.rs", "let (t, out) = layout_slots(&cx.args[*i], 2, enums)?;", "let (t, out) = layout_slots(&cx.args[*i], 0, enums)?;", "引数を状態変数として参照する"],
+  ["lowering.rs", "*k < enums[*id]) {", "*k <= enums[*id]) {", "範囲外の列挙型のラベルを受け入れる"],
+  ["lowering.rs", "let x = wrap(&blk.binds, copy_expr(&slots[0]));", "let x = copy_expr(&slots[0]);", "スカラーの下ろしで束縛を捨てる"],
+  ["slots.rs", "let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(-1));", "let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(0));", "型に属さないキーの番号を0にする"],
+  ["slots.rs", "let y = bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi));", "let y = bin(BinOp::Lt, copy_expr(&slots[0]), ci(*hi));", "整数の型の上限を除く"],
+  ["lowering.rs", "let r = lookup_rank(x, cx, sc, blk, &k)?;\n    let ghost b2", "let r = lookup_rank(x, cx, sc, blk, &v)?;\n    let ghost b2", "Mapのキーの番号を値の型で計算する"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -227,7 +233,11 @@ VERUS_CANARIES = [
   ["mbt.rs", "        Ok((common, any))\n", "common_inputs の受理"],
   ["mbt.rs", "            return Update::Failure;", "observe の不適合"],
   ["mbt.rs", "        self.cands = Candidates { states: next, hist: Ghost(h1) };", "observe の更新"],
-  ["mbt.rs", "            assert(consistent(m, c, obs, inj, first, h1, t));", "lemma_next_exact の構成"]
+  ["mbt.rs", "            assert(consistent(m, c, obs, inj, first, h1, t));", "lemma_next_exact の構成"],
+  ["lowering.rs", "assert(key_rank(l3, rank_local) == rk as int);", "lemma_get のキーの番号"],
+  ["lowering.rs", "assert(store_ok(_c, stored@, env, l, v, sty(*st), se.enums));", "lower_stored の値の場合"],
+  ["lowering.rs", "assert(slot_vals(slots@, env, l) =~= seq![eval_l(slots@[0], env, l)->Ok_0]);", "scalar_in の値の場合"],
+  ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

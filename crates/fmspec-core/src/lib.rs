@@ -10,6 +10,7 @@
 //! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
 //! - [`slots`]：下ろしで使う、スロットの式の組み立て
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
+//! - [`preserve`]：下ろしが意味を保存することの仕様と補題
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
 //! - [`typing`]：型規則、整形式性、`validate`、型健全性
 //! - [`step`]：遷移の意味論と遷移列挙
@@ -35,6 +36,7 @@ pub mod map_encoding;
 pub mod map_lookup;
 pub mod mbt;
 pub mod model;
+pub mod preserve;
 pub mod ranking;
 pub mod semantics;
 pub mod slots;

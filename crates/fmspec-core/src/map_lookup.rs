@@ -6,6 +6,8 @@ use crate::bindings::{eval_bindings, eval_bound_body};
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 use crate::model::*;
+#[cfg(verus_keep_ghost)]
+use crate::preserve::{all_pure, pure_below};
 use vstd::prelude::*;
 
 verus! {
@@ -419,6 +421,7 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
                 && lo as int <= key_rank(locals, rank_local) < hi as int
             ==> #[trigger] eval_l(out, env, locals)
                 == selected(old(column)@, key_rank(locals, rank_local), env, locals),
+        forall|n: nat| #[trigger] all_pure(old(column)@, n) && rank_local < n ==> pure_below(out, n),
     decreases hi - lo,
 {
     if hi - lo == 1 {
@@ -426,6 +429,7 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
         proof {
             assert(hi == old(column)@.len());
             assert(column@ =~= old(column)@.take(lo as int));
+            assert(out == old(column)@[lo as int]);
         }
         out
     } else {
@@ -440,6 +444,16 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
         let out = Expr::Ite(Box::new(cond), Box::new(left), Box::new(right));
         proof {
             assert(column@ =~= old(column)@.take(lo as int));
+            assert forall|n: nat| #[trigger] all_pure(old(column)@, n) && rank_local < n implies pure_below(out, n) by {
+                let c = old(column)@.take(mid as int);
+                assert forall|j: int| 0 <= j < c.len() implies pure_below(#[trigger] c[j], n) by {
+                    assert(c[j] == old(column)@[j]);
+                }
+                assert(all_pure(c, n));
+                assert(pure_below(Expr::Const(Value::Int(mid as i64)), n));
+                assert(pure_below(Expr::Local(rank_local), n));
+                assert(pure_below(cond, n));
+            }
             assert forall|env: Env, locals: Seq<Value>|
                 rank_local < locals.len() && locals[rank_local as int] is Int
                     && lo as int <= key_rank(locals, rank_local) < hi as int
@@ -462,6 +476,8 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
 pub fn select_map_slot(column: Vec<Expr>, rank_local: usize, fallback: Expr) -> (out: Expr)
     ensures
         column@.len() == 0 ==> out == fallback,
+        forall|n: nat|
+            #[trigger] all_pure(column@, n) && rank_local < n && pure_below(fallback, n) ==> pure_below(out, n),
         forall|env: Env, locals: Seq<Value>|
             rank_local < locals.len() && locals[rank_local as int] is Int
                 && 0 <= key_rank(locals, rank_local) < column@.len() <= i64::MAX
@@ -530,6 +546,8 @@ pub fn select_flat_map_slot(
         out is Some <==> column <= width && (rows == 0 || width < usize::MAX)
             && (rows as int) * (1 + width) == flat@.len(),
         out matches Some(expr) ==> (rows == 0 ==> expr == fallback)
+            && (forall|n: nat|
+                #[trigger] all_pure(flat@, n) && rank_local < n && pure_below(fallback, n) ==> pure_below(expr, n))
             && forall|env: Env, locals: Seq<Value>|
                 rank_local < locals.len() && locals[rank_local as int] is Int
                     && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
@@ -552,8 +570,16 @@ pub fn select_flat_map_slot(
         i = i + 1;
     }
     let ghost projected = expressions@;
+    let ghost fb = fallback;
     let expr = select_map_slot(expressions, rank_local, fallback);
     proof {
+        assert forall|n: nat|
+            #[trigger] all_pure(flat@, n) && rank_local < n && pure_below(fb, n) implies pure_below(expr, n) by {
+            assert forall|j: int| 0 <= j < projected.len() implies pure_below(#[trigger] projected[j], n) by {
+                assert(projected[j] == flat@[indices@[j] as int]);
+            }
+            assert(all_pure(projected, n));
+        }
         assert forall|env: Env, locals: Seq<Value>|
             rank_local < locals.len() && locals[rank_local as int] is Int
                 && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
@@ -662,7 +688,9 @@ pub fn select_flat_map_lookup(
             && (rows == 0 || width < usize::MAX)
             && (rows as int) * (1 + width) == flat@.len(),
         out matches Some(result) ==> result.1@.len() == width
-            && forall|env: Env, locals: Seq<Value>|
+            && (forall|n: nat|
+                #[trigger] all_pure(flat@, n) && rank_local < n && all_pure(defaults@, n) ==> all_pure(result.1@, n))
+            && (forall|env: Env, locals: Seq<Value>|
                 rank_local < locals.len() && locals[rank_local as int] is Int
                     && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
                 ==> #[trigger] eval_l(result.0, env, locals) ==
@@ -674,12 +702,12 @@ pub fn select_flat_map_lookup(
                             Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
                             Err(error) => Err(error),
                         }
-                    }
-            && forall|i: int, env: Env, locals: Seq<Value>|
+                    })
+            && (forall|i: int, env: Env, locals: Seq<Value>|
                 0 <= i < width && rank_local < locals.len() && locals[rank_local as int] is Int
                     && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
                 ==> #[trigger] eval_l(result.1@[i], env, locals)
-                    == flat_slot_int(flat@, width, i + 1, key_rank(locals, rank_local), env, locals)
+                    == flat_slot_int(flat@, width, i + 1, key_rank(locals, rank_local), env, locals))
             && forall|i: int, env: Env, locals: Seq<Value>|
                 0 <= i < width && rank_local < locals.len() && locals[rank_local as int] is Int
                     && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
@@ -707,6 +735,7 @@ pub fn select_flat_map_lookup(
             defaults@.len() == width,
             payload@.len() == column,
             (rows as int) * (1 + width) == flat@.len(),
+            forall|n: nat| #[trigger] all_pure(flat@, n) && rank_local < n && all_pure(defaults@, n) ==> all_pure(payload@, n),
             forall|i: int, env: Env, locals: Seq<Value>|
                 0 <= i < column && rank_local < locals.len() && locals[rank_local as int] is Int
                     && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
@@ -715,7 +744,19 @@ pub fn select_flat_map_lookup(
         decreases width - column,
     {
         let selected = select_flat_map_slot(flat, rows, width, column + 1, rank_local, copy_expr(&defaults[column]))?;
+        let ghost prev = payload@;
         payload.push(selected);
+        proof {
+            assert forall|n: nat| #[trigger] all_pure(flat@, n) && rank_local < n && all_pure(defaults@, n) implies all_pure(payload@, n) by {
+                assert(pure_below(defaults@[column as int], n));
+                assert(all_pure(prev, n));
+                assert forall|j: int| 0 <= j < payload@.len() implies pure_below(#[trigger] payload@[j], n) by {
+                    if j < prev.len() {
+                        assert(payload@[j] == prev[j]);
+                    }
+                }
+            }
+        }
         column = column + 1;
     }
     proof {

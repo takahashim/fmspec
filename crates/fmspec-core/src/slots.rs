@@ -4,10 +4,26 @@
 //! ここにあるのは、その部品である。部品は、長さや型の合わない入力には `None` を返す。
 //! 下ろしは `None` を内部エラーにするので、`None` を返すことは健全性を損なわない。
 
+#[cfg(verus_keep_ghost)]
+use crate::bindings::eval_bound_body;
 use crate::bindings::wrap_bindings;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq, keys, keys_or_zero};
 use crate::encoding::{keys_exec, to_xtype, SType, XType};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{keys_product, lemma_default_len, lemma_default_vals_len, lemma_stys, lemma_xtys, member};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{members, models_seq, sty, stys, width, width_sum, xty, xtys, xwidth, xwidth_sum, STy, SVal};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{XTy, MAX_KEYS};
+#[cfg(verus_keep_ghost)]
+use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
+#[cfg(verus_keep_ghost)]
+use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
 use crate::model::{BinOp, Expr, Type, Value};
+#[cfg(verus_keep_ghost)]
+use crate::preserve::*;
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
 use vstd::prelude::*;
 
@@ -122,9 +138,13 @@ pub fn not(x: Expr) -> (r: Expr)
     Expr::Not(Box::new(x))
 }
 
+pub open spec fn ite_s(c: Expr, x: Expr, y: Expr) -> Expr {
+    Expr::Ite(Box::new(c), Box::new(x), Box::new(y))
+}
+
 pub fn ite(c: Expr, x: Expr, y: Expr) -> (r: Expr)
     ensures
-        r == Expr::Ite(Box::new(c), Box::new(x), Box::new(y)),
+        r == ite_s(c, x, y),
 {
     Expr::Ite(Box::new(c), Box::new(x), Box::new(y))
 }
@@ -468,6 +488,7 @@ pub(crate) fn keep(blk: &mut Block, e: Expr) -> (r: Option<Expr>)
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r matches Some(x) ==> added(*old(blk), *final(blk), e, x),
 {
     if may_fail(&e) || binds(&e) {
         bind(blk, e)
@@ -485,6 +506,7 @@ pub(crate) fn atom(blk: &mut Block, e: Expr) -> (r: Option<Expr>)
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r matches Some(x) ==> added(*old(blk), *final(blk), e, x) && (atomic_s(e) ==> x == e),
 {
     if atomic(&e) {
         proof {
@@ -502,6 +524,9 @@ pub(crate) fn check(blk: &mut Block, cond: Expr, code: i64) -> (r: Option<()>)
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r is Some ==> (cond == bool_lit(true) && final(blk).binds@ == old(blk).binds@) || final(blk).binds@ == old(
+            blk,
+        ).binds@.push(ite_s(cond, bool_lit(true), Expr::Fail(Type::Bool, code))),
 {
     if is_bool_lit(&cond, true) {
         proof {
@@ -515,7 +540,11 @@ pub(crate) fn check(blk: &mut Block, cond: Expr, code: i64) -> (r: Option<()>)
 }
 
 /// 束縛を順に評価してから `e` を評価する式。
-pub fn wrap(binds: &Vec<Expr>, e: Expr) -> (r: Expr) {
+pub fn wrap(binds: &Vec<Expr>, e: Expr) -> (r: Expr)
+    ensures
+        forall|env: Env, ls: Seq<Value>|
+            #[trigger] eval_l(r, env, ls) == eval_bound_body(binds@, binds@.len(), e, env, ls),
+{
     wrap_bindings(copy_exprs(binds), e)
 }
 
@@ -528,7 +557,11 @@ pub fn is_scalar(t: &XType) -> (r: bool) {
     }
 }
 
-pub fn keys_or_zero_exec(t: &SType, enums: &Vec<i64>) -> (r: usize) {
+pub fn keys_or_zero_exec(t: &SType, enums: &Vec<i64>) -> (r: usize)
+    ensures
+        r == keys_or_zero(sty(*t), enums@),
+        r <= MAX_KEYS,
+{
     match keys_exec(t, enums) {
         Some(k) => k as usize,
         None => 0,
@@ -537,6 +570,8 @@ pub fn keys_or_zero_exec(t: &SType, enums: &Vec<i64>) -> (r: usize) {
 
 /// 格納の型のスロット数。`usize` に収まらなければ `None`。
 pub fn stype_width(t: &SType, enums: &Vec<i64>) -> (r: Option<usize>)
+    ensures
+        r matches Some(w) ==> w == width(sty(*t), enums@),
     decreases t, 1nat,
 {
     match t {
@@ -573,13 +608,23 @@ pub fn stype_width(t: &SType, enums: &Vec<i64>) -> (r: Option<usize>)
 fn stype_width_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Option<usize>)
     requires
         decreases_to!(*_parent => *ts),
+    ensures
+        r matches Some(w) ==> w == width_sum(stys(ts@), enums@),
     decreases _parent, 0nat,
 {
     let mut acc: usize = 0;
     let mut i = 0;
+    proof {
+        lemma_stys(ts@);
+        assert(stys(ts@).take(0) =~= Seq::<STy>::empty());
+    }
     while i < ts.len()
         invariant
             decreases_to!(*_parent => *ts),
+            i <= ts.len(),
+            stys(ts@).len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] stys(ts@)[j] == sty(ts@[j]),
+            acc == width_sum(stys(ts@).take(i as int), enums@),
         decreases ts.len() - i,
     {
         proof {
@@ -587,13 +632,23 @@ fn stype_width_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Op
         }
         let w = stype_width(&ts[i], enums)?;
         acc = acc.checked_add(w)?;
+        proof {
+            let xs = stys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+        }
         i += 1;
+    }
+    proof {
+        assert(stys(ts@).take(ts@.len() as int) =~= stys(ts@));
     }
     Some(acc)
 }
 
 /// 式の型のスロット数。
 pub fn xtype_width(t: &XType, enums: &Vec<i64>) -> (r: Option<usize>)
+    ensures
+        r matches Some(w) ==> w == xwidth(xty(*t), enums@),
     decreases t, 1nat,
 {
     match t {
@@ -630,13 +685,23 @@ pub fn xtype_width(t: &XType, enums: &Vec<i64>) -> (r: Option<usize>)
 fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Option<usize>)
     requires
         decreases_to!(*_parent => *ts),
+    ensures
+        r matches Some(w) ==> w == xwidth_sum(xtys(ts@), enums@),
     decreases _parent, 0nat,
 {
     let mut acc: usize = 0;
     let mut i = 0;
+    proof {
+        lemma_xtys(ts@);
+        assert(xtys(ts@).take(0) =~= Seq::<XTy>::empty());
+    }
     while i < ts.len()
         invariant
             decreases_to!(*_parent => *ts),
+            i <= ts.len(),
+            xtys(ts@).len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] xtys(ts@)[j] == xty(ts@[j]),
+            acc == xwidth_sum(xtys(ts@).take(i as int), enums@),
         decreases ts.len() - i,
     {
         proof {
@@ -644,7 +709,15 @@ fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Op
         }
         let w = xtype_width(&ts[i], enums)?;
         acc = acc.checked_add(w)?;
+        proof {
+            let xs = xtys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+        }
         i += 1;
+    }
+    proof {
+        assert(xtys(ts@).take(ts@.len() as int) =~= xtys(ts@));
     }
     Some(acc)
 }
@@ -750,17 +823,222 @@ pub fn default_value(t: Type) -> (r: Value) {
     }
 }
 
-/// 型 `t` の既定値のスロット。
-pub fn defaults(t: &SType, enums: &Vec<i64>) -> (r: Vec<Expr>) {
-    let mut tys: Vec<Type> = Vec::new();
-    slot_types(t, enums, &mut tys);
-    let mut out: Vec<Expr> = Vec::new();
+/// 値の列を、定数の式の列にする。
+pub open spec fn lits(vs: Seq<Value>) -> Seq<Expr> {
+    vs.map_values(|v: Value| Expr::Const(v))
+}
+
+/// `out` の後ろに `xs` の複製を加える。
+pub fn extend(out: &mut Vec<Expr>, xs: &Vec<Expr>)
+    ensures
+        final(out)@ == old(out)@ + xs@,
+{
+    let ghost start = out@;
     let mut i = 0;
-    while i < tys.len()
-        decreases tys.len() - i,
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            out@ == start + xs@.take(i as int),
+        decreases xs.len() - i,
     {
-        out.push(Expr::Const(default_value(tys[i])));
+        out.push(copy_expr(&xs[i]));
+        proof {
+            assert(xs@.take(i + 1) =~= xs@.take(i as int).push(xs@[i as int]));
+        }
         i += 1;
+    }
+    proof {
+        assert(xs@.take(xs@.len() as int) =~= xs@);
+    }
+}
+
+/// 型 `t` の既定値のスロット。
+pub fn defaults(t: &SType, enums: &Vec<i64>) -> (r: Vec<Expr>)
+    ensures
+        r@ == lits(enc(default_val(sty(*t), enums@), sty(*t), enums@)),
+    decreases t, 1nat,
+{
+    let mut out: Vec<Expr> = Vec::new();
+    match t {
+        SType::Bool => {
+            out.push(cb(false));
+            proof {
+                assert(out@ =~= lits(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
+            }
+        },
+        SType::Int(lo, _) => {
+            out.push(ci(*lo));
+            proof {
+                assert(out@ =~= lits(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
+            }
+        },
+        SType::Enum(id) => {
+            out.push(Expr::Const(Value::Enum(*id, 0)));
+            proof {
+                assert(out@ =~= lits(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
+            }
+        },
+        SType::Tuple(ts) => {
+            proof {
+                assert(decreases_to!(*t => *ts));
+            }
+            out = defaults_all(t, ts, enums);
+        },
+        SType::Record(_, ts) => {
+            proof {
+                assert(decreases_to!(*t => *ts));
+            }
+            out = defaults_all(t, ts, enums);
+        },
+        SType::Option(x) => {
+            out.push(cb(false));
+            let d = defaults(x, enums);
+            extend(&mut out, &d);
+            proof {
+                let dv = enc(default_val(sty(**x), enums@), sty(**x), enums@);
+                assert(out@ =~= lits(seq![Value::Bool(false)] + dv));
+            }
+        },
+        SType::Set(e) => {
+            let n = keys_or_zero_exec(e, enums);
+            let mut i = 0;
+            while i < n
+                invariant
+                    i <= n,
+                    out@ == lits(Seq::new(i as nat, |_j: int| Value::Bool(false))),
+                decreases n - i,
+            {
+                out.push(cb(false));
+                proof {
+                    assert(out@ =~= lits(Seq::new((i + 1) as nat, |_j: int| Value::Bool(false))));
+                }
+                i += 1;
+            }
+            proof {
+                let bits = Seq::new(n as nat, |_i: int| false);
+                assert(enc(default_val(sty(*t), enums@), sty(*t), enums@) =~= Seq::new(
+                    n as nat,
+                    |_j: int| Value::Bool(false),
+                ));
+            }
+        },
+        SType::Map(k, v) => {
+            let n = keys_or_zero_exec(k, enums);
+            let d = defaults(v, enums);
+            let ghost dv = enc(default_val(sty(**v), enums@), sty(**v), enums@);
+            let mut i = 0;
+            proof {
+                assert(enc_rows(Seq::new(0, |_j: int| None::<SVal>), sty(**v), enums@) =~= Seq::<Value>::empty());
+                assert(out@ =~= lits(Seq::<Value>::empty()));
+            }
+            while i < n
+                invariant
+                    i <= n,
+                    d@ == lits(dv),
+                    dv == enc(default_val(sty(**v), enums@), sty(**v), enums@),
+                    out@ == lits(enc_rows(Seq::new(i as nat, |_j: int| None::<SVal>), sty(**v), enums@)),
+                decreases n - i,
+            {
+                out.push(cb(false));
+                extend(&mut out, &d);
+                proof {
+                    let rows = Seq::new((i + 1) as nat, |_j: int| None::<SVal>);
+                    assert(rows.drop_last() =~= Seq::new(i as nat, |_j: int| None::<SVal>));
+                    let prev = enc_rows(Seq::new(i as nat, |_j: int| None::<SVal>), sty(**v), enums@);
+                    assert(enc_rows(rows, sty(**v), enums@) == prev + (seq![Value::Bool(false)] + dv));
+                    assert(out@ =~= lits(prev + (seq![Value::Bool(false)] + dv)));
+                }
+                i += 1;
+            }
+        },
+        SType::List(e, max) => {
+            out.push(ci(0));
+            let d = defaults(e, enums);
+            let ghost dv = enc(default_val(sty(**e), enums@), sty(**e), enums@);
+            let mut i = 0;
+            proof {
+                assert(out@ =~= lits(seq![Value::Int(0)] + enc_repeat(dv, 0)));
+            }
+            while i < *max
+                invariant
+                    i <= *max,
+                    d@ == lits(dv),
+                    dv == enc(default_val(sty(**e), enums@), sty(**e), enums@),
+                    out@ == lits(seq![Value::Int(0)] + enc_repeat(dv, i as nat)),
+                decreases *max - i,
+            {
+                extend(&mut out, &d);
+                proof {
+                    assert(enc_repeat(dv, (i + 1) as nat) == enc_repeat(dv, i as nat) + dv);
+                    assert(out@ =~= lits(seq![Value::Int(0)] + enc_repeat(dv, (i + 1) as nat)));
+                }
+                i += 1;
+            }
+            proof {
+                let items = Seq::<SVal>::empty();
+                assert(enc_items(items, sty(**e), enums@) =~= Seq::<Value>::empty());
+                assert(enc(default_val(sty(*t), enums@), sty(*t), enums@) =~= seq![Value::Int(0)] + enc_repeat(
+                    dv,
+                    *max as nat,
+                ));
+            }
+        },
+    }
+    out
+}
+
+fn defaults_all(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Vec<Expr>)
+    requires
+        decreases_to!(*_parent => *ts),
+    ensures
+        r@ == lits(enc_seq(default_vals(stys(ts@), enums@), stys(ts@), enums@)),
+    decreases _parent, 0nat,
+{
+    let mut out: Vec<Expr> = Vec::new();
+    let ghost xs = stys(ts@);
+    proof {
+        lemma_stys(ts@);
+        assert(xs.take(0) =~= Seq::<STy>::empty());
+        assert(out@ =~= lits(enc_seq(default_vals(xs.take(0), enums@), xs.take(0), enums@)));
+    }
+    let mut i = 0;
+    while i < ts.len()
+        invariant
+            decreases_to!(*_parent => *ts),
+            i <= ts@.len(),
+            xs == stys(ts@),
+            xs.len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] xs[j] == sty(ts@[j]),
+            out@ == lits(enc_seq(default_vals(xs.take(i as int), enums@), xs.take(i as int), enums@)),
+        decreases ts.len() - i,
+    {
+        proof {
+            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+        }
+        let d = defaults(&ts[i], enums);
+        let ghost prev = out@;
+        extend(&mut out, &d);
+        proof {
+            let p = xs.take(i + 1);
+            assert(p.drop_last() =~= xs.take(i as int));
+            assert(p.last() == xs[i as int]);
+            let dvs = default_vals(p, enums@);
+            assert(dvs.drop_last() == default_vals(xs.take(i as int), enums@));
+            assert(dvs.last() == default_val(xs[i as int], enums@));
+            lemma_default_vals_len(p, enums@);
+            assert(enc_seq(dvs, p, enums@) == enc_seq(dvs.drop_last(), p.drop_last(), enums@) + enc(
+                dvs.last(),
+                p.last(),
+                enums@,
+            ));
+            let a = enc_seq(default_vals(xs.take(i as int), enums@), xs.take(i as int), enums@);
+            let b = enc(default_val(xs[i as int], enums@), xs[i as int], enums@);
+            assert(out@ =~= lits(a + b));
+        }
+        i += 1;
+    }
+    proof {
+        assert(xs.take(ts@.len() as int) =~= xs);
     }
     out
 }
@@ -835,11 +1113,27 @@ pub fn select(rows: &Vec<Vec<Expr>>, idx: &Expr, fallback: &Vec<Expr>) -> (r: Op
 }
 
 /// 要素の型ごとに、スロットの列を区切る。
-pub fn split(tys: &Vec<XType>, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<Vec<Vec<Expr>>>) {
+pub fn split(tys: &Vec<XType>, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<Vec<Vec<Expr>>>)
+    ensures
+        r matches Some(parts) ==> parts@.len() == tys@.len() && forall|i: int|
+            0 <= i < tys@.len() ==> #[trigger] split_ok(parts@[i]@, slots@, xtys(tys@), i, enums@),
+{
     let mut out: Vec<Vec<Expr>> = Vec::new();
     let mut at: usize = 0;
     let mut i = 0;
+    proof {
+        lemma_xtys(tys@);
+        assert(xtys(tys@).take(0) =~= Seq::<XTy>::empty());
+    }
     while i < tys.len()
+        invariant
+            i <= tys@.len(),
+            xtys(tys@).len() == tys@.len(),
+            forall|j: int| 0 <= j < tys@.len() ==> #[trigger] xtys(tys@)[j] == xty(tys@[j]),
+            at == xoff(xtys(tys@), i as int, enums@),
+            at <= slots@.len(),
+            out@.len() == i,
+            forall|k: int| 0 <= k < i ==> #[trigger] split_ok(out@[k]@, slots@, xtys(tys@), k, enums@),
         decreases tys.len() - i,
     {
         let w = xtype_width(&tys[i], enums)?;
@@ -847,11 +1141,24 @@ pub fn split(tys: &Vec<XType>, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Optio
         if end > slots.len() {
             return None;
         }
+        proof {
+            lemma_xoff_step(xtys(tys@), i as int, enums@);
+        }
         out.push(sub_exprs(slots, at, end));
+        proof {
+            assert(split_ok(out@[i as int]@, slots@, xtys(tys@), i as int, enums@));
+        }
         at = end;
         i += 1;
     }
     Some(out)
+}
+
+/// `part` は、型の列 `ts` のスロットの列 `slots` の `i` 番目の部分である。
+pub open spec fn split_ok(part: Seq<Expr>, slots: Seq<Expr>, ts: Seq<XTy>, i: int, enums: Seq<i64>) -> bool {
+    &&& 0 <= xoff(ts, i, enums)
+    &&& xoff(ts, i, enums) + xwidth(ts[i], enums) <= slots.len()
+    &&& part == slots.subrange(xoff(ts, i, enums), xoff(ts, i, enums) + xwidth(ts[i], enums))
 }
 
 /// 構造の等しさ。Option が空なら中身は比べない。
@@ -940,6 +1247,8 @@ fn eq_parts(_parent: &XType, ts: &Vec<XType>, x: &Vec<Expr>, y: &Vec<Expr>, enum
 /// 値を型 `st` の場所に置く。値が型に属する条件と、正規形にしたスロットを返す。
 /// `t` は `st` に合うものとする。
 pub fn store(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: Option<(Expr, Vec<Expr>)>)
+    ensures
+        r matches Some((c, out)) ==> store_spec(xty(*t), slots@, sty(*st), enums@, c, out@),
     decreases t, 1nat,
 {
     match (t, st) {
@@ -947,77 +1256,233 @@ pub fn store(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: 
             if slots.len() == 0 {
                 return None;
             }
-            let c = and(
-                bin(BinOp::Le, ci(*lo), copy_expr(&slots[0])),
-                bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi)),
-            );
-            Some((c, copy_exprs(slots)))
+            let x = bin(BinOp::Le, ci(*lo), copy_expr(&slots[0]));
+            let y = bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi));
+            let c = and(copy_expr(&x), copy_expr(&y));
+            let out = copy_exprs(slots);
+            proof {
+                assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(c, n) && all_pure(out@, n) by {
+                    assert(pure_below(slots@[0], n));
+                    assert(pure_below(Expr::Const(Value::Int(*lo)), n));
+                    assert(pure_below(Expr::Const(Value::Int(*hi)), n));
+                    assert(pure_below(x, n));
+                    assert(pure_below(y, n));
+                    lemma_join_pure(Join::And, x, y, n);
+                }
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
+                    c,
+                    out@,
+                    env,
+                    ls,
+                    v,
+                    sty(*st),
+                    enums@,
+                ) by {
+                    let sv = slot_vals(slots@, env, ls);
+                    let k = v->Int_0;
+                    assert(sv[0] == Value::Int(k));
+                    assert(eval_l(slots@[0], env, ls) == Ok::<Value, ErrKind>(Value::Int(k)));
+                    assert(eval_l(Expr::Const(Value::Int(*lo)), env, ls) == Ok::<Value, ErrKind>(Value::Int(*lo)));
+                    assert(eval_l(Expr::Const(Value::Int(*hi)), env, ls) == Ok::<Value, ErrKind>(Value::Int(*hi)));
+                    assert(eval_l(x, env, ls) == Ok::<Value, ErrKind>(Value::Bool(*lo <= k)));
+                    assert(eval_l(y, env, ls) == Ok::<Value, ErrKind>(Value::Bool(k <= *hi)));
+                    lemma_and(x, y, env, ls, *lo <= k, k <= *hi);
+                    assert(slot_vals(out@, env, ls) =~= enc(v, sty(*st), enums@));
+                }
+            }
+            Some((c, out))
         },
         (XType::Tuple(xs), SType::Tuple(ts)) => {
             proof {
                 assert(decreases_to!(*t => *xs));
             }
-            store_parts(t, xs, ts, slots, enums)
+            let (c, out) = store_parts(t, xs, ts, slots, enums)?;
+            proof {
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
+                    c,
+                    out@,
+                    env,
+                    ls,
+                    v,
+                    sty(*st),
+                    enums@,
+                ) by {
+                    assert(models_seq(slot_vals(slots@, env, ls), v->Tuple_0, xtys(xs@), enums@));
+                }
+            }
+            Some((c, out))
         },
         (XType::Record(_, xs), SType::Record(_, ts)) => {
             proof {
                 assert(decreases_to!(*t => *xs));
             }
-            store_parts(t, xs, ts, slots, enums)
+            let (c, out) = store_parts(t, xs, ts, slots, enums)?;
+            proof {
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
+                    c,
+                    out@,
+                    env,
+                    ls,
+                    v,
+                    sty(*st),
+                    enums@,
+                ) by {
+                    assert(models_seq(slot_vals(slots@, env, ls), v->Tuple_0, xtys(xs@), enums@));
+                }
+            }
+            Some((c, out))
         },
         (XType::Option(x), SType::Option(inner)) => {
-            if slots.len() == 0 {
-                return None;
+            proof {
+                assert(decreases_to!(*t => **x));
             }
-            let (c, payload) = store(x, &sub_exprs(slots, 1, slots.len()), inner, enums)?;
-            let defs = defaults(inner, enums);
-            let mut out: Vec<Expr> = Vec::new();
-            out.push(copy_expr(&slots[0]));
-            let n = if payload.len() < defs.len() {
-                payload.len()
-            } else {
-                defs.len()
-            };
-            let mut i = 0;
-            while i < n
-                invariant
-                    n <= payload.len(),
-                    n <= defs.len(),
-                    slots.len() > 0,
-                decreases n - i,
-            {
-                out.push(ite(copy_expr(&slots[0]), copy_expr(&payload[i]), copy_expr(&defs[i])));
-                i += 1;
-            }
-            Some((implies(copy_expr(&slots[0]), c), out))
+            store_option(t, x, slots, st, inner, enums)
         },
-        _ => Some((cb(true), copy_exprs(slots))),
+        _ => {
+            let c = cb(true);
+            let out = copy_exprs(slots);
+            proof {
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
+                    c,
+                    out@,
+                    env,
+                    ls,
+                    v,
+                    sty(*st),
+                    enums@,
+                ) by {
+                    assert(slot_vals(out@, env, ls) =~= enc(v, sty(*st), enums@));
+                }
+            }
+            Some((c, out))
+        },
     }
+}
+
+fn store_option(_parent: &XType, x: &XType, slots: &Vec<Expr>, _st: &SType, inner: &SType, enums: &Vec<i64>) -> (r:
+    Option<(Expr, Vec<Expr>)>)
+    requires
+        decreases_to!(*_parent => *x),
+        *_parent == XType::Option(Box::new(*x)),
+        *_st == SType::Option(Box::new(*inner)),
+    ensures
+        r matches Some((c, out)) ==> store_spec(xty(*_parent), slots@, sty(*_st), enums@, c, out@),
+    decreases _parent, 0nat,
+{
+    if slots.len() == 0 {
+        return None;
+    }
+    let rest = sub_exprs(slots, 1, slots.len());
+    let (c, payload) = store(x, &rest, inner, enums)?;
+    let defs = defaults(inner, enums);
+    if payload.len() != defs.len() {
+        return None;
+    }
+    let tag = copy_expr(&slots[0]);
+    let mut out: Vec<Expr> = Vec::new();
+    out.push(copy_expr(&tag));
+    let n = defs.len();
+    let mut i = 0;
+    while i < n
+        invariant
+            n == payload@.len(),
+            n == defs@.len(),
+            i <= n,
+            out@.len() == 1 + i,
+            out@[0] == tag,
+            forall|j: int| 0 <= j < i ==> #[trigger] out@[1 + j] == ite_s(tag, payload@[j], defs@[j]),
+        decreases n - i,
+    {
+        out.push(ite(copy_expr(&tag), copy_expr(&payload[i]), copy_expr(&defs[i])));
+        i += 1;
+    }
+    let cond = implies(copy_expr(&tag), copy_expr(&c));
+    proof {
+        let dv = enc(default_val(sty(*inner), enums@), sty(*inner), enums@);
+        lemma_default_len(sty(*inner), enums@);
+        assert forall|m: nat| #[trigger] all_pure(slots@, m) implies pure_below(cond, m) && all_pure(out@, m) by {
+            assert(pure_below(slots@[0], m));
+            lemma_sub_pure(slots@, 1, slots@.len() as int, m);
+            assert(all_pure(rest@, m));
+            assert(all_pure(payload@, m));
+            lemma_lits(dv, arbitrary(), arbitrary());
+            assert(all_pure(defs@, m));
+            lemma_option_out_pure(tag, payload@, defs@, out@, m);
+        }
+        assert forall|env: Env, ls: Seq<Value>, v: SVal|
+            fits_s(xty(*_parent), sty(*_st)) && #[trigger] denotes(slots@, env, ls, v, xty(*_parent), enums@) implies store_ok(
+            cond,
+            out@,
+            env,
+            ls,
+            v,
+            sty(*_st),
+            enums@,
+        ) by {
+            let sv = slot_vals(slots@, env, ls);
+            lemma_clean_pure(slots@, env, ls);
+            let m = ls.len();
+            lemma_sub_pure(slots@, 1, slots@.len() as int, m);
+            assert(all_pure(rest@, m));
+            lemma_lits(dv, env, ls);
+            assert(eval_l(tag, env, ls) == Ok::<Value, ErrKind>(sv[0]));
+            assert(pure_below(tag, m));
+            match v {
+                SVal::Some(w) => {
+                    lemma_clean_sub(slots@, env, ls, 1, slots@.len() as int);
+                    assert(sv.subrange(1, sv.len() as int) =~= sv.drop_first());
+                    assert(denotes(rest@, env, ls, *w, xty(*x), enums@));
+                    assert(store_ok(c, payload@, env, ls, *w, sty(*inner), enums@));
+                    if member(*w, sty(*inner), enums@) {
+                        lemma_option_out(tag, payload@, defs@, out@, env, ls, true);
+                        assert(slot_vals(out@, env, ls) =~= enc(v, sty(*_st), enums@));
+                    }
+                },
+                _ => {
+                    assert(all_pure(payload@, m));
+                    lemma_option_out(tag, payload@, defs@, out@, env, ls, false);
+                    assert(slot_vals(out@, env, ls) =~= enc(v, sty(*_st), enums@));
+                },
+            }
+        }
+    }
+    Some((cond, out))
 }
 
 fn store_parts(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r:
     Option<(Expr, Vec<Expr>)>)
     requires
         decreases_to!(*_parent => *xs),
+    ensures
+        r matches Some((c, out)) ==> store_parts_spec(xtys(xs@), slots@, stys(ts@), enums@, c, out@),
     decreases _parent, 0nat,
 {
     let parts = split(xs, slots, enums)?;
-    let mut n = xs.len();
-    if ts.len() < n {
-        n = ts.len();
+    if xs.len() != ts.len() {
+        return None;
     }
-    if parts.len() < n {
-        n = parts.len();
-    }
+    let n = xs.len();
     let mut conds: Vec<Expr> = Vec::new();
     let mut out: Vec<Expr> = Vec::new();
+    let ghost mut outs: Seq<Seq<Expr>> = Seq::empty();
     let mut i = 0;
     while i < n
         invariant
             decreases_to!(*_parent => *xs),
-            n <= xs.len(),
-            n <= ts.len(),
-            n <= parts.len(),
+            n == xs@.len(),
+            n == ts@.len(),
+            n == parts@.len(),
+            i <= n,
+            conds@.len() == i,
+            outs.len() == i,
+            out@ == concat(outs),
+            forall|k: int|
+                0 <= k < i ==> #[trigger] store_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, conds@[k], outs[k]),
+            forall|k: int| 0 <= k < xs@.len() ==> #[trigger] split_ok(parts@[k]@, slots@, xtys(xs@), k, enums@),
         decreases n - i,
     {
         proof {
@@ -1025,20 +1490,100 @@ fn store_parts(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Ex
         }
         let (c, s) = store(&xs[i], &parts[i], &ts[i], enums)?;
         conds.push(c);
-        let mut j = 0;
-        while j < s.len()
-            decreases s.len() - j,
-        {
-            out.push(copy_expr(&s[j]));
-            j += 1;
+        extend(&mut out, &s);
+        proof {
+            lemma_concat_push(outs, s@);
+            outs = outs.push(s@);
+            assert forall|k: int|
+                0 <= k < i + 1 implies #[trigger] store_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, conds@[k], outs[k]) by {
+                if k < i {
+                }
+            }
         }
         i += 1;
     }
-    Some((all_of(&conds), out))
+    let c = all_of(&conds);
+    proof {
+        lemma_xtys(xs@);
+        lemma_stys(ts@);
+        assert forall|m: nat| #[trigger] all_pure(slots@, m) implies pure_below(c, m) && all_pure(out@, m) by {
+            assert forall|k: int| 0 <= k < n implies #[trigger] all_pure(outs[k], m) && pure_below(conds@[k], m) by {
+                assert(split_ok(parts@[k]@, slots@, xtys(xs@), k, enums@));
+                lemma_sub_pure(slots@, xoff(xtys(xs@), k, enums@), xoff(xtys(xs@), k, enums@) + xwidth(xtys(xs@)[k], enums@), m);
+                assert(all_pure(parts@[k]@, m));
+                assert(store_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, conds@[k], outs[k]));
+            }
+            assert forall|k: int| 0 <= k < conds@.len() implies pure_below(#[trigger] conds@[k], m) by {
+                assert(all_pure(outs[k], m) && pure_below(conds@[k], m));
+            }
+            lemma_tree_pure(conds@, bool_lit(true), Join::And, m);
+            assert forall|k: int| 0 <= k < outs.len() implies #[trigger] all_pure(outs[k], m) by {
+                assert(all_pure(outs[k], m) && pure_below(conds@[k], m));
+            }
+            lemma_concat_pure(outs, m);
+        }
+        assert forall|env: Env, ls: Seq<Value>, vs: Seq<SVal>|
+            fits_all_s(xtys(xs@), stys(ts@)) && clean(slots@, env, ls) && #[trigger] models_seq(
+                slot_vals(slots@, env, ls),
+                vs,
+                xtys(xs@),
+                enums@,
+            ) implies {
+            &&& eval_l(c, env, ls) == Ok::<Value, ErrKind>(Value::Bool(members(vs, stys(ts@), enums@)))
+            &&& members(vs, stys(ts@), enums@) ==> clean(out@, env, ls) && slot_vals(out@, env, ls) == enc_seq(
+                vs,
+                stys(ts@),
+                enums@,
+            )
+        } by {
+            let xt = xtys(xs@);
+            let st = stys(ts@);
+            lemma_fits_all(xt, st);
+            assert forall|k: int| 0 <= k < n implies #[trigger] store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@) by {
+                lemma_denotes_part(slots@, env, ls, vs, xt, k, enums@);
+                assert(split_ok(parts@[k]@, slots@, xt, k, enums@));
+                assert(fits_s(xt[k], st[k]));
+                assert(store_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, conds@[k], outs[k]));
+            }
+            assert forall|k: int| 0 <= k < conds@.len() implies bool_val(#[trigger] eval_l(conds@[k], env, ls)) by {
+                assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
+            }
+            lemma_all_of(conds@, env, ls);
+            lemma_members(vs, st, enums@);
+            lemma_models_seq_parts(slot_vals(slots@, env, ls), vs, xt, enums@);
+            if all_true(conds@, env, ls) {
+                assert forall|k: int| 0 <= k < st.len() implies #[trigger] member(vs[k], st[k], enums@) by {
+                    assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
+                    assert(eval_l(conds@[k], env, ls) == Ok::<Value, ErrKind>(Value::Bool(true)));
+                }
+            }
+            if members(vs, st, enums@) {
+                assert forall|k: int| 0 <= k < conds@.len() implies #[trigger] eval_l(conds@[k], env, ls) == Ok::<
+                    Value,
+                    ErrKind,
+                >(Value::Bool(true)) by {
+                    assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
+                    assert(member(vs[k], st[k], enums@));
+                }
+                assert forall|k: int| 0 <= k < outs.len() implies #[trigger] clean(outs[k], env, ls) && slot_vals(
+                    outs[k],
+                    env,
+                    ls,
+                ) == enc(vs[k], st[k], enums@) by {
+                    assert(store_ok(conds@[k], outs[k], env, ls, vs[k], st[k], enums@));
+                    assert(member(vs[k], st[k], enums@));
+                }
+                lemma_concat_enc(outs, vs, st, env, ls, enums@);
+            }
+        }
+    }
+    Some((c, out))
 }
 
 /// 要素の型 `st` での番号。値が型に属するときに限って評価する。
 pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: Option<Expr>)
+    ensures
+        r matches Some(e) ==> rank_spec(xty(*t), slots@, sty(*st), enums@, e),
     decreases t, 1nat,
 {
     match (t, st) {
@@ -1046,32 +1591,131 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             if slots.len() == 0 {
                 return None;
             }
-            Some(offset_rank(copy_expr(&slots[0]), *lo))
+            let e = offset_rank(copy_expr(&slots[0]), *lo);
+            proof {
+                assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(e, n) by {
+                    assert(pure_below(slots@[0], n));
+                    assert(pure_below(int_lit(*lo), n));
+                }
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
+                        v,
+                        sty(*st),
+                        enums@,
+                    ) && keys(sty(*st), enums@) is Some implies eval_l(e, env, ls) == Ok::<Value, ErrKind>(
+                    Value::Int(rank(v, sty(*st), enums@) as i64),
+                ) by {
+                    let sv = slot_vals(slots@, env, ls);
+                    assert(eval_l(slots@[0], env, ls) == Ok::<Value, ErrKind>(sv[0]));
+                }
+            }
+            Some(e)
         },
         (XType::Bool, _) | (XType::Enum(_), _) => {
             if slots.len() == 0 {
                 return None;
             }
-            Some(Expr::Code(Box::new(copy_expr(&slots[0]))))
+            let e = Expr::Code(Box::new(copy_expr(&slots[0])));
+            proof {
+                assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(e, n) by {
+                    assert(pure_below(slots@[0], n));
+                }
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
+                        v,
+                        sty(*st),
+                        enums@,
+                    ) && keys(sty(*st), enums@) is Some implies eval_l(e, env, ls) == Ok::<Value, ErrKind>(
+                    Value::Int(rank(v, sty(*st), enums@) as i64),
+                ) by {
+                    let sv = slot_vals(slots@, env, ls);
+                    assert(eval_l(slots@[0], env, ls) == Ok::<Value, ErrKind>(sv[0]));
+                }
+            }
+            Some(e)
         },
         (XType::Tuple(xs), SType::Tuple(ts)) => {
             proof {
                 assert(decreases_to!(*t => *xs));
             }
-            mixed(t, xs, ts, slots, enums)
+            let e = mixed(t, xs, ts, slots, enums)?;
+            proof {
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
+                        v,
+                        sty(*st),
+                        enums@,
+                    ) && keys(sty(*st), enums@) is Some implies eval_l(e, env, ls) == Ok::<Value, ErrKind>(
+                    Value::Int(rank(v, sty(*st), enums@) as i64),
+                ) by {
+                    assert(models_seq(slot_vals(slots@, env, ls), v->Tuple_0, xtys(xs@), enums@));
+                }
+            }
+            Some(e)
         },
         (XType::Record(_, xs), SType::Record(_, ts)) => {
             proof {
                 assert(decreases_to!(*t => *xs));
             }
-            mixed(t, xs, ts, slots, enums)
+            let e = mixed(t, xs, ts, slots, enums)?;
+            proof {
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
+                        v,
+                        sty(*st),
+                        enums@,
+                    ) && keys(sty(*st), enums@) is Some implies eval_l(e, env, ls) == Ok::<Value, ErrKind>(
+                    Value::Int(rank(v, sty(*st), enums@) as i64),
+                ) by {
+                    assert(models_seq(slot_vals(slots@, env, ls), v->Tuple_0, xtys(xs@), enums@));
+                }
+            }
+            Some(e)
         },
         (XType::Option(x), SType::Option(inner)) => {
             if slots.len() == 0 {
                 return None;
             }
-            let payload = rank_expr(x, &sub_exprs(slots, 1, slots.len()), inner, enums)?;
-            Some(option_rank(copy_expr(&slots[0]), payload))
+            let rest = sub_exprs(slots, 1, slots.len());
+            let payload = rank_expr(x, &rest, inner, enums)?;
+            let tag = copy_expr(&slots[0]);
+            let e = option_rank(copy_expr(&tag), copy_expr(&payload));
+            proof {
+                assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(e, n) by {
+                    assert(pure_below(slots@[0], n));
+                    lemma_sub_pure(slots@, 1, slots@.len() as int, n);
+                    assert(all_pure(rest@, n));
+                    assert(pure_below(payload, n));
+                    assert(pure_below(int_lit(1), n));
+                    assert(pure_below(int_lit(0), n));
+                    assert(pure_below(Expr::Bin(BinOp::Add, Box::new(int_lit(1)), Box::new(payload)), n));
+                }
+                assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                    fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
+                        v,
+                        sty(*st),
+                        enums@,
+                    ) && keys(sty(*st), enums@) is Some implies eval_l(e, env, ls) == Ok::<Value, ErrKind>(
+                    Value::Int(rank(v, sty(*st), enums@) as i64),
+                ) by {
+                    let sv = slot_vals(slots@, env, ls);
+                    assert(eval_l(tag, env, ls) == Ok::<Value, ErrKind>(sv[0]));
+                    match v {
+                        SVal::Some(w) => {
+                            lemma_clean_sub(slots@, env, ls, 1, slots@.len() as int);
+                            assert(sv.subrange(1, sv.len() as int) =~= sv.drop_first());
+                            assert(denotes(rest@, env, ls, *w, xty(**x), enums@));
+                            assert(keys(sty(**inner), enums@) is Some);
+                            lemma_rank_in_domain(*w, sty(**inner), enums@);
+                            assert(eval_l(payload, env, ls) == Ok::<Value, ErrKind>(
+                                Value::Int(rank(*w, sty(**inner), enums@) as i64),
+                            ));
+                        },
+                        _ => {},
+                    }
+                }
+            }
+            Some(e)
         },
         _ => Some(ci(0)),
     }
@@ -1082,51 +1726,140 @@ fn mixed(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Expr>, e
 >)
     requires
         decreases_to!(*_parent => *xs),
+    ensures
+        r matches Some(e) ==> mixed_spec(xtys(xs@), slots@, stys(ts@), enums@, e),
     decreases _parent, 0nat,
 {
-    let n = if xs.len() < ts.len() {
-        xs.len()
-    } else {
-        ts.len()
-    };
+    let parts = split(xs, slots, enums)?;
+    if xs.len() != ts.len() {
+        return None;
+    }
+    let n = xs.len();
     let mut ranks: Vec<(Expr, i64)> = Vec::new();
-    let mut at: usize = 0;
     let mut i = 0;
     while i < n
         invariant
             decreases_to!(*_parent => *xs),
-            n <= xs.len(),
-            n <= ts.len(),
+            n == xs@.len(),
+            n == ts@.len(),
+            n == parts@.len(),
+            i <= n,
+            ranks@.len() == i,
+            forall|k: int|
+                0 <= k < i ==> #[trigger] rank_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, ranks@[k].0) && keys(
+                    sty(ts@[k]),
+                    enums@,
+                ) is Some && ranks@[k].1 as int == radix(sty(ts@[k]), enums@),
+            forall|k: int| 0 <= k < xs@.len() ==> #[trigger] split_ok(parts@[k]@, slots@, xtys(xs@), k, enums@),
         decreases n - i,
     {
         proof {
             vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
         }
-        let w = xtype_width(&xs[i], enums)?;
-        let end = at.checked_add(w)?;
-        if end > slots.len() {
-            return None;
-        }
-        let k = rank_expr(&xs[i], &sub_exprs(slots, at, end), &ts[i], enums)?;
-        at = end;
-        let radix = match keys_exec(&ts[i], enums) {
+        let k = rank_expr(&xs[i], &parts[i], &ts[i], enums)?;
+        let base = match keys_exec(&ts[i], enums) {
             Some(k) => k as i64,
-            None => 1,
+            None => return None,
         };
-        ranks.push((k, radix));
+        ranks.push((k, base));
+        proof {
+            assert forall|j: int|
+                0 <= j < i + 1 implies #[trigger] rank_spec(xty(xs@[j]), parts@[j]@, sty(ts@[j]), enums@, ranks@[j].0)
+                && keys(sty(ts@[j]), enums@) is Some && ranks@[j].1 as int == radix(sty(ts@[j]), enums@) by {
+                if j < i {
+                }
+            }
+        }
         i += 1;
     }
-    Some(mixed_rank_expr(&ranks))
+    let e = mixed_rank_expr(&ranks);
+    proof {
+        lemma_xtys(xs@);
+        lemma_stys(ts@);
+        assert forall|m: nat| #[trigger] all_pure(slots@, m) implies pure_below(e, m) by {
+            assert forall|k: int| 0 <= k < ranks@.len() implies pure_below(#[trigger] ranks@[k].0, m) by {
+                assert(split_ok(parts@[k]@, slots@, xtys(xs@), k, enums@));
+                lemma_sub_pure(slots@, xoff(xtys(xs@), k, enums@), xoff(xtys(xs@), k, enums@) + xwidth(xtys(xs@)[k], enums@), m);
+                assert(all_pure(parts@[k]@, m));
+                assert(rank_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, ranks@[k].0));
+            }
+            assert(ranks_pure(ranks@, m));
+        }
+        assert forall|env: Env, ls: Seq<Value>, vs: Seq<SVal>|
+            fits_all_s(xtys(xs@), stys(ts@)) && clean(slots@, env, ls) && #[trigger] models_seq(
+                slot_vals(slots@, env, ls),
+                vs,
+                xtys(xs@),
+                enums@,
+            ) && members(vs, stys(ts@), enums@) && keys_product(stys(ts@), enums@) is Some implies eval_l(e, env, ls)
+            == Ok::<Value, ErrKind>(Value::Int(rank_seq(vs, stys(ts@), enums@) as i64)) by {
+            let xt = xtys(xs@);
+            let st = stys(ts@);
+            lemma_fits_all(xt, st);
+            lemma_members(vs, st, enums@);
+            lemma_models_seq_parts(slot_vals(slots@, env, ls), vs, xt, enums@);
+            assert forall|k: int|
+                0 <= k < st.len() implies #[trigger] eval_l(ranks@[k].0, env, ls) == Ok::<Value, ErrKind>(
+                Value::Int(rank(vs[k], st[k], enums@) as i64),
+            ) && ranks@[k].1 as int == radix(st[k], enums@) by {
+                lemma_denotes_part(slots@, env, ls, vs, xt, k, enums@);
+                assert(split_ok(parts@[k]@, slots@, xt, k, enums@));
+                assert(fits_s(xt[k], st[k]));
+                assert(member(vs[k], st[k], enums@));
+                assert(rank_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, ranks@[k].0));
+            }
+            lemma_mixed_eval(ranks@, vs, st, env, ls, n as nat, enums@);
+            assert(vs.take(n as int) =~= vs);
+            assert(st.take(n as int) =~= st);
+        }
+    }
+    Some(e)
 }
 
 /// 値が要素の型に属すれば、その番号。属さなければ -1。
-pub fn rank_or_neg(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: Option<Expr>) {
+pub fn rank_or_neg(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: Option<Expr>)
+    ensures
+        r matches Some(e) ==> rank_neg_spec(xty(*t), slots@, sty(*st), enums@, e),
+{
     let (in_dom, _) = store(t, slots, st, enums)?;
     let r = rank_expr(t, slots, st, enums)?;
     if is_bool_lit(&in_dom, true) {
+        proof {
+            assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && keys(
+                    sty(*st),
+                    enums@,
+                ) is Some implies eval_l(r, env, ls) == Ok::<Value, ErrKind>(Value::Int(if member(v, sty(*st), enums@) {
+                rank(v, sty(*st), enums@) as i64
+            } else {
+                -1i64
+            })) by {
+                assert(eval_l(in_dom, env, ls) == Ok::<Value, ErrKind>(Value::Bool(true)));
+            }
+        }
         Some(r)
     } else {
-        Some(ite(in_dom, r, ci(-1)))
+        let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(-1));
+        proof {
+            assert forall|m: nat| #[trigger] all_pure(slots@, m) implies pure_below(e, m) by {
+                assert(pure_below(in_dom, m));
+                assert(pure_below(r, m));
+                assert(pure_below(int_lit(-1i64), m));
+            }
+            assert forall|env: Env, ls: Seq<Value>, v: SVal|
+                fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && keys(
+                    sty(*st),
+                    enums@,
+                ) is Some implies eval_l(e, env, ls) == Ok::<Value, ErrKind>(Value::Int(if member(v, sty(*st), enums@) {
+                rank(v, sty(*st), enums@) as i64
+            } else {
+                -1i64
+            })) by {
+                assert(eval_l(in_dom, env, ls) == Ok::<Value, ErrKind>(Value::Bool(member(v, sty(*st), enums@))));
+                assert(eval_l(int_lit(-1i64), env, ls) == Ok::<Value, ErrKind>(Value::Int(-1i64)));
+            }
+        }
+        Some(e)
     }
 }
 

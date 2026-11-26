@@ -147,7 +147,7 @@ pub proof fn lemma_rank_in_domain(v: SVal, t: STy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_rank_seq_in_product(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
+pub proof fn lemma_rank_seq_in_product(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
     requires
         members(vs, ts, enums),
         keys_product(ts, enums) is Some,

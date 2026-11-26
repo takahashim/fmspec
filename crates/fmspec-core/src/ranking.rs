@@ -4,6 +4,8 @@
 use crate::eval::{as_bool, eval_l, int_result, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 use crate::model::{BinOp, Expr, Value};
+#[cfg(verus_keep_ghost)]
+use crate::preserve::{pure_below, ranks_pure};
 use vstd::prelude::*;
 
 verus! {
@@ -11,6 +13,11 @@ verus! {
 /// 下端が `min` の整数の区間での番号。
 pub fn offset_rank(value: Expr, min: i64) -> (out: Expr)
     ensures
+        out == if min == 0 {
+            value
+        } else {
+            Expr::Bin(BinOp::Sub, Box::new(value), Box::new(Expr::Const(Value::Int(min))))
+        },
         forall|env: Env, locals: Seq<Value>|
             #[trigger] eval_l(out, env, locals) ==
                 match eval_l(value, env, locals) {
@@ -36,6 +43,11 @@ pub fn offset_rank(value: Expr, min: i64) -> (out: Expr)
 /// TupleとRecordの番号に、要素の番号を1桁加える（混合基数）。
 pub fn extend_rank(prefix: Expr, radix: i64, component: Expr) -> (out: Expr)
     ensures
+        out == Expr::Bin(
+            BinOp::Add,
+            Box::new(Expr::Bin(BinOp::Mul, Box::new(prefix), Box::new(Expr::Const(Value::Int(radix))))),
+            Box::new(component),
+        ),
         forall|env: Env, locals: Seq<Value>|
             #[trigger] eval_l(out, env, locals) ==
                 match eval_l(prefix, env, locals) {
@@ -91,17 +103,24 @@ pub open spec fn mixed_rank_eval(
 pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
     ensures forall|env: Env, locals: Seq<Value>|
         #[trigger] eval_l(out, env, locals) == mixed_rank_eval(parts@, parts@.len() as nat, env, locals),
+        forall|n: nat| #[trigger] ranks_pure(parts@, n) ==> pure_below(out, n),
 {
     if parts.len() == 0 {
         return Expr::Const(Value::Int(0));
     }
     let mut out = copy_expr(&parts[0].0);
     let mut used = 1;
+    proof {
+        assert forall|n: nat| #[trigger] ranks_pure(parts@, n) implies pure_below(out, n) by {
+            assert(pure_below(parts@[0].0, n));
+        }
+    }
     while used < parts.len()
         invariant
             1 <= used <= parts@.len(),
             forall|env: Env, locals: Seq<Value>|
                 #[trigger] eval_l(out, env, locals) == mixed_rank_eval(parts@, used as nat, env, locals),
+            forall|n: nat| #[trigger] ranks_pure(parts@, n) ==> pure_below(out, n),
         decreases parts@.len() - used,
     {
         let _previous = used;
@@ -109,6 +128,19 @@ pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
         out = extend_rank(out, parts[used].1, copy_expr(&parts[used].0));
         used = used + 1;
         proof {
+            assert forall|n: nat| #[trigger] ranks_pure(parts@, n) implies pure_below(out, n) by {
+                assert(pure_below(_prefix, n));
+                assert(pure_below(parts@[_previous as int].0, n));
+                assert(pure_below(Expr::Const(Value::Int(parts@[_previous as int].1)), n));
+                assert(pure_below(
+                    Expr::Bin(
+                        BinOp::Mul,
+                        Box::new(_prefix),
+                        Box::new(Expr::Const(Value::Int(parts@[_previous as int].1))),
+                    ),
+                    n,
+                ));
+            }
             assert forall|env: Env, locals: Seq<Value>|
                 #[trigger] eval_l(out, env, locals) == mixed_rank_eval(parts@, used as nat, env, locals) by {
                 reveal(mixed_rank_eval);
@@ -134,6 +166,11 @@ pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
 /// Optionの番号。空を0とし、中身の番号は値があるときだけ評価する。
 pub fn option_rank(present: Expr, payload: Expr) -> (out: Expr)
     ensures
+        out == Expr::Ite(
+            Box::new(present),
+            Box::new(Expr::Bin(BinOp::Add, Box::new(Expr::Const(Value::Int(1))), Box::new(payload))),
+            Box::new(Expr::Const(Value::Int(0))),
+        ),
         forall|env: Env, locals: Seq<Value>|
             #[trigger] eval_l(out, env, locals) == match as_bool(eval_l(present, env, locals)) {
                 Err(error) => Err(error),

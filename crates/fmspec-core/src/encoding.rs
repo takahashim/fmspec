@@ -712,7 +712,7 @@ pub proof fn lemma_default_len(t: STy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_default_vals_len(ts: Seq<STy>, enums: Seq<i64>)
+pub proof fn lemma_default_vals_len(ts: Seq<STy>, enums: Seq<i64>)
     ensures
         default_vals(ts, enums).len() == ts.len(),
         enc_seq(default_vals(ts, enums), ts, enums).len() == width_sum(ts, enums),
@@ -805,7 +805,7 @@ proof fn lemma_enc_seq_len(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_enc_rows_len(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>)
+pub proof fn lemma_enc_rows_len(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>)
     requires
         map_rows_member(rows, t, enums),
     ensures
