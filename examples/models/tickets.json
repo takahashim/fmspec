@@ -1,0 +1,26 @@
+{
+  "ir_version": 1,
+  "name": "tickets",
+  "states": [
+    {"id": 0, "name": "sold", "type": {"int": {"min": 0, "max": 4}}, "initial": {"int": 0}}
+  ],
+  "actions": [
+    {
+      "name": "purchase",
+      "params": [{"name": "quantity", "type": {"int": {"min": 1, "max": 2}}}],
+      "choices": [],
+      "guard": {"le": [{"add": [{"var": 0}, {"param": 0}]}, {"int": 3}]},
+      "updates": [{"target": 0, "expr": {"add": [{"var": 0}, {"param": 0}]}}]
+    },
+    {
+      "name": "cancel",
+      "params": [],
+      "choices": [],
+      "guard": {"gt": [{"var": 0}, {"int": 0}]},
+      "updates": [{"target": 0, "expr": {"sub": [{"var": 0}, {"int": 1}]}}]
+    }
+  ],
+  "invariants": [
+    {"name": "capacity_respected", "expr": {"le": [{"var": 0}, {"int": 3}]}}
+  ]
+}

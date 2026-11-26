@@ -1,0 +1,9 @@
+[package]
+name = "fmspec-search"
+description = "fmspec の未検証の探索器。証拠を生成するだけで、判定は中核の判定ゲートが返す"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fmspec-core = { path = "../fmspec-core" }
