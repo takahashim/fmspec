@@ -11,3 +11,5 @@ gem "rake"
 # テスト用のRailsアプリケーション（test/support）が使う。
 gem "railties", ">= 7.1"
 gem "sqlite3", ">= 2.1"
+# 分離レベル別のテスト（test/isolation_test.rb）が使う。PostgreSQL に接続できなければ、そのテストは skip する。
+gem "pg", ">= 1.5"

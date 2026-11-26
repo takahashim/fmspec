@@ -202,6 +202,16 @@ module Fmspec
 
       private
 
+      # プロセスは、それぞれ別のスレッドと接続で動く。テストのスレッドの接続のトランザクションでは、
+      # プロセスの接続での変更は戻らないので、:transaction では隔離できない（仕様書 §12.4）。
+      def validate!
+        super
+        return if processes.empty? || @context_options[:isolation] != :transaction
+
+        raise BuildError, "process を使う binding は、isolation: :transaction では隔離できません。" \
+                          ":deletion と専用のデータ、または専用のDBを使います"
+      end
+
       # setup は Context の開始で代えられるので、省略を許す。
       def setup_required? = false
     end

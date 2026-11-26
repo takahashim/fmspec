@@ -139,4 +139,22 @@ class ContextTest < Minitest::Test
     error = assert_raises(Fmspec::BuildError) { Fmspec::Rails.bind(Orders, records: [Order]) { observe(:count) { 0 } } }
     assert_match(/command が登録されていない操作があります: create/, error.message)
   end
+
+  Workers = Fmspec.define(:workers) do
+    state :count, int(0..1), initial: 0
+    process(:worker) { step(:create) { |s| update count: s.count + 1 } }
+  end
+
+  def test_processes_cannot_be_isolated_by_a_transaction
+    bind = lambda do |isolation|
+      Fmspec::Rails.bind(Workers, records: [Order], isolation: isolation) do
+        process(:worker) { step(:create) { |_c| Order.create!(owner_id: 0) } }
+        observe(:count) { |_c| Order.count }
+      end
+    end
+    error = assert_raises(Fmspec::BuildError) { bind.call(:transaction) }
+    assert_match(/isolation: :transaction では隔離できません/, error.message)
+    # 複数の接続での実行は、PostgreSQL を使う isolation_test.rb で確かめる。
+    assert_kind_of Fmspec::Binding, bind.call(:deletion)
+  end
 end

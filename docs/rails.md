@@ -131,6 +131,50 @@ Checkout.test(binding, cases: 300, steps: 12).assert_passed!
 
 メモリ上のSQLiteのように、接続ごとに別のDBになる構成では、複数の接続を使うテストはできない。
 
+## 並行処理と分離レベル
+
+並行するトランザクションは、仕様の `process` と binding の `process` で検査する（[dsl.md](dsl.md) の「並行するプロセス」と「並行するプロセスの実装」）。
+各インスタンスは専用のスレッドで動くので、DBの接続もインスタンスごとに分けて持てる。
+ステップはテストが選んだ順に1つずつ実行するので、反例のスケジュールを実DBで再現できる。
+
+```ruby
+binding = Fmspec::Rails.bind(Withdrawal, records: [Account], isolation: :deletion, time: false) do
+  setup { |c| c[:account] = Account.create!(balance: 2) }
+  process :withdraw do
+    # インスタンスのスレッドで接続を取り、トランザクションを始める。
+    setup { |c, _id| Teller.new(c[:account].id, "REPEATABLE READ") }
+    teardown(&:close)
+    step(:read, method: :read)
+    step(:write, method: :write)
+    step(:commit, method: :commit)
+  end
+  observe(:balance) { |c| c[:account].reload.balance }
+end
+```
+
+分離レベル、ロック、制約は、仕様のステップのguardと更新で書く仮定である。
+エンジンがDBの意味を知っているわけではない。
+仮定が実DBと合っているかは、適合性検査で確かめる。
+
+- 仕様より強い分離（仕様は成功を求めるが、実DBは直列化に失敗する）や、仕様より弱い分離（仕様は直列化の失敗を求めるが、実DBは成功する）は、戻り値の不一致として見つかる。
+- 仕様が書き落としたロックで、実DBのステップが待たされると、そのスケジュールは再現できない。ケースは未完了（`:inconclusive`、理由は `:step_timeout`）になる。
+
+プロセスの接続での変更は、テストのスレッドの接続のトランザクションでは戻らない。
+そのため、`process` を使う binding に `isolation: :transaction` は使えず、`Fmspec::BuildError` になる。
+`:deletion` と専用のデータ、または専用のDBを使う。
+
+`fmspec-rails/test/isolation_test.rb` に、PostgreSQLでの例がある。
+2つのトランザクションが同じ口座から1ずつ引き出す実装を、分離レベルを変えて動かし、分離レベルごとの仕様と照合する。
+
+| 実DBの分離レベル | READ COMMITTED の仕様 | スナップショットの仕様 |
+|---|---|---|
+| READ COMMITTED | 適合。仕様のとおりに更新が失われ、不変条件の違反（`:model_violation`）に至る | 不適合。直列化の失敗を求める書き込みが成功する |
+| REPEATABLE READ、SERIALIZABLE | 不適合。成功を求める書き込みが直列化に失敗する | 適合（`:passed`）。仕様の状態と遷移をすべて覆う |
+
+行のロックを書き落とした仕様では、待たされる書き込みを含むスケジュールが `:step_timeout` になる。
+このテストは環境変数 `FMSPEC_PG_DATABASE`（既定は `fmspec_rails_test`）と `FMSPEC_PG_HOST` のDBを使い、なければ作る。
+PostgreSQLに接続できなければskipする。
+
 ## 代表例と変異
 
 `fmspec-rails/test` に、注文の決済のRailsアプリケーションと、その適合性検査がある。
@@ -147,6 +191,5 @@ Checkout.test(binding, cases: 300, steps: 12).assert_passed!
 
 ## 未対応
 
-- 並行リクエストとDBの分離レベル（ロードマップの段階7）。
 - 仕様書§12.1の `requires`、`modifies`。
 - コントローラやジョブの雛形からのBindingの生成。
