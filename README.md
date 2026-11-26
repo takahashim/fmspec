@@ -5,6 +5,7 @@ Rubyで書く実行可能な形式仕様と、Rust製の検証エンジンによ
 設計は [docs/ruby_model_checker_spec.md](docs/ruby_model_checker_spec.md) にある。
 現在の実装は、ロードマップの段階1〜6（Rails向け初期リリースの範囲）である。
 Rubyで仕様を書いて、モデル検査、シミュレーション、実装との適合性検査（Model-Based Testing）ができる。
+状態と引数には、Bool、有界Int、Enumのほか、Tuple、Record、Option、有限Set、有限Map、有界Listを使える。
 Railsアプリケーションとの結合は、別gemの `fmspec-rails` にある。
 モデル合成、並行処理、有界応答性はまだない。
 
@@ -50,7 +51,7 @@ DSLの説明は [docs/dsl.md](docs/dsl.md) に、Railsアプリケーション�
 | `lib/` | Ruby DSL。仕様からIRを生成し、native extensionで検査する |
 | `ext/fmspec` | native extension。Nupurを通してRubyとやりとりする |
 | `crates/fmspec-core` | Verusで検証する中核。IR検証、Evaluator、遷移列挙、証明書とトレースの検査器、判定ゲート |
-| `crates/fmspec-ir` | IR、検査条件、証明書、トレースのJSON表現 |
+| `crates/fmspec-ir` | IR、検査条件、証明書、トレースのJSON表現。複合型を中核の式に下ろす |
 | `crates/fmspec-search` | 幅優先探索とシミュレータ。証拠を生成するだけで、判定は判定ゲートが返す |
 | `crates/fmspec-api` | JSONレベルのAPI。CLIとnative extensionが共有する |
 | `crates/fmspec-cli` | `fmspec` コマンド |

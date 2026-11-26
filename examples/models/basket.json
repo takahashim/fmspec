@@ -1,0 +1,238 @@
+{
+  "ir_version": 1,
+  "name": "basket",
+  "enums": [
+    {
+      "name": "item",
+      "variants": [
+        "apple",
+        "bread",
+        "milk"
+      ]
+    }
+  ],
+  "states": [
+    {
+      "id": 0,
+      "name": "items",
+      "type": {
+        "set": {
+          "enum": "item"
+        }
+      },
+      "initial": {
+        "set": {
+          "of": {
+            "enum": "item"
+          },
+          "items": []
+        }
+      }
+    },
+    {
+      "id": 1,
+      "name": "log",
+      "type": {
+        "list": {
+          "of": {
+            "enum": "item"
+          },
+          "max": 2
+        }
+      },
+      "initial": {
+        "list": {
+          "of": {
+            "enum": "item"
+          },
+          "max": 2,
+          "items": []
+        }
+      }
+    }
+  ],
+  "actions": [
+    {
+      "name": "add",
+      "params": [
+        {
+          "name": "x",
+          "type": {
+            "enum": "item"
+          }
+        }
+      ],
+      "choices": [],
+      "guard": {
+        "not": [
+          {
+            "contains": [
+              {
+                "var": 0
+              },
+              {
+                "param": 0
+              }
+            ]
+          }
+        ]
+      },
+      "updates": [
+        {
+          "target": 0,
+          "expr": {
+            "insert": [
+              {
+                "var": 0
+              },
+              {
+                "param": 0
+              }
+            ]
+          }
+        },
+        {
+          "target": 1,
+          "expr": {
+            "ite": [
+              {
+                "lt": [
+                  {
+                    "size": [
+                      {
+                        "var": 1
+                      }
+                    ]
+                  },
+                  {
+                    "int": 2
+                  }
+                ]
+              },
+              {
+                "push": [
+                  {
+                    "var": 1
+                  },
+                  {
+                    "param": 0
+                  }
+                ]
+              },
+              {
+                "push": [
+                  {
+                    "shift": [
+                      {
+                        "var": 1
+                      }
+                    ]
+                  },
+                  {
+                    "param": 0
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "drop",
+      "params": [
+        {
+          "name": "x",
+          "type": {
+            "enum": "item"
+          }
+        }
+      ],
+      "choices": [],
+      "guard": {
+        "contains": [
+          {
+            "var": 0
+          },
+          {
+            "param": 0
+          }
+        ]
+      },
+      "updates": [
+        {
+          "target": 0,
+          "expr": {
+            "remove": [
+              {
+                "var": 0
+              },
+              {
+                "param": 0
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "name": "small",
+      "expr": {
+        "le": [
+          {
+            "size": [
+              {
+                "var": 0
+              }
+            ]
+          },
+          {
+            "int": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "logged",
+      "expr": {
+        "forall": {
+          "name": "_1",
+          "in": {
+            "var": 0
+          },
+          "body": {
+            "any": [
+              {
+                "contains": [
+                  {
+                    "var": 1
+                  },
+                  {
+                    "local": "_1"
+                  }
+                ]
+              },
+              {
+                "ge": [
+                  {
+                    "size": [
+                      {
+                        "var": 1
+                      }
+                    ]
+                  },
+                  {
+                    "int": 2
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "contracts": []
+}

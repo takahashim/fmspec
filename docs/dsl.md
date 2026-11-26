@@ -40,27 +40,49 @@ Tickets.check(max_states: 10_000).verified? # => true
 
 ## 型
 
-| 書き方 | 型 |
-|---|---|
-| `int(0..4)`、または整数の範囲 `0..4` | 有界の整数 |
-| `bool` | 真偽値 |
-| `enum(:result, :success, :forbidden)` | 列挙型。ラベルはSymbolで書く |
+| 書き方 | 型 | Rubyの値 |
+|---|---|---|
+| `int(0..4)`、または整数の範囲 `0..4` | 有界の整数 | Integer |
+| `bool` | 真偽値 | `true`、`false` |
+| `enum(:result, :success, :forbidden)` | 列挙型。ラベルはSymbolで書く | Symbol |
+| `tuple(int(0..2), bool)` | 組 | Array |
+| `record(x: int(0..2), y: int(0..2))` | フィールド名の付いた組 | Hash（キーはSymbol） |
+| `option(user)` | 値がないこと（`nil`）を含む型 | `nil`、または値 |
+| `set_of(item)` | 有限集合 | Set、またはArray |
+| `map_of(item, int(0..3))` | 有限写像 | Hash |
+| `list_of(int(0..3), max: 4)` | 長さに上限のある列 | Array |
 
 `enum` は列挙型を宣言して、その型を返す。
 同じ名前とラベルで繰り返し呼ぶと、同じ型を返す。
 
-列挙型の値は、型が文脈から決まる位置ではSymbolで書ける。
-列挙型の状態変数への代入、列挙型の式との `eq` と `ne`、`ite` のもう一方の枝が列挙型の式である場合がこれにあたる。
-型が決まらない位置では `result[:success]` と書く。
+`set_of` の要素と `map_of` のキーの型は、値の数が4096以下で、`set_of`、`map_of`、`list_of` を含まない型に限る。
+型の意味、値の正規順、上限は [ir.md](ir.md) にある。
+
+列挙型の値と複合型の値は、型が文脈から決まる位置ではRubyの値で書ける。
+状態変数の初期値と更新、`eq` と `ne` の右辺、`ite` のもう一方の枝が型の決まった式である場合、`include?` や `put` などの要素の位置がこれにあたる。
+
+```ruby
+state :basket, set_of(item), initial: Set[]
+state :holder, option(user), initial: nil
+state :pos, record(x: int(0..2), y: int(0..2)), initial: { x: 0, y: 0 }
+
+update pos: { x: s.pos[:x] + 1, y: s.pos[:y] }
+guard s.holder.eq(nil)
+```
+
+型が決まらない位置では、列挙型の値を `result[:success]`、Optionの値を `some(x)`、`none(user)` と書く。
+複合型のリテラルを型の決まらない位置に書くと、`Fmspec::BuildError` になる。
 
 ## 状態変数と定数
 
 ```ruby
 state :sold, int(0..4), initial: 0
 constant :capacity, 3
+constant :menu, set_of(item), Set[:apple, :bread]
 ```
 
 定数は、記号的な状態から状態変数と同じように参照できる。
+複合型の定数は、型を添えて `constant(名前, 型, 値)` と書く。
 IRには、参照した位置にリテラルとして埋め込まれる。
 
 `ghost :charges, int(0..2), initial: 0` は、履歴を記録するための補助状態（Ghost State）を宣言する。
@@ -85,7 +107,7 @@ end
 | `update 名前: 式, ...` | 状態更新。同時代入で、式は遷移前の状態で評価する。書かなかった変数は維持する |
 | `unchanged` | 状態を変えないことの明示 |
 | `choose(:名前, 型)` | 内部選択を宣言し、その値の記号式を返す |
-| `returns 式` | 出力。型は式から決まる。整数の出力に範囲を付けるときは `returns 式, int(0..3)` と書く |
+| `returns 式` | 出力。型は式から決まる。整数の出力に範囲を付けるときは `returns 式, int(0..3)` と書く。出力の型は bool、整数、列挙型に限る |
 | `ensures(:名前) { \|after, result\| 式 }` | 遷移契約。この操作のすべての有効な遷移で成り立つべき事後条件 |
 | `preserves :名前, ...` | 指定した状態変数がこの操作で変わらない、という遷移契約 |
 
@@ -151,6 +173,9 @@ terminal { |s| s.sold.eq(s.capacity) }
 | `ite(条件, x, y)` | 条件式。選ばれた枝だけを評価する |
 | `min(a, b)`、`max(a, b)` | 整数の小さいほう、大きいほう。`min(s.n + 1, 2)` は2で飽和する増分になる |
 | `all(a, b, ...)`、`any(a, b, ...)` | 記述順に評価し、結果が決まれば打ち切る |
+| `a / b`、`a % b` | 床除算と、その剰余（Rubyの整数と同じ）。`b` が0なら評価エラー |
+| `let(式) { \|x\| 本体 }` | 式を一度だけ評価して、本体に渡す |
+| `forall(集合か型) { \|x\| 式 }`、`exists(...)` | 量化。集合は `set_of`、`map_of`（キー）、`list_of` の式で、型ならそのすべての値をたどる |
 
 `&` と `|` はRubyの比較演算子より優先順位が高いので、両辺を括弧で囲む。
 
@@ -159,6 +184,40 @@ guard (s.sold > 0) & (s.sold < 3)
 ```
 
 `ite`、`all`、`any`、`implies`、`not_` は、定義の外では `Fmspec.ite(...)` のように呼べる。
+
+### 複合型の式
+
+複合型の値の式は、RubyのArray、Hash、Setに似たメソッドを持つ。
+どのメソッドも新しい値の式を返し、元の値を変えない。
+`s.queue.push(x)` は、`x` を末尾に加えた列の式であり、`update queue: s.queue.push(x)` で状態を更新する。
+
+| 型 | 書き方 | 意味 |
+|---|---|---|
+| tuple | `t[0]` | 要素。位置は整数のリテラル |
+| record | `r[:x]` | フィールド |
+| option | `o.some?`、`o.none?`、`o.unwrap` | 値の有無と、値。値がなければ `unwrap` は評価エラー |
+| set_of | `s.include?(x)`、`s.add(x)`、`s.delete(x)` | 要素か、要素を加えたSet、除いたSet |
+| set_of | `a \| b`（`a + b`）、`a & b`、`a - b`、`a <= b` | 和、共通部分、差、部分集合。`union`、`intersection`、`difference`、`subset?` とも書ける |
+| map_of | `m[k]`、`m.key?(k)`、`m.put(k, v)`、`m.delete(k)`、`m.keys` | キーの値、キーの有無、キーに値を置いたMap、キーを除いたMap、キーのSet。キーがなければ `m[k]` は評価エラー |
+| list_of | `l[i]`、`l.first`、`l.last`、`l.include?(x)` | 要素。範囲外や空なら評価エラー |
+| list_of | `l.push(x)`、`l.pop`、`l.shift` | 末尾に加えたList、末尾、先頭を除いたList。満杯や空なら評価エラー |
+| 共通 | `c.size`、`c.empty?`、`c.all? { \|x\| ... }`、`c.any? { \|x\| ... }` | 要素の数、空か、量化。map_of ではキーについて |
+
+Setの要素、Mapのキーと値、Listの要素に、型に属さない値を置くと評価エラーになる。
+`include?` と `key?` は、型に属さない値には偽を返す。
+
+```ruby
+item = enum(:item, :apple, :bread, :milk)
+state :items, set_of(item), initial: Set[]
+
+action :add, x: item do |s, x|
+  guard s.items.include?(x).not_
+  update items: s.items.add(x)
+end
+
+invariant(:small) { |s| s.items.size <= 2 }
+invariant(:no_milk_alone) { |s| s.items.include?(:milk).implies(s.items.any? { |y| y.ne(:milk) }) }
+```
 
 ## 記号ブロックで使えない構文
 
@@ -263,13 +322,19 @@ Railsアプリケーションとの結合と合わせて、[rails.md](rails.md) 
 `command` のない操作、仕様にない操作や状態変数の登録、操作の引数と合わないキーワード引数は `Fmspec::BuildError` になる。
 
 値の対応は次のとおりである。
-仕様の値にならない値（別の型の値、`nil`、範囲外の整数、未定義のラベル）は、仕様のどの値とも一致しない。
+仕様の値にならない値（別の型の値、`option` でない型の `nil`、範囲外の整数、未定義のラベル）は、仕様のどの値とも一致しない。
 
-| 仕様の型 | 実装の値 |
-|---|---|
-| 整数 | Integer |
-| bool | `true`、`false` |
-| 列挙型 | ラベルと同じ名前のSymbolまたはString |
+| 仕様の型 | 実装の値（`observe` と戻り値） | `command` に渡す値 |
+|---|---|---|
+| 整数 | Integer | Integer |
+| bool | `true`、`false` | `true`、`false` |
+| 列挙型 | ラベルと同じ名前のSymbolまたはString | Symbol |
+| tuple | Array | Array |
+| record | Hash（キーはSymbolかString）、または `to_h` で Hash になるもの | Hash（キーはSymbol） |
+| option | `nil`、または値 | `nil`、または値 |
+| set_of | Set、またはArray | Set |
+| map_of | Hash | Hash |
+| list_of | Array | Array |
 
 ### テストの実行
 
