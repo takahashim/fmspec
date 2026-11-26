@@ -16,9 +16,9 @@ use crate::json::{array, int, object, operands, required, schema, single, string
 use crate::model::{EnumNames, LoadError};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
 use fmspec_core::bindings::wrap_bindings;
-use fmspec_core::map_lookup::{put_map_row, select_flat_map_lookup, MISSING_KEY};
+use fmspec_core::map_lookup::{put_map_rows_exec, select_flat_map_lookup, MISSING_KEY};
 use fmspec_core::model::{BinOp, Expr as C, Type, Value as CV};
-use fmspec_core::ranking::{extend_rank, offset_rank, option_rank};
+use fmspec_core::ranking::{mixed_rank_expr, offset_rank, option_rank};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -549,19 +549,16 @@ fn rank_expr(enums: &[EnumNames], t: &XType, slots: &[C], st: &SType) -> C {
 }
 
 fn mixed<'s>(enums: &[EnumNames], parts: impl Iterator<Item = (&'s XType, &'s SType)>, slots: &[C]) -> C {
-    let mut r: Option<C> = None;
+    let mut ranks: Vec<(C, i64)> = Vec::new();
     let mut at = 0;
     for (x, t) in parts {
         let w = x.width(enums);
         let k = rank_expr(enums, x, &slots[at..at + w], t);
         at += w;
         let n = t.keys(enums).unwrap_or(1) as i64;
-        r = Some(match r {
-            None => k,
-            Some(prev) => extend_rank(prev, n, k),
-        });
+        ranks.push((k, n));
     }
-    r.unwrap_or_else(|| ci(0))
+    mixed_rank_expr(&ranks)
 }
 
 /// 値が要素の型に属すれば、その番号。属さなければ -1。
@@ -1423,13 +1420,9 @@ impl<'a> Ctx<'a> {
         let rows = k.keys(self.enums).unwrap_or(0) as usize;
         let width = v.width(self.enums);
         let map_slots = ms.to_vec();
-        let mut updated = Vec::with_capacity(ms.len());
-        for row in 0..rows {
-            let Some(mut row_slots) = put_map_row(&map_slots, &x, width, rank_local, row) else {
-                return type_error(path, "Mapのスロット配置が型と一致しません");
-            };
-            updated.append(&mut row_slots);
-        }
+        let Some(updated) = put_map_rows_exec(&map_slots, rows, width, rank_local, &x) else {
+            return type_error(path, "Mapのスロット配置が型と一致しません");
+        };
         Ok(updated)
     }
 

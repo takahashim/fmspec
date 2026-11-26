@@ -22,7 +22,7 @@
 
 use crate::model::EnumNames;
 use fmspec_core::model::{Type, Value as CoreValue};
-use fmspec_core::ranking::append_rank_digit;
+use fmspec_core::ranking::{rank_digits_exec, rank_interval_code, rank_option_code};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
 pub const MAX_KEYS: u64 = 4096;
@@ -185,17 +185,17 @@ impl SType {
     /// 符号の正規順での番号。値が型に属さなければ `None`。Option が空なら中身の符号は見ない。
     pub fn rank(&self, enums: &[EnumNames], codes: &[i64]) -> Option<u64> {
         match self {
-            SType::Bool => (0..=1).contains(&codes[0]).then_some(codes[0] as u64),
-            SType::Int(lo, hi) => (*lo..=*hi).contains(&codes[0]).then(|| (codes[0] - lo) as u64),
+            SType::Bool => rank_interval_code(*codes.first()?, 0, 1),
+            SType::Int(lo, hi) => rank_interval_code(*codes.first()?, *lo, *hi),
             SType::Enum(id) => {
-                let n = enums.get(*id)?.variants.len() as i64;
-                (0..n).contains(&codes[0]).then_some(codes[0] as u64)
+                let max = i64::try_from(enums.get(*id)?.variants.len().checked_sub(1)?).ok()?;
+                rank_interval_code(*codes.first()?, 0, max)
             }
             SType::Tuple(ts) => rank_all(ts.iter(), enums, codes),
             SType::Record(fs) => rank_all(fs.iter().map(|(_, t)| t), enums, codes),
-            SType::Option(t) => match codes[0] {
-                0 => Some(0),
-                1 => Some(1 + t.rank(enums, &codes[1..])?),
+            SType::Option(t) => match *codes.first()? {
+                0 => rank_option_code(0, None),
+                1 => rank_option_code(1, Some(t.rank(enums, &codes[1..])?)),
                 _ => None,
             },
             SType::Set(_) | SType::Map(_, _) | SType::List(_, _) => None,
@@ -269,15 +269,16 @@ fn unrank_all<'a>(
 }
 
 fn rank_all<'a>(ts: impl Iterator<Item = &'a SType>, enums: &[EnumNames], codes: &[i64]) -> Option<u64> {
-    let mut r: u64 = 0;
+    let mut digits = Vec::new();
     let mut at = 0;
     for t in ts {
         let w = t.width(enums);
         let n = t.keys(enums)?;
-        r = append_rank_digit(r, n, t.rank(enums, codes.get(at..at + w)?)?)?;
+        let digit = t.rank(enums, codes.get(at..at + w)?)?;
+        digits.push((digit, n));
         at += w;
     }
-    Some(r)
+    rank_digits_exec(&digits)
 }
 
 /// 中核の型の既定値の符号。

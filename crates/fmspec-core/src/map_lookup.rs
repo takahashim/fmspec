@@ -47,6 +47,13 @@ pub open spec fn put_map_row_slot(
     }
 }
 
+pub open spec fn put_map_row_sequence(
+    flat: Seq<Expr>, payload: Seq<Expr>, width: usize, rank_local: usize, row: int,
+) -> Seq<Expr> {
+    Seq::new(width as nat + 1, |column: int|
+        put_map_row_slot(flat, payload, width, rank_local, row, column))
+}
+
 /// Construct the updated expression row at one known map rank.
 pub fn put_map_row(
     flat: &Vec<Expr>, payload: &Vec<Expr>, width: usize, rank_local: usize, row: usize,
@@ -63,7 +70,8 @@ pub fn put_map_row(
             && forall|column: int| 0 <= column <= width
                 ==> #[trigger] result@[column] == put_map_row_slot(
                     flat@, payload@, width, rank_local, row as int, column,
-                ),
+                )
+            && result@ =~= put_map_row_sequence(flat@, payload@, width, rank_local, row as int),
 {
     let stride = width + 1;
     proof {
@@ -113,6 +121,174 @@ pub fn put_map_row(
         }
     }
     Some(result)
+}
+
+pub open spec fn flatten_map_rows(rows: Seq<Vec<Expr>>, count: nat) -> Seq<Expr>
+    recommends count <= rows.len(),
+    decreases count,
+{
+    if count == 0 {
+        Seq::empty()
+    } else {
+        flatten_map_rows(rows, (count - 1) as nat) + rows[count - 1]@
+    }
+}
+
+pub open spec fn put_map_rows_sequence(
+    flat: Seq<Expr>, payload: Seq<Expr>, width: usize, rank_local: usize, count: nat,
+) -> Seq<Expr>
+    recommends count * (1 + width as nat) <= flat.len(), count <= i64::MAX as nat,
+    decreases count,
+{
+    if count == 0 {
+        Seq::empty()
+    } else {
+        put_map_rows_sequence(flat, payload, width, rank_local, (count - 1) as nat)
+            + put_map_row_sequence(flat, payload, width, rank_local, count as int - 1)
+    }
+}
+
+pub proof fn lemma_flattened_put_rows(
+    flat: Seq<Expr>, payload: Seq<Expr>, width: usize, rank_local: usize,
+    rows: Seq<Vec<Expr>>, count: nat,
+)
+    requires
+        count <= rows.len(),
+        count * (1 + width as nat) <= flat.len(),
+        count <= i64::MAX as nat,
+        forall|row: int| 0 <= row < count
+            ==> #[trigger] rows[row]@ =~= put_map_row_sequence(
+                flat, payload, width, rank_local, row,
+            ),
+    ensures
+        flatten_map_rows(rows, count) == put_map_rows_sequence(flat, payload, width, rank_local, count),
+    decreases count,
+{
+    if count > 0 {
+        assert((count - 1) * (1 + width as nat) <= count * (1 + width as nat)) by (nonlinear_arith);
+        lemma_flattened_put_rows(flat, payload, width, rank_local, rows, (count - 1) as nat);
+        reveal(flatten_map_rows);
+        reveal(put_map_rows_sequence);
+        assert(rows[(count - 1) as int]@ =~= put_map_row_sequence(
+            flat, payload, width, rank_local, count as int - 1,
+        ));
+    }
+}
+
+/// Update every row in rank order and flatten the resulting map.
+pub fn put_map_rows_exec(
+    flat: &Vec<Expr>, rows: usize, width: usize, rank_local: usize, payload: &Vec<Expr>,
+) -> (out: Option<Vec<Expr>>)
+    ensures
+        out matches Some(updated) ==> updated@ =~= put_map_rows_sequence(
+            flat@, payload@, width, rank_local, rows as nat,
+        ),
+{
+    if payload.len() != width || rows > i64::MAX as usize {
+        return None;
+    }
+    proof { assert(payload@.len() == width); }
+    if rows == 0 {
+        return if flat.len() == 0 { Some(Vec::new()) } else { None };
+    }
+    if width == usize::MAX {
+        return None;
+    }
+    let stride = width.checked_add(1)?;
+    let size = rows.checked_mul(stride)?;
+    if size != flat.len() {
+        return None;
+    }
+    let mut row_updates: Vec<Vec<Expr>> = Vec::new();
+    let mut row = 0;
+    while row < rows
+        invariant
+            row <= rows,
+            size == rows * stride,
+            flat.len() == size,
+            flat@.len() == size,
+            stride == width + 1,
+            row_updates@.len() == row,
+            rows <= i64::MAX as usize,
+            payload@.len() == width,
+            width < usize::MAX,
+            forall|r: int| 0 <= r < row
+                ==> #[trigger] row_updates@[r]@ =~= put_map_row_sequence(
+                    flat@, payload@, width, rank_local, r,
+                ),
+        decreases rows - row,
+    {
+        proof {
+            vstd::arithmetic::mul::lemma_mul_inequality(row as int + 1, rows as int, stride as int);
+            vstd::arithmetic::mul::lemma_mul_is_distributive_add_other_way(stride as int, row as int, 1);
+            assert((row as int + 1) * stride as int <= size as int);
+            assert((row as int) * stride as int <= size as int);
+            assert(size as int <= usize::MAX as int);
+            assert(0 < stride) by (nonlinear_arith)
+                requires stride == width + 1;
+            assert((row as int) * stride as int <= (row as int + 1) * stride as int) by (nonlinear_arith);
+            assert((row as int) * stride as int <= usize::MAX as int);
+        }
+        let row_slots = put_map_row(flat, payload, width, rank_local, row)?;
+        let ghost expected = put_map_row_sequence(flat@, payload@, width, rank_local, row as int);
+        proof { assert(row_slots@ =~= expected); }
+        row_updates.push(row_slots);
+        row = row + 1;
+        proof {
+            assert forall|r: int| 0 <= r < row
+                implies #[trigger] row_updates@[r]@ =~= put_map_row_sequence(
+                    flat@, payload@, width, rank_local, r,
+                ) by {
+                if r < row - 1 {
+                    assert(row_updates@[r]@ =~= put_map_row_sequence(flat@, payload@, width, rank_local, r));
+                } else {
+                    assert(r == row - 1);
+                    assert(row_updates@[r]@ =~= expected);
+                }
+            }
+        }
+    }
+    let updated = flatten_map_rows_exec(&row_updates);
+    proof {
+        lemma_flattened_put_rows(flat@, payload@, width, rank_local, row_updates@, rows as nat);
+        assert(updated@ =~= put_map_rows_sequence(flat@, payload@, width, rank_local, rows as nat));
+    }
+    Some(updated)
+}
+
+/// Concatenate map rows and verify that their order and contents are preserved.
+pub fn flatten_map_rows_exec(rows: &Vec<Vec<Expr>>) -> (out: Vec<Expr>)
+    ensures
+        out@ =~= flatten_map_rows(rows@, rows@.len() as nat),
+{
+    let mut flat = Vec::new();
+    let mut row = 0;
+    while row < rows.len()
+        invariant
+            row <= rows@.len(),
+            flat@ =~= flatten_map_rows(rows@, row as nat),
+        decreases rows@.len() - row,
+    {
+        let mut column = 0;
+        while column < rows[row].len()
+            invariant
+                column <= rows@[row as int]@.len(),
+                row < rows@.len(),
+                flat@ =~= flatten_map_rows(rows@, row as nat) + rows@[row as int]@.take(column as int),
+            decreases rows@[row as int]@.len() - column,
+        {
+            flat.push(copy_expr(&rows[row][column]));
+            column = column + 1;
+        }
+        proof {
+            assert(rows@[row as int]@.take(rows@[row as int]@.len() as int) =~= rows@[row as int]@);
+            reveal(flatten_map_rows);
+            assert(flatten_map_rows(rows@, (row + 1) as nat)
+                =~= flatten_map_rows(rows@, row as nat) + rows@[row as int]@);
+        }
+        row = row + 1;
+    }
+    flat
 }
 
 /// Set a map row's presence bit when the evaluated rank equals this row.
