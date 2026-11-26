@@ -1,0 +1,234 @@
+//! Making a Ruby String: a copy of some text ([`utf8_str`]) or of bytes
+//! the caller holds to be UTF-8 ([`utf8_str_trusting`]), one written
+//! in place front to back ([`utf8_str_filled`]) - from several slices at once
+//! ([`utf8_str_from_slices`]) - and a frozen, interned name
+//! ([`interned_utf8_trusting`]).
+
+#![allow(unsafe_code)]
+
+use crate::rb::value::AsSys;
+use crate::rb::{Error, RString, Ruby};
+
+/// A UTF-8 String holding a copy of `text`; a failed allocation is `Err`
+/// (`NoMemoryError`).
+///
+/// A `&str` is UTF-8 by its type, so the String is marked so (its coderange
+/// `7BIT` or `VALID`): Ruby never scans it to find out. A reader with bytes
+/// it has checked has a `&str` of them ([`crate::utf8_copy::Utf8Copy`]'s
+/// `as_str`, `core::str::from_utf8`); bytes it has not are
+/// [`utf8_str_trusting`]'s.
+pub fn utf8_str(ruby: &Ruby, text: &str) -> Result<RString, Error> {
+    let s = crate::raw::utf8_str_new(ruby, text.as_bytes())?;
+    // SAFETY: `s` was made just now from `text`'s bytes and is referenced
+    // only from this frame; a `&str` is valid UTF-8, all ASCII when
+    // `is_ascii` says so.
+    unsafe { nupur_sys::non_raising::str_mark_coderange(s.as_sys(), text.is_ascii()) };
+    Ok(s)
+}
+
+/// A UTF-8 String holding a copy of `bytes`, which the caller holds to be
+/// UTF-8 by some invariant of its own and does not check (the name says
+/// so, as [`nupur_sys::non_raising`]'s names say their preconditions). A
+/// failed allocation is `Err` (`NoMemoryError`).
+///
+/// The String is tagged UTF-8 and its coderange left unknown, so Ruby
+/// scans it when it first needs to know: bytes that were not UTF-8 make a
+/// String Ruby reports broken (`valid_encoding?` false), never a memory
+/// error and never a String marked valid that is not.
+pub fn utf8_str_trusting(ruby: &Ruby, bytes: &[u8]) -> Result<RString, Error> {
+    crate::raw::utf8_str_new(ruby, bytes)
+}
+
+/// An ASCII-8BIT String holding a copy of `bytes` - a hash, a key, bytes
+/// that are not text; a failed allocation is `Err` (`NoMemoryError`). Any
+/// bytes are valid in it, so nothing is checked.
+pub fn binary_str(ruby: &Ruby, bytes: &[u8]) -> Result<RString, Error> {
+    crate::raw::binary_str_new(ruby, bytes)
+}
+
+/// A UTF-8 String of exactly `len` bytes, written by `fill` straight into
+/// the new String's buffer - one allocation, no intermediate copy. The
+/// String's allocation raises `NoMemoryError`; `fill`'s `Err` is returned in
+/// its place, as is a `fill` that wrote fewer than `len` bytes - an internal
+/// error, since the bytes left would be whatever the allocation held - and
+/// the String is emptied and left to the GC, hidden.
+///
+/// `fill` writes through an [`Unwritten`], front to back, so every byte the
+/// String holds was written and none past its end can be. The String is
+/// HIDDEN (`rb_obj_hide`) from its allocation until it is whole, so no Ruby
+/// code `fill` runs can find it through `ObjectSpace` - to read the bytes not
+/// yet written, or to grow it and move the buffer `fill` writes into - and
+/// this frame keeps it alive and in place meanwhile (the GC's stack scan pins
+/// it). Shown, as a String, only once it is whole.
+///
+/// The bytes are tagged UTF-8 without a check; bytes that were not would make
+/// a wrong String, never a memory error.
+pub fn utf8_str_filled(
+    ruby: &Ruby,
+    len: usize,
+    fill: impl FnOnce(&mut Unwritten<'_>) -> Result<(), Error>,
+) -> Result<RString, Error> {
+    // SAFETY: filled below, or emptied by `EmptyUnlessFilled` on every other
+    // way out, before Ruby code can see it.
+    let str = unsafe { crate::raw::utf8_str_unwritten(ruby, len) }?;
+    // SAFETY: `str` is the String just made, of `len` bytes (`rstring_ptr`
+    // is its buffer, the room `rb_str_new` allocated), referenced only from
+    // this frame. Seen as `MaybeUninit`, so nothing reads it unwritten.
+    let buf: &mut [core::mem::MaybeUninit<u8>] = unsafe {
+        let dst =
+            nupur_sys::non_raising::rstring_ptr(str.as_sys()) as *mut core::mem::MaybeUninit<u8>;
+        if len == 0 || dst.is_null() {
+            &mut []
+        } else {
+            core::slice::from_raw_parts_mut(dst, len)
+        }
+    };
+    /* Armed before `fill` runs, so whatever ends it early - an `Err`, or a
+     * panic unwinding through this frame to the trampoline - empties the
+     * String on the way out; disarmed only once the String is whole. */
+    // SAFETY: the String just made, referenced only from this frame; hiding
+    // writes only its class field, which the reveal below restores.
+    unsafe { crate::rb::object::obj_hide(crate::rb::ReprValue::as_value(str)) };
+    let unfilled = EmptyUnlessFilled(str);
+    let mut w = Unwritten { buf, at: 0 };
+    let filled = fill(&mut w).and_then(|()| {
+        if w.at == len {
+            Ok(())
+        } else {
+            Err(crate::rb::error::internal_error(
+                "a String was left part-written",
+            ))
+        }
+    });
+    filled?;
+    core::mem::forget(unfilled);
+    /* Whole now: shown as a String. A refusal (out of memory) leaves it
+     * hidden and filled, for the GC. */
+    crate::raw::obj_reveal(
+        crate::rb::ReprValue::as_value(str),
+        crate::rb::ReprValue::as_value(ruby.class_string()),
+    )?;
+    Ok(str)
+}
+
+/// Empties, when dropped, a String [`utf8_str_filled`] has not finished
+/// filling: the String is left to the GC, but `ObjectSpace` can still hand it
+/// to Ruby code until then, so it must not carry the bytes it was never
+/// given - whatever its allocation held before. Empty, it holds none. A
+/// `Drop`, so a panic out of `fill` empties it as an `Err` does; forgotten
+/// once the String is whole.
+struct EmptyUnlessFilled(RString);
+
+impl Drop for EmptyUnlessFilled {
+    #[cfg_attr(
+        dylint_lib = "nupur_lints",
+        allow(
+            ffi_without_gvl_proof,
+            reason = "it guards the String `utf8_str_filled` made, with its token, and lives only in that frame"
+        )
+    )]
+    fn drop(&mut self) {
+        /* Run while a panic unwinds, too, where a second panic aborts. */
+        crate::no_unwind::must_not_unwind::<crate::no_unwind::DropUnfilled, _>(|| {
+            // SAFETY: the String just made, unfrozen and referenced only
+            // from `utf8_str_filled`'s frame.
+            unsafe { nupur_sys::non_raising::str_empty_unfrozen(self.0.as_sys()) };
+        })
+    }
+}
+
+/// The buffer of a String [`utf8_str_filled`] is making, written front to
+/// back: the bytes before `at` are written, the rest are not and cannot be
+/// read.
+pub struct Unwritten<'a> {
+    buf: &'a mut [core::mem::MaybeUninit<u8>],
+    at: usize,
+}
+
+impl Unwritten<'_> {
+    /// Append `src`; `false`, with nothing written, when it does not fit.
+    #[inline]
+    pub fn push(&mut self, src: &[u8]) -> bool {
+        let Some(dst) = self
+            .at
+            .checked_add(src.len())
+            .and_then(|end| self.buf.get_mut(self.at..end))
+        else {
+            return false;
+        };
+        // SAFETY: `u8` and `MaybeUninit<u8>` have one layout, and every `u8`
+        // is a valid `MaybeUninit<u8>`; the view is only read.
+        let src: &[core::mem::MaybeUninit<u8>] =
+            unsafe { &*(src as *const [u8] as *const [core::mem::MaybeUninit<u8>]) };
+        copy_small(dst, src);
+        self.at += src.len();
+        true
+    }
+}
+
+/// `dst.copy_from_slice(src)` for slices of one length, with no `memcpy`
+/// call for 16 elements or fewer: two fixed-size copies that overlap. Text
+/// slices are mostly a few bytes, and a `memcpy` call each measured
+/// `doc.text` ~50% slower. The extension's `ceiling_buf::copy_small`, token for
+/// token, which Verus proves (`verus/ceiling_buf.rs`); `rake verus:sync` holds this
+/// copy to it too, since this crate cannot depend on the extension.
+#[inline(always)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "dst and src are one length, at least K"
+)]
+fn copy_small<T: Copy>(dst: &mut [T], src: &[T]) {
+    #[inline(always)]
+    fn two<const K: usize, T: Copy>(dst: &mut [T], src: &[T]) {
+        let n = src.len();
+        dst[..K].copy_from_slice(&src[..K]);
+        dst[n - K..n].copy_from_slice(&src[n - K..]);
+    }
+    match src.len() {
+        0 => {}
+        1 => dst[0] = src[0],
+        2..=3 => two::<2, T>(dst, src),
+        4..=7 => two::<4, T>(dst, src),
+        8..=16 => two::<8, T>(dst, src),
+        _ => dst.copy_from_slice(src),
+    }
+}
+
+/// Join `slices`, totalling `total` bytes, into one UTF-8 String: one
+/// allocation of exactly `total` and one copy run into it
+/// ([`utf8_str_filled`]), with no intermediate buffer.
+///
+/// `total` is the caller's bookkeeping, and is held to it both ways: a slice
+/// that would run past it, and a sum that falls short of it, are an internal
+/// error rather than a String past or short of its allocation. The bytes are
+/// tagged UTF-8 without a check; bytes that were not would make a wrong
+/// String, never a memory error.
+pub fn utf8_str_from_slices<'a>(
+    ruby: &Ruby,
+    slices: impl Iterator<Item = &'a [u8]>,
+    total: usize,
+) -> Result<RString, Error> {
+    utf8_str_filled(ruby, total, |out| {
+        for s in slices {
+            /* `push` writes nothing past the String's end. */
+            if !out.push(s) {
+                return Err(crate::rb::error::internal_error(
+                    "a String's slices ran past their total",
+                ));
+            }
+        }
+        /* A short sum is `utf8_str_filled`'s to refuse. */
+        Ok(())
+    })
+}
+
+/// A frozen, deduplicated UTF-8 String of `bytes` - Ruby's own `-"name"`
+/// (`rb_enc_interned_str`), so every read of one name answers the same
+/// object and allocates nothing once Ruby has it. For names, never for
+/// character data a caller may expect to edit. `bytes` are the caller's to
+/// hold UTF-8 (the name says so, as [`utf8_str_trusting`]'s does): they are
+/// copied unchecked, and bytes that were not would make a wrong String,
+/// never a memory error.
+pub fn interned_utf8_trusting(ruby: &Ruby, bytes: &[u8]) -> Result<RString, Error> {
+    crate::raw::enc_interned_str(bytes, crate::encoding::Encoding::utf8(ruby))
+}
