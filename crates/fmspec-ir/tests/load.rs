@@ -318,6 +318,8 @@ fn initial_states_are_the_filtered_product_of_candidates() {
     json.as_object_mut().unwrap().remove("initial");
     assert!(trace_from_json(&m, &json.to_string()).is_err());
 
+    let m = with(|ir| ir["initial_constraint"] = Value::Null).unwrap();
+    assert_eq!(m.raw().inits, vec![vec![0, 0, 1]]);
     assert!(schema_error(|ir| set_initial(ir, 0, json!([]))).contains("空でない"));
     assert!(schema_error(|ir| ir["states"][0]["initial_in"] = json!([{"int": 0}])).contains("どちらか一方"));
     assert!(schema_error(|ir| ir["initial_constraint"] = json!({"int": 0})).contains("初期条件"));

@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "fmspec IR v1",
+  "description": "fmspec のモデルのIR（ir_version 1）の構造。名前の一意性、参照の解決、式の型、値の範囲は、エンジンのIR検証が検査する（docs/ir.md）。",
+  "type": "object",
+  "properties": {
+    "ir_version": {"const": 1},
+    "name": {"type": "string"},
+    "enums": {"type": ["array", "null"], "items": {"$ref": "#/$defs/enum"}},
+    "constants": {"type": ["array", "null"], "items": {"$ref": "#/$defs/constant"}},
+    "states": {"type": "array", "items": {"$ref": "#/$defs/state"}},
+    "actions": {"type": ["array", "null"], "items": {"$ref": "#/$defs/action"}},
+    "invariants": {"type": ["array", "null"], "items": {"$ref": "#/$defs/invariant"}},
+    "contracts": {"type": ["array", "null"], "items": {"$ref": "#/$defs/contract"}},
+    "terminal": {"$ref": "#/$defs/optional_expr"},
+    "initial_constraint": {"$ref": "#/$defs/optional_expr"}
+  },
+  "required": ["ir_version", "name", "states"],
+  "additionalProperties": false,
+  "$defs": {
+    "index": {"type": "integer", "minimum": 0},
+    "int64": {"type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807},
+    "empty": {"type": "object", "additionalProperties": false},
+    "source": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "properties": {"file": {"type": "string"}, "line": {"$ref": "#/$defs/index"}},
+          "required": ["file", "line"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "enum": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "variants": {"type": "array", "items": {"type": "string"}}},
+      "required": ["name", "variants"],
+      "additionalProperties": false
+    },
+    "constant": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "type": {"$ref": "#/$defs/type"}, "value": {"$ref": "#/$defs/expr"}},
+      "required": ["name", "type", "value"],
+      "additionalProperties": false
+    },
+    "state": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/index"},
+        "name": {"type": "string"},
+        "type": {"$ref": "#/$defs/type"},
+        "initial": {"$ref": "#/$defs/expr"},
+        "initial_in": {"type": "array", "items": {"$ref": "#/$defs/expr"}, "minItems": 1},
+        "source": {"$ref": "#/$defs/source"}
+      },
+      "required": ["name", "type"],
+      "oneOf": [{"required": ["initial"]}, {"required": ["initial_in"]}],
+      "additionalProperties": false
+    },
+    "binding": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "type": {"$ref": "#/$defs/type"}, "in": {"$ref": "#/$defs/expr"}},
+      "required": ["name", "type"],
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "params": {"type": ["array", "null"], "items": {"$ref": "#/$defs/binding"}},
+        "choices": {"type": ["array", "null"], "items": {"$ref": "#/$defs/binding"}},
+        "guard": {"$ref": "#/$defs/optional_expr"},
+        "updates": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "properties": {"target": {"$ref": "#/$defs/index"}, "expr": {"$ref": "#/$defs/expr"}},
+            "required": ["target", "expr"],
+            "additionalProperties": false
+          }
+        },
+        "output": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "properties": {"type": {"$ref": "#/$defs/type"}, "expr": {"$ref": "#/$defs/expr"}},
+              "required": ["type", "expr"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "source": {"$ref": "#/$defs/source"}
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "invariant": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "expr": {"$ref": "#/$defs/expr"}, "source": {"$ref": "#/$defs/source"}},
+      "required": ["name", "expr"],
+      "additionalProperties": false
+    },
+    "contract": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "action": {"type": "string"},
+        "expr": {"$ref": "#/$defs/expr"},
+        "source": {"$ref": "#/$defs/source"}
+      },
+      "required": ["name", "action", "expr"],
+      "additionalProperties": false
+    },
+
+    "type": {
+      "description": "値の型。キーを1つだけ持つ。",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "bool": {"$ref": "#/$defs/empty"},
+        "int": {
+          "type": "object",
+          "properties": {"min": {"$ref": "#/$defs/int64"}, "max": {"$ref": "#/$defs/int64"}},
+          "required": ["min", "max"],
+          "additionalProperties": false
+        },
+        "enum": {"type": "string"},
+        "tuple": {"type": "array", "items": {"$ref": "#/$defs/type"}, "minItems": 1},
+        "record": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "type": {"$ref": "#/$defs/type"}},
+            "required": ["name", "type"],
+            "additionalProperties": false
+          }
+        },
+        "option": {"$ref": "#/$defs/type"},
+        "set": {"$ref": "#/$defs/type"},
+        "map": {
+          "type": "object",
+          "properties": {"key": {"$ref": "#/$defs/type"}, "value": {"$ref": "#/$defs/type"}},
+          "required": ["key", "value"],
+          "additionalProperties": false
+        },
+        "list": {
+          "type": "object",
+          "properties": {"of": {"$ref": "#/$defs/type"}, "max": {"type": "integer", "minimum": 0, "maximum": 1024}},
+          "required": ["of", "max"],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "optional_expr": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/expr"}]},
+    "operands1": {"type": "array", "items": {"$ref": "#/$defs/expr"}, "minItems": 1, "maxItems": 1},
+    "operands2": {"type": "array", "items": {"$ref": "#/$defs/expr"}, "minItems": 2, "maxItems": 2},
+    "operands3": {"type": "array", "items": {"$ref": "#/$defs/expr"}, "minItems": 3, "maxItems": 3},
+    "quantifier": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "in": {"$ref": "#/$defs/expr"},
+        "type": {"$ref": "#/$defs/type"},
+        "body": {"$ref": "#/$defs/expr"}
+      },
+      "required": ["name", "body"],
+      "oneOf": [{"required": ["in"]}, {"required": ["type"]}],
+      "additionalProperties": false
+    },
+    "expr": {
+      "description": "式。演算子を表すキーを1つだけ持つ。",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "int": {"$ref": "#/$defs/int64"},
+        "bool": {"type": "boolean"},
+        "enum": {
+          "type": "object",
+          "properties": {"type": {"type": "string"}, "variant": {"type": "string"}},
+          "required": ["type", "variant"],
+          "additionalProperties": false
+        },
+        "var": {"$ref": "#/$defs/index"},
+        "next": {"$ref": "#/$defs/index"},
+        "param": {"$ref": "#/$defs/index"},
+        "choice": {"$ref": "#/$defs/index"},
+        "output": {"$ref": "#/$defs/empty"},
+        "local": {"type": "string"},
+        "const": {"type": "string"},
+
+        "add": {"$ref": "#/$defs/operands2"},
+        "sub": {"$ref": "#/$defs/operands2"},
+        "mul": {"$ref": "#/$defs/operands2"},
+        "div": {"$ref": "#/$defs/operands2"},
+        "mod": {"$ref": "#/$defs/operands2"},
+        "lt": {"$ref": "#/$defs/operands2"},
+        "le": {"$ref": "#/$defs/operands2"},
+        "gt": {"$ref": "#/$defs/operands2"},
+        "ge": {"$ref": "#/$defs/operands2"},
+        "eq": {"$ref": "#/$defs/operands2"},
+        "ne": {"$ref": "#/$defs/operands2"},
+        "not": {"$ref": "#/$defs/operands1"},
+        "all": {"type": "array", "items": {"$ref": "#/$defs/expr"}},
+        "any": {"type": "array", "items": {"$ref": "#/$defs/expr"}},
+        "implies": {"$ref": "#/$defs/operands2"},
+        "ite": {"$ref": "#/$defs/operands3"},
+        "let": {
+          "type": "object",
+          "properties": {"name": {"type": "string"}, "value": {"$ref": "#/$defs/expr"}, "body": {"$ref": "#/$defs/expr"}},
+          "required": ["name", "value", "body"],
+          "additionalProperties": false
+        },
+        "forall": {"$ref": "#/$defs/quantifier"},
+        "exists": {"$ref": "#/$defs/quantifier"},
+
+        "tuple": {"type": "array", "items": {"$ref": "#/$defs/expr"}, "minItems": 1},
+        "record": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "expr": {"$ref": "#/$defs/expr"}},
+            "required": ["name", "expr"],
+            "additionalProperties": false
+          }
+        },
+        "none": {"$ref": "#/$defs/type"},
+        "some": {"$ref": "#/$defs/operands1"},
+        "set": {
+          "type": "object",
+          "properties": {"of": {"$ref": "#/$defs/type"}, "items": {"type": "array", "items": {"$ref": "#/$defs/expr"}}},
+          "required": ["of", "items"],
+          "additionalProperties": false
+        },
+        "map": {
+          "type": "object",
+          "properties": {
+            "key": {"$ref": "#/$defs/type"},
+            "value": {"$ref": "#/$defs/type"},
+            "items": {"type": "array", "items": {"$ref": "#/$defs/operands2"}}
+          },
+          "required": ["key", "value", "items"],
+          "additionalProperties": false
+        },
+        "list": {
+          "type": "object",
+          "properties": {
+            "of": {"$ref": "#/$defs/type"},
+            "max": {"type": "integer", "minimum": 0, "maximum": 1024},
+            "items": {"type": "array", "items": {"$ref": "#/$defs/expr"}}
+          },
+          "required": ["of", "max", "items"],
+          "additionalProperties": false
+        },
+
+        "nth": {
+          "type": "object",
+          "properties": {"of": {"$ref": "#/$defs/expr"}, "index": {"$ref": "#/$defs/index"}},
+          "required": ["of", "index"],
+          "additionalProperties": false
+        },
+        "field": {
+          "type": "object",
+          "properties": {"of": {"$ref": "#/$defs/expr"}, "name": {"type": "string"}},
+          "required": ["of", "name"],
+          "additionalProperties": false
+        },
+        "is_some": {"$ref": "#/$defs/operands1"},
+        "is_none": {"$ref": "#/$defs/operands1"},
+        "unwrap": {"$ref": "#/$defs/operands1"},
+        "contains": {"$ref": "#/$defs/operands2"},
+        "insert": {"$ref": "#/$defs/operands2"},
+        "remove": {"$ref": "#/$defs/operands2"},
+        "union": {"$ref": "#/$defs/operands2"},
+        "intersection": {"$ref": "#/$defs/operands2"},
+        "difference": {"$ref": "#/$defs/operands2"},
+        "subset": {"$ref": "#/$defs/operands2"},
+        "size": {"$ref": "#/$defs/operands1"},
+        "is_empty": {"$ref": "#/$defs/operands1"},
+        "has_key": {"$ref": "#/$defs/operands2"},
+        "get": {"$ref": "#/$defs/operands2"},
+        "put": {"$ref": "#/$defs/operands3"},
+        "delete": {"$ref": "#/$defs/operands2"},
+        "keys": {"$ref": "#/$defs/operands1"},
+        "at": {"$ref": "#/$defs/operands2"},
+        "first": {"$ref": "#/$defs/operands1"},
+        "last": {"$ref": "#/$defs/operands1"},
+        "push": {"$ref": "#/$defs/operands2"},
+        "pop": {"$ref": "#/$defs/operands1"},
+        "shift": {"$ref": "#/$defs/operands1"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

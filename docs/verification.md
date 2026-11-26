@@ -145,6 +145,7 @@ lintが直れば `expect` が満たされなくなり、`rake nupur:lint` が失
 | Nupur | Makiri v0.17.0.rc3（`rakelib/nupur.rake` の `NUPUR_COMMIT`） |
 | Ruby | 3.3以上。開発は4.0.10 |
 | Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite |
+| json_schemer（IRのスキーマのテスト） | 2.5.0 |
 
 検証に使うVerusと、cargoビルドに使う `vstd` のリリースは一致していない。
 仕様書のスパイクはVerus 0.2026.11.02で行っており、リリースを揃えることは残作業である。

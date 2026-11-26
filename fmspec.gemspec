@@ -19,7 +19,7 @@ Gem::Specification.new do |spec|
     "crates/*/Cargo.toml", "crates/*/src/**/*.rs",
     "vendor/nupur/**/*", "vendor/nupur.sha256",
     "Cargo.toml", "Cargo.lock", "clippy.toml",
-    "README.md", "docs/*.md"
+    "README.md", "docs/*.md", "docs/ir.schema.json"
   ]
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/fmspec/extconf.rb"]

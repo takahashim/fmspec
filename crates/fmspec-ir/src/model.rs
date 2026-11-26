@@ -214,7 +214,7 @@ fn initial_states(
             .flat_map(|prefix| c.iter().map(move |codes| [prefix.as_slice(), codes].concat()))
             .collect();
     }
-    if let Some(e) = map.get("initial_constraint") {
+    if let Some(e) = map.get("initial_constraint").filter(|e| !e.is_null()) {
         let no_args: Vec<Layout> = Vec::new();
         let ctx = Ctx {
             enums,
