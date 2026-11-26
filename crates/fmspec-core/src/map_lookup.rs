@@ -55,7 +55,7 @@ pub open spec fn put_map_row_sequence(
 }
 
 /// Construct the updated expression row at one known map rank.
-pub fn put_map_row(
+fn put_map_row(
     flat: &Vec<Expr>, payload: &Vec<Expr>, width: usize, rank_local: usize, row: usize,
 ) -> (out: Option<Vec<Expr>>)
     requires

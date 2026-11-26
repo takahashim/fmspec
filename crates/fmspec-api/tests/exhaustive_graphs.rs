@@ -119,7 +119,7 @@ fn check_all_graphs(encoding: Encoding) {
                 .filter(|&v| contains(v))
                 .map(|v| json!([values[v]]))
                 .collect::<Vec<_>>());
-            let verdict = verify_certificate(&model, &cert.to_string(), &options).unwrap();
+            let verdict = verify_certificate(&model, &cert.to_string(), &options, None).unwrap();
             let expected = if contains(0) && closed { "verified" } else { "rejected" };
             assert_eq!(verdict["status"], expected, "graph={graph}, mask={mask}: {verdict}");
         }
