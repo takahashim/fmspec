@@ -20,6 +20,62 @@ pub open spec fn key_rank(locals: Seq<Value>, index: usize) -> int {
     }
 }
 
+/// Index a column in the flat layout [present, payload..., present, payload..., ...].
+pub fn map_slot_indices(rows: usize, payload_width: usize, column: usize, len: usize)
+    -> (out: Option<Vec<usize>>)
+    ensures
+        out is Some <==> column <= payload_width && (rows == 0 || payload_width < usize::MAX)
+            && (rows as int) * (1 + payload_width) == len,
+        out matches Some(indices) ==> indices@.len() == rows
+            && forall|r: int| 0 <= r < rows ==> {
+                &&& #[trigger] indices@[r] == r * (1 + payload_width) + column
+                &&& indices@[r] < len
+            },
+{
+    if column > payload_width {
+        return None;
+    }
+    // A zero-row map has no offsets, even when its payload width is very large.
+    if rows == 0 {
+        return if len == 0 { Some(Vec::new()) } else { None };
+    }
+    let stride = payload_width.checked_add(1)?;
+    let size = rows.checked_mul(stride)?;
+    if size != len {
+        return None;
+    }
+    let mut indices: Vec<usize> = Vec::new();
+    let mut row = 0;
+    let mut base: usize = 0;
+    while row < rows
+        invariant
+            row <= rows,
+            stride == 1 + payload_width,
+            column < stride,
+            base == row * stride,
+            len == rows * stride,
+            indices@.len() == row,
+            forall|r: int| 0 <= r < row ==> {
+                &&& #[trigger] indices@[r] == r * stride + column
+                &&& indices@[r] < len
+            },
+        decreases rows - row,
+    {
+        proof {
+            vstd::arithmetic::mul::lemma_mul_inequality(row as int + 1, rows as int, stride as int);
+            vstd::arithmetic::mul::lemma_mul_is_distributive_add(stride as int, row as int, 1);
+            vstd::arithmetic::mul::lemma_mul_is_commutative(stride as int, row as int);
+            vstd::arithmetic::mul::lemma_mul_is_commutative(stride as int, row as int + 1);
+            assert(base + stride <= len);
+        }
+        let offset = base + column;
+        indices.push(offset);
+        base = base + stride;
+        row = row + 1;
+    }
+    Some(indices)
+}
+
 /// Build a balanced decision tree, consuming the leaves from right to left.
 fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (out: Expr)
     requires

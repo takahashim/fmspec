@@ -15,8 +15,10 @@
 use crate::json::{array, int, object, operands, required, schema, single, string};
 use crate::model::{EnumNames, LoadError};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
-use fmspec_core::map_lookup::{require_map_key, select_map_slot, MISSING_KEY};
+use fmspec_core::bindings::wrap_bindings;
+use fmspec_core::map_lookup::{map_slot_indices, require_map_key, select_map_slot, MISSING_KEY};
 use fmspec_core::model::{BinOp, Expr as C, Type, Value as CV};
+use fmspec_core::ranking::{extend_rank, offset_rank, option_rank};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -244,7 +246,7 @@ impl Block {
     }
 
     fn wrap(binds: &[C], e: C) -> C {
-        binds.iter().rev().fold(e, |acc, x| C::Let(b(x.clone()), b(acc)))
+        wrap_bindings(binds.to_vec(), e)
     }
 }
 
@@ -535,23 +537,13 @@ fn store(enums: &[EnumNames], t: &XType, slots: &[C], st: &SType) -> (C, Vec<C>)
 /// 要素の型 `st` での番号。値が型に属するときに限って評価する。
 fn rank_expr(enums: &[EnumNames], t: &XType, slots: &[C], st: &SType) -> C {
     match (t, st) {
-        (XType::Int, SType::Int(lo, _)) => {
-            if *lo == 0 {
-                slots[0].clone()
-            } else {
-                bin(BinOp::Sub, slots[0].clone(), ci(*lo))
-            }
-        }
+        (XType::Int, SType::Int(lo, _)) => offset_rank(slots[0].clone(), *lo),
         (XType::Bool, _) | (XType::Enum(_), _) => C::Code(b(slots[0].clone())),
         (XType::Tuple(xs), SType::Tuple(ts)) => mixed(enums, xs.iter().zip(ts), slots),
         (XType::Record(xs), SType::Record(ts)) => {
             mixed(enums, xs.iter().map(|(_, x)| x).zip(ts.iter().map(|(_, t)| t)), slots)
         }
-        (XType::Option(x), SType::Option(t)) => ite(
-            slots[0].clone(),
-            bin(BinOp::Add, ci(1), rank_expr(enums, x, &slots[1..], t)),
-            ci(0),
-        ),
+        (XType::Option(x), SType::Option(t)) => option_rank(slots[0].clone(), rank_expr(enums, x, &slots[1..], t)),
         _ => ci(0),
     }
 }
@@ -566,7 +558,7 @@ fn mixed<'s>(enums: &[EnumNames], parts: impl Iterator<Item = (&'s XType, &'s ST
         let n = t.keys(enums).unwrap_or(1) as i64;
         r = Some(match r {
             None => k,
-            Some(prev) => bin(BinOp::Add, bin(BinOp::Mul, prev, ci(n)), k),
+            Some(prev) => extend_rank(prev, n, k),
         });
     }
     r.unwrap_or_else(|| ci(0))
@@ -1269,8 +1261,8 @@ impl<'a> Ctx<'a> {
                 let (tm, ms) = self.sub(&items[0], &at(0), sc, blk)?;
                 let (k, v) = self.map_types(&tm, &at(0))?;
                 let r = self.lookup_rank(&items[1], &at(1), sc, blk, &k)?;
-                let (present, values) = map_parts(enums, &k, &v, &ms);
                 if key == "has_key" {
+                    let (present, _) = map_parts(enums, &k, &v, &ms);
                     let rows: Vec<Vec<C>> = present.into_iter().map(|p| vec![p]).collect();
                     let hit = and(
                         bin(BinOp::Ge, r.clone(), ci(0)),
@@ -1286,16 +1278,22 @@ impl<'a> Ctx<'a> {
                         index
                     }
                 };
-                let presence = select_map_slot(present, rank_local, cb(false));
+                let rows = k.keys(enums).unwrap_or(0) as usize;
+                let width = v.width(enums);
+                let select_column = |column, fallback| {
+                    let Some(indices) = map_slot_indices(rows, width, column, ms.len()) else {
+                        return type_error(path, "Mapのスロット配置が型と一致しません");
+                    };
+                    let expressions = indices.into_iter().map(|index| ms[index].clone()).collect();
+                    Ok(select_map_slot(expressions, rank_local, fallback))
+                };
+                let presence = select_column(0, cb(false))?;
                 blk.bind(require_map_key(presence, rank_local));
                 let slots = defaults(enums, &v)
                     .into_iter()
                     .enumerate()
-                    .map(|(index, fallback)| {
-                        let column = values.iter().map(|row| row[index].clone()).collect();
-                        select_map_slot(column, rank_local, fallback)
-                    })
-                    .collect();
+                    .map(|(index, fallback)| select_column(index + 1, fallback))
+                    .collect::<Res<Vec<_>>>()?;
                 Ok((v.xtype(), slots))
             }
             "put" => {

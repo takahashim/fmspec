@@ -39,6 +39,11 @@ end
 
 # 変異。[ファイル, 元の文字列, 置き換え, 説明]。元の文字列はファイルにちょうど1回現れなければならない。
 VERUS_MUTANTS = [
+  ["bindings.rs", "out = Expr::Let(Box::new(binding), Box::new(out));",
+   "out = Expr::Let(Box::new(out), Box::new(binding));", "束縛より先に本体を評価する"],
+  ["map_lookup.rs", "let offset = base + column;", "let offset = base;", "Mapの値列でも有無フラグを読む"],
+  ["ranking.rs", "let base = Expr::Bin(BinOp::Mul,", "let base = Expr::Bin(BinOp::Add,",
+   "複合キーの順位で基数を掛けずに足す"],
   ["map_lookup.rs", "            BinOp::Lt,", "            BinOp::Ge,",
    "Mapの値を選ぶときに二分木の枝を逆にする"],
   ["map_lookup.rs", "Box::new(Expr::Fail(Type::Bool, MISSING_KEY)),", "Box::new(Expr::Const(Value::Bool(true))),",
