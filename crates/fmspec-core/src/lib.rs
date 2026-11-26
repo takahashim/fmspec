@@ -14,6 +14,9 @@
 //! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
+//! - [`smodel`]：名前を解決したIRのモデルと、値の上の意味論
+//! - [`model_lower`]：モデル全体の下ろし
+//! - [`model_safe`]：モデル全体の下ろしが安全性を保存することの証明
 //! - [`equality`]：等しさの下ろしの補題（符号化の単射性と、値の種類）
 //! - [`quant`]：量化の下ろしの部品（値の番号から正規形のスロットを作る式）
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
@@ -45,11 +48,14 @@ pub mod map_lookup;
 pub mod maps;
 pub mod mbt;
 pub mod model;
+pub mod model_lower;
+pub mod model_safe;
 pub mod preserve;
 pub mod quant;
 pub mod ranking;
 pub mod semantics;
 pub mod slots;
+pub mod smodel;
 pub mod source;
 pub mod step;
 pub mod trace;

@@ -244,7 +244,23 @@ VERUS_MUTANTS = [
   ["canon.rs", "items.push(eq(copy_expr(&xs[i]), copy_expr(&ys[i])));", "items.push(eq(copy_expr(&xs[i]), copy_expr(&xs[i])));", "既定値と比べない"],
   ["canon.rs", "items.push(canonical(&ts[i], &parts[i], enums)?);", "items.push(canonical(&ts[0], &parts[i], enums)?);", "組の各要素を最初の要素の型で判定する"],
   ["canon.rs", "STy::List(e, max) => seq![Type::Int(0, max as i64)]", "STy::List(e, max) => seq![Type::Int(1, max as i64)]", "Listの長さのスロットの型から0を除く"],
-  ["canon.rs", "(Type::Int(lo, hi), Value::Int(k)) => lo <= k <= hi,", "(Type::Int(lo, hi), Value::Int(k)) => true,", "整数のスロットの範囲を確かめない"]
+  ["canon.rs", "(Type::Int(lo, hi), Value::Int(k)) => lo <= k <= hi,", "(Type::Int(lo, hi), Value::Int(k)) => true,", "整数のスロットの範囲を確かめない"],
+  ["smodel.rs", "g = Expr::And(Box::new(c), Box::new(g));", "g = Expr::Or(Box::new(c), Box::new(g));", "引数の正規形の判定を `||` でつなぐ"],
+  ["smodel.rs", "        if out.len() == 0 {\n            return Err(LowerError::Update(a, u));", "        if out.len() == usize::MAX {\n            return Err(LowerError::Update(a, u));", "スロットのない代入を受け入れる"],
+  ["smodel.rs", "let target = match off.checked_add(j) {", "let target = match off.checked_add(j + 1) {", "代入を1つ後ろのスロットに書く"],
+  ["smodel.rs", "if out.len() != 1 {", "if out.len() == 0 {", "出力のスロットの数を確かめない"],
+  ["smodel.rs", "SType::Int(lo, hi) => Type::Int(*lo, *hi),", "SType::Int(lo, hi) => Type::Int(*lo, *lo),", "出力の整数の範囲を変える"],
+  ["smodel.rs", "let domains = slot_types_list(&sa.args, &cx.enums);", "let domains: Vec<Type> = Vec::new();", "操作のドメインを空にする"],
+  ["model_lower.rs", "            Ok(false) => {},\n            Ok(true) => {", "            Ok(true) => {},\n            Ok(false) => {", "初期条件が偽の状態を残す"],
+  ["model_lower.rs", "let x = concat(&ps[p], &cs[q]);", "let x = concat(&cs[q], &ps[p]);", "候補の符号を逆の順につなぐ"],
+  ["model_lower.rs", "if k < out.len() && vec_eq(&out[k], &x) {", "if k < out.len() {", "等しくない候補を捨てる"],
+  ["model_lower.rs", "    if out.len() == 0 {\n        return Err(Fault::Lower);", "    if out.len() == usize::MAX {\n        return Err(Fault::Lower);", "スロットのない値を評価済みとする"],
+  ["model_lower.rs", "cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: vals });", "cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: Vec::new() });", "定数のスロットを空にする"],
+  ["model_lower.rs", "    cx.next = true;", "    cx.next = false;", "遷移契約から遷移後の状態を参照できなくする"],
+  ["model_lower.rs", "Some(o) => Some(copy_stype(&o.ty)),", "Some(_) => None,", "遷移契約から出力を参照できなくする"],
+  ["model_lower.rs", "ls.push(Layout { ty: copy_stype(&ts[i]), offset: off });", "ls.push(Layout { ty: copy_stype(&ts[i]), offset: 0 });", "どの位置も0にする"],
+  ["model_lower.rs", "if !(wf_stype_exec(&ts[i], enums) && small_stype(&ts[i])) {", "if !wf_stype_exec(&ts[i], enums) {", "Listの長さの上限を確かめない"],
+  ["canon.rs", "out.push(Type::Int(0, *max as i64));", "out.push(Type::Int(1, *max as i64));", "スロットの型の実装でListの長さから0を除く"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -342,7 +358,14 @@ VERUS_CANARIES = [
   ["canon.rs", "            lemma_ty_repeat_add(et, n, m);", "lemma_member_in のList"],
   ["canon.rs", "                lemma_in_member(*w, *x, enums);", "lemma_in_member のOption"],
   ["canon.rs", "        lemma_in_member(vs.last(), ts.last(), enums);", "lemma_in_members の帰納"],
-  ["lowering.rs", "                            lemma_in_member(v, sty(*st), se.enums);", "lower_stored の型に属する値"]
+  ["lowering.rs", "                            lemma_in_member(v, sty(*st), se.enums);", "lower_stored の型に属する値"],
+  ["smodel.rs", "    lemma_out(sa.output, cx, m, a, env, se);", "lemma_step の出力"],
+  ["model_safe.rs", "    lemma_env_act(sm, cv, m, st, cs[a], a, p, ps, vs, xs);", "lemma_trans の環境"],
+  ["model_safe.rs", "    if safe(m, c) {", "lemma_safe"],
+  ["model_safe.rs", "        lemma_reach_core(sm, cv, m, st, cs, ks, sx, c, q, (n - 1) as nat);", "lemma_reach_core の帰納"],
+  ["model_lower.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
+  ["model_lower.rs", "        lemma_init_ok(*sm, cv, m, stg, sx, psg, cc);", "lower_model の結論"],
+  ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

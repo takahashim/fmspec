@@ -1424,6 +1424,7 @@ pub open spec fn stored_result(src: Result<SVal, ErrKind>, out: Seq<Expr>, env: 
         Err(k) => forall|j: int| 0 <= j < out.len() ==> #[trigger] eval_l(out[j], env, ls) == Err::<Value, ErrKind>(k),
         Ok(v) => {
             &&& out.len() == width(st, enums)
+            &&& enc(v, st, enums).len() == width(st, enums)
             &&& forall|j: int|
                 0 <= j < out.len() ==> #[trigger] eval_l(out[j], env, ls) == Ok::<Value, ErrKind>(enc(v, st, enums)[j])
             &&& in_slots(enc(v, st, enums), slot_tys(st, enums), enums) ==> member(v, st, enums)

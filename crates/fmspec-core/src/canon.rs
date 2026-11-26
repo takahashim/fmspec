@@ -32,13 +32,14 @@ use crate::expr_copy::copy_expr;
 use crate::lists::{flat, lemma_list_join, lemma_list_parts, pad, pad_vals, parts_ok, row_at, rows_at, rows_view};
 #[cfg(verus_keep_ghost)]
 use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, mparts_ok, mrow_at, row_vals};
-use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
-use crate::model::{Type, Value};
+use crate::model::Value;
+use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::quant::lemma_items_member;
+use crate::slots::keys_or_zero_exec;
 use crate::slots::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, list_parts, map_rows, split, sub_exprs};
 #[cfg(verus_keep_ghost)]
 use crate::slots::{bool_lit, int_lit, ite_s, lits, split_ok, tree_s, Join};
@@ -437,7 +438,7 @@ pub proof fn lemma_member_in(v: SVal, t: STy, enums: Seq<i64>)
     }
 }
 
-proof fn lemma_seq_in(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
+pub proof fn lemma_seq_in(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
     requires
         wf_stypes(ts, enums),
         smalls(ts),
@@ -1990,6 +1991,197 @@ fn canonical_parts(_parent: &SType, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &
         }
     }
     Some(r)
+}
+
+// ---- スロットの型の実装 ----
+
+/// `xs` を `n` 回、`out` の後ろに加える。
+fn push_repeat(xs: &Vec<Type>, n: usize, out: &mut Vec<Type>)
+    ensures
+        final(out)@ == old(out)@ + ty_repeat(xs@, n as nat),
+{
+    let ghost prefix = out@;
+    let mut k: usize = 0;
+    while k < n
+        invariant
+            k <= n,
+            out@ == prefix + ty_repeat(xs@, k as nat),
+        decreases n - k,
+    {
+        let ghost before = out@;
+        let mut j: usize = 0;
+        while j < xs.len()
+            invariant
+                j <= xs@.len(),
+                out@ == before + xs@.take(j as int),
+            decreases xs@.len() - j,
+        {
+            out.push(xs[j]);
+            j += 1;
+            proof {
+                assert(out@ =~= before + xs@.take(j as int));
+            }
+        }
+        proof {
+            assert(xs@.take(j as int) =~= xs@);
+            assert(ty_repeat(xs@, (k + 1) as nat) == ty_repeat(xs@, k as nat) + xs@);
+            assert(out@ =~= prefix + ty_repeat(xs@, (k + 1) as nat));
+        }
+        k += 1;
+    }
+}
+
+/// 型 `t` の各スロットの中核の型を、`out` の後ろに加える。
+pub fn slot_types(t: &SType, enums: &Vec<i64>, out: &mut Vec<Type>)
+    ensures
+        final(out)@ == old(out)@ + slot_tys(sty(*t), enums@),
+    decreases t, 1nat,
+{
+    let ghost prefix = out@;
+    match t {
+        SType::Bool => {
+            out.push(Type::Bool);
+            proof {
+                assert(out@ =~= prefix + slot_tys(sty(*t), enums@));
+            }
+        },
+        SType::Int(lo, hi) => {
+            out.push(Type::Int(*lo, *hi));
+            proof {
+                assert(out@ =~= prefix + slot_tys(sty(*t), enums@));
+            }
+        },
+        SType::Enum(id) => {
+            out.push(Type::Enum(*id));
+            proof {
+                assert(out@ =~= prefix + slot_tys(sty(*t), enums@));
+            }
+        },
+        SType::Tuple(ts) => {
+            proof {
+                assert(decreases_to!(*t => *ts));
+            }
+            slot_types_seq(t, ts, enums, out);
+        },
+        SType::Record(_, ts) => {
+            proof {
+                assert(decreases_to!(*t => *ts));
+            }
+            slot_types_seq(t, ts, enums, out);
+        },
+        SType::Option(x) => {
+            out.push(Type::Bool);
+            slot_types(x, enums, out);
+            proof {
+                assert(out@ =~= prefix + slot_tys(sty(*t), enums@));
+            }
+        },
+        SType::Set(e) => {
+            let n = keys_or_zero_exec(e, enums);
+            let mut row: Vec<Type> = Vec::new();
+            row.push(Type::Bool);
+            proof {
+                assert(row@ =~= seq![Type::Bool]);
+            }
+            push_repeat(&row, n, out);
+        },
+        SType::Map(k, v) => {
+            let n = keys_or_zero_exec(k, enums);
+            let mut row: Vec<Type> = Vec::new();
+            row.push(Type::Bool);
+            slot_types(v, enums, &mut row);
+            proof {
+                assert(row@ =~= seq![Type::Bool] + slot_tys(sty(**v), enums@));
+            }
+            push_repeat(&row, n, out);
+        },
+        SType::List(e, max) => {
+            out.push(Type::Int(0, *max as i64));
+            let mut row: Vec<Type> = Vec::new();
+            slot_types(e, enums, &mut row);
+            proof {
+                assert(row@ =~= slot_tys(sty(**e), enums@));
+            }
+            push_repeat(&row, *max, out);
+            proof {
+                assert(out@ =~= prefix + slot_tys(sty(*t), enums@));
+            }
+        },
+    }
+}
+
+fn slot_types_seq(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>, out: &mut Vec<Type>)
+    requires
+        decreases_to!(*_parent => *ts),
+    ensures
+        final(out)@ == old(out)@ + slot_tys_seq(stys(ts@), enums@),
+    decreases _parent, 0nat,
+{
+    let ghost prefix = out@;
+    let mut i = 0;
+    proof {
+        lemma_stys(ts@);
+        assert(stys(ts@).take(0) =~= Seq::<STy>::empty());
+        assert(out@ =~= prefix + slot_tys_seq(stys(ts@).take(0), enums@));
+    }
+    while i < ts.len()
+        invariant
+            decreases_to!(*_parent => *ts),
+            i <= ts.len(),
+            stys(ts@).len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] stys(ts@)[j] == sty(ts@[j]),
+            out@ == prefix + slot_tys_seq(stys(ts@).take(i as int), enums@),
+        decreases ts.len() - i,
+    {
+        proof {
+            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+        }
+        slot_types(&ts[i], enums, out);
+        proof {
+            let xs = stys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+            assert(out@ =~= prefix + slot_tys_seq(xs.take(i + 1), enums@));
+        }
+        i += 1;
+    }
+    proof {
+        assert(stys(ts@).take(ts@.len() as int) =~= stys(ts@));
+    }
+}
+
+/// 型の列の各型のスロットの型を、順につなげた列。
+pub fn slot_types_list(ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Vec<Type>)
+    ensures
+        r@ == slot_tys_seq(stys(ts@), enums@),
+{
+    let mut out: Vec<Type> = Vec::new();
+    let mut i = 0;
+    proof {
+        lemma_stys(ts@);
+        assert(stys(ts@).take(0) =~= Seq::<STy>::empty());
+        assert(out@ =~= slot_tys_seq(stys(ts@).take(0), enums@));
+    }
+    while i < ts.len()
+        invariant
+            i <= ts.len(),
+            stys(ts@).len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] stys(ts@)[j] == sty(ts@[j]),
+            out@ == slot_tys_seq(stys(ts@).take(i as int), enums@),
+        decreases ts.len() - i,
+    {
+        slot_types(&ts[i], enums, &mut out);
+        proof {
+            let xs = stys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+        }
+        i += 1;
+    }
+    proof {
+        assert(stys(ts@).take(ts@.len() as int) =~= stys(ts@));
+    }
+    out
 }
 
 } // verus!
