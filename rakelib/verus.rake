@@ -128,7 +128,15 @@ VERUS_MUTANTS = [
   ["gate.rs", "        Evidence::Unavailable(limit) => Verdict {\n            kind: VerdictKind::Inconclusive,",
    "        Evidence::Unavailable(limit) => Verdict {\n            kind: VerdictKind::Verified,", "証拠がないのに Verified を返す"],
   ["gate.rs", "        Err(e) => Verdict { kind: VerdictKind::InvalidModel, reject: None, invalid: Some(e), limit: None },\n        Ok(()) => decide_wf(m, c, ev),",
-   "        Err(e) => decide_wf(m, c, ev),\n        Ok(()) => decide_wf(m, c, ev),", "IR検証に失敗したモデルを判定する"]
+   "        Err(e) => decide_wf(m, c, ev),\n        Ok(()) => decide_wf(m, c, ev),", "IR検証に失敗したモデルを判定する"],
+  ["gate.rs", "            match check_state(m, self.cond, states, k) {\n                Some(r) => {\n                    return Some(Verdict::rejected(r));\n                },\n                None => {},\n            }\n", "",
+   "区切って進める証明書の検査で状態を調べない"],
+  ["gate.rs", "        if k < states.len() {\n            return None;\n        }\n", "", "証明書を検査し終える前に Verified を返す"],
+  ["gate.rs", "        match check_initials(m, &cert.states) {\n            Some(r) => Err(Verdict::rejected(r)),",
+   "        match check_initials(m, &cert.states) {\n            Some(r) => Ok(CertCheck { model, cond: c, cert, next: 0 }),",
+   "区切って進める証明書の検査で初期状態の欠けを見逃す"],
+  ["gate.rs", "        Verdict { kind: VerdictKind::Inconclusive, reject: None, invalid: None, limit: Some(limit) }",
+   "        Verdict { kind: VerdictKind::Verified, reject: None, invalid: None, limit: Some(limit) }", "打ち切った検査で Verified を返す"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -157,7 +165,9 @@ VERUS_CANARIES = [
   ["trace.rs", "    if check_claim(m, c, start, steps, claim) {\n        None", "check_trace の受理"],
   ["gate.rs", "            match check_certificate(m, c, &cert.states) {", "decide の証明書の検査の前"],
   ["gate.rs", "    decide_wf(model.raw(), c, ev)\n}", "decide"],
-  ["gate.rs", "    match validate_raw(m) {\n        Err(e) => Verdict {", "decide_raw"]
+  ["gate.rs", "    match validate_raw(m) {\n        Err(e) => Verdict {", "decide_raw"],
+  ["gate.rs", "            k = k + 1;\n            left = left - 1;", "CertCheck::advance のループの末尾"],
+  ["gate.rs", "        Some(Verdict::of(VerdictKind::Verified))\n    }", "CertCheck::advance の受理"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

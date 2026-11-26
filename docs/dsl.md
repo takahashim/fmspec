@@ -283,10 +283,13 @@ invariant(:no_milk_alone) { |s| s.items.include?(:milk).implies(s.items.any? { |
 
 | メソッド | 内容 |
 |---|---|
-| `check(max_states: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
+| `check(max_states: nil, max_check_cost: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
 | `simulate(traces: 100, max_steps: 100, seed: nil, **検査条件)` | ランダムシミュレーション |
-| `verify_certificate(証明書, **検査条件)` | 証明書の検査 |
+| `verify_certificate(証明書, max_check_cost: nil, **検査条件)` | 証明書の検査 |
 | `replay(トレース)` | トレースの再生 |
+
+`max_check_cost:` は、判定ゲートが証拠の検査にかける評価回数の上限である（[ir.md](ir.md) の「証拠の検査の資源上限と中断」）。
+検査の見積もりが上限を超えると、結果は `:inconclusive`（理由は `:max_check_cost`）になる。
 
 検査条件は、`deadlock:`（非終端のデッドロックを検査する）と、`actions:`、`invariants:`、`contracts:`（対象の名前の配列）である。
 省略時は、すべての操作、不変条件、遷移契約が対象で、デッドロック検査は無効である。
@@ -408,6 +411,7 @@ result.assert_passed!
 - 候補が空になれば、不適合である。複数の候補が残ることは失敗ではない。
 - 次の入力は、全候補で有効な入力から選ぶ。
 - どの候補にも有効な入力がなければ、そのケースはそこで終わる。
+- 候補が `max_candidates:` を超えた時点で、そのケースは未完了（`:inconclusive`、理由は `:max_candidates`）で終わる。最初の観測で一致する初期状態が上限を超えた場合も同じである。
 - 有効な入力を持つ候補があるのに、全候補に共通する入力がなければ、そのケースは未完了（`:inconclusive`、理由は `:no_common_input`）で終わる。
 
 ### 結果

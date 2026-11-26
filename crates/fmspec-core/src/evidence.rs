@@ -47,6 +47,8 @@ pub enum Limit {
     MaxStates,
     /// 中断要求。
     Interrupted,
+    /// 証拠の検査の資源上限。
+    CheckBudget,
 }
 
 pub enum Evidence {

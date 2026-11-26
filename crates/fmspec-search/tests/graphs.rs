@@ -68,6 +68,7 @@ fn run(m: &CheckedModel, deadlock: bool, max_states: Option<usize>) -> Outcome {
         &BfsOptions {
             max_states,
             interrupt: None,
+            max_check_cost: None,
         },
     )
 }
@@ -260,6 +261,7 @@ fn an_interrupt_request_stops_the_search() {
         &BfsOptions {
             max_states: None,
             interrupt: Some(&|| true),
+            max_check_cost: None,
         },
     );
     assert_eq!(o.status, Status::Inconclusive(Limit::Interrupted));

@@ -14,8 +14,10 @@ use std::collections::{HashMap, VecDeque};
 pub struct BfsOptions<'a> {
     /// 保持する異なる状態の数の上限。初期状態を含む。
     pub max_states: Option<usize>,
-    /// 中断要求の問い合わせ。真を返したら探索を打ち切る。
+    /// 中断要求の問い合わせ。真を返したら探索を打ち切る。証明書の検査の途中でも確かめる。
     pub interrupt: Option<&'a dyn Fn() -> bool>,
+    /// 判定ゲートが証拠の検査にかける評価回数の上限（`gate::evidence_cost` の見積もり）。
+    pub max_check_cost: Option<u64>,
 }
 
 /// 探索器の報告。検査済みの値ではない（仕様書 §14.1.1）。

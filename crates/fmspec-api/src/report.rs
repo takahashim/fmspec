@@ -26,6 +26,7 @@ fn limit_name(limit: Limit) -> &'static str {
     match limit {
         Limit::MaxStates => "max_states",
         Limit::Interrupted => "interrupted",
+        Limit::CheckBudget => "max_check_cost",
     }
 }
 

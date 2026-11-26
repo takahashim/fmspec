@@ -57,7 +57,7 @@ module Fmspec
     # 受理された証明書。`check(certificate: true)` で :verified のとき。
     def certificate = @raw["certificate"]
 
-    # :inconclusive の理由。:max_states または :interrupted。
+    # :inconclusive の理由。:max_states、:max_check_cost、:interrupted のいずれか。
     def reason = @raw["reason"]&.to_sym
 
     # 探索器の報告。検査済みの値ではない。

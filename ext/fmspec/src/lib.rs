@@ -130,8 +130,19 @@ fn model_verify_certificate(ruby: &Ruby, this: Value, certificate: Value, option
     let certificate = read(ruby, certificate)?;
     let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    let result = nupur::gvl::without_gvl(ruby, move || {
-        fmspec_api::to_text(fmspec_api::verify_certificate(model, &certificate, &options))
+    // `model_check` と同じ理由の例外。
+    #[cfg_attr(
+        dylint_lib = "nupur_lints",
+        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
+    )]
+    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
+        let interrupt = || cancel.requested();
+        fmspec_api::to_text(fmspec_api::verify_certificate(
+            model,
+            &certificate,
+            &options,
+            Some(&interrupt),
+        ))
     })?;
     text(ruby, &result)
 }

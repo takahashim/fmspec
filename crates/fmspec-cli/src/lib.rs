@@ -25,9 +25,9 @@ pub struct Run {
 const USAGE: &str = "\
 使い方:
   fmspec validate MODEL.json
-  fmspec check MODEL.json [--strategy bfs] [--max-states N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
+  fmspec check MODEL.json [--strategy bfs] [--max-states N] [--max-check-cost N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
   fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [検査条件] [--trace-out FILE]
-  fmspec verify-certificate MODEL.json CERTIFICATE.json [検査条件]
+  fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [検査条件]
   fmspec replay MODEL.json TRACE.json
   fmspec shrink MODEL.json TRACE.json [--trace-out FILE]
 
@@ -42,8 +42,9 @@ const USAGE: &str = "\
 ";
 
 /// 値を取るオプション。[フラグ, オプションのキー, 種類]。
-const VALUED: [(&str, &str, Kind); 8] = [
+const VALUED: [(&str, &str, Kind); 9] = [
     ("--max-states", "max_states", Kind::Count),
+    ("--max-check-cost", "max_check_cost", Kind::Count),
     ("--traces", "traces", Kind::Count),
     ("--max-steps", "max_steps", Kind::Count),
     ("--seed", "seed", Kind::Count),
@@ -236,7 +237,7 @@ fn cmd_verify_certificate(io: &Io, a: &Args) -> Result<Run, Run> {
     };
     let model = load_model(io, model_path, a.json)?;
     let certificate = read(io, cert_path, a.json)?;
-    let body = fmspec_api::verify_certificate(&model, &certificate, &Value::Object(a.options.clone()))
+    let body = fmspec_api::verify_certificate(&model, &certificate, &Value::Object(a.options.clone()), None)
         .map_err(|e| failure(a.json, "usage_error", e))?;
     Ok(finish(a.json, body))
 }

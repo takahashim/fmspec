@@ -24,13 +24,15 @@ module Fmspec
 
     # モデル検査（仕様書 §8）。到達できるすべての状態と有効な遷移を、幅優先探索で検査する。
     #
-    #   max_states   保持する異なる状態の数の上限。超える場合は :inconclusive
-    #   deadlock     非終端のデッドロックを検査する
+    #   max_states      保持する異なる状態の数の上限。超える場合は :inconclusive
+    #   max_check_cost  判定ゲートが証拠の検査にかける評価回数の上限。見積もりが超える場合は :inconclusive
+    #   deadlock        非終端のデッドロックを検査する
     #   actions、invariants、contracts   対象の名前の配列。省略時はすべて
-    #   certificate  真なら、受理された証明書を結果に含める
-    def check(max_states: nil, certificate: false, **conditions)
+    #   certificate     真なら、受理された証明書を結果に含める
+    def check(max_states: nil, max_check_cost: nil, certificate: false, **conditions)
       options = condition_options(conditions)
       options["max_states"] = max_states if max_states
+      options["max_check_cost"] = max_check_cost if max_check_cost
       options["certificate"] = true if certificate
       result(native.check(JSON.generate(options)))
     end
@@ -43,10 +45,12 @@ module Fmspec
       result(native.simulate(JSON.generate(options)))
     end
 
-    # 証明書（Hash またはJSON文字列）を、指定の検査条件で検査する。
-    def verify_certificate(certificate, **conditions)
+    # 証明書（Hash またはJSON文字列）を、指定の検査条件で検査する。`max_check_cost` は check と同じ。
+    def verify_certificate(certificate, max_check_cost: nil, **conditions)
       certificate = JSON.generate(certificate) unless certificate.is_a?(String)
-      result(native.verify_certificate(certificate, JSON.generate(condition_options(conditions))))
+      options = condition_options(conditions)
+      options["max_check_cost"] = max_check_cost if max_check_cost
+      result(native.verify_certificate(certificate, JSON.generate(options)))
     end
 
     # トレース（Trace、Hash、またはJSON文字列）を、記録された検査条件で再生する。

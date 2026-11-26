@@ -222,7 +222,7 @@ fn check_action(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize, a:
 
 /// 証明書の `k` 番目の状態を検査する。
 #[verifier::loop_isolation(false)]
-fn check_state(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize) -> (r: Option<Reject>)
+pub(crate) fn check_state(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize) -> (r: Option<Reject>)
     requires
         k < cert@.len(),
     ensures
@@ -274,10 +274,10 @@ fn check_state(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize) -> 
     None
 }
 
-/// 安全性証明書を検査する。`None`（受理）を返すなら、証明書は帰納的で、モデルは安全である。
-pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
+/// 証明書が初期状態をすべて含むことを検査する。
+pub(crate) fn check_initials(m: &RawModel, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
     ensures
-        r is None ==> inductive(*m, *c, cert@) && safe(*m, *c),
+        r is None ==> forall|j: int| 0 <= j < m.inits@.len() ==> in_cert(cert@, (#[trigger] m.inits@[j])@),
 {
     let mut i: usize = 0;
     while i < m.inits.len()
@@ -290,6 +290,20 @@ pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> 
             return Some(Reject::MissingInitial(i));
         }
         i = i + 1;
+    }
+    None
+}
+
+/// 安全性証明書を検査する。`None`（受理）を返すなら、証明書は帰納的で、モデルは安全である。
+pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
+    ensures
+        r is None ==> inductive(*m, *c, cert@) && safe(*m, *c),
+{
+    match check_initials(m, cert) {
+        Some(r) => {
+            return Some(r);
+        },
+        None => {},
     }
     let mut k: usize = 0;
     while k < cert.len()

@@ -14,7 +14,9 @@ use fmspec_core::gate::decide;
 use fmspec_core::gate::VerdictKind;
 use fmspec_core::semantics::Conditions;
 use fmspec_ir::{certificate_from_json, certificate_to_json, default_conditions, trace_from_json, LoadError};
-use fmspec_search::{check as search_check, sample, shrink as search_shrink, BfsOptions, SimOptions, Status};
+use fmspec_search::{
+    check as search_check, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions, Status,
+};
 use serde_json::{json, Map, Value};
 use std::time::Instant;
 
@@ -22,7 +24,7 @@ pub use fmspec_ir::{load, Model};
 pub use human::human;
 pub use session::Session;
 
-/// 中断要求の問い合わせ。真を返したら、探索を打ち切って `inconclusive` を返す。
+/// 中断要求の問い合わせ。真を返したら、探索か証明書の検査を打ち切って `inconclusive` を返す。
 pub type Interrupt<'a> = Option<&'a dyn Fn() -> bool>;
 
 const CONDITION_KEYS: [&str; 4] = ["actions", "invariants", "contracts", "deadlock"];
@@ -127,12 +129,19 @@ pub fn load_error(e: &LoadError) -> Value {
 /// 幅優先探索でモデルを検査する。
 ///
 /// オプションは、検査条件（`actions`、`invariants`、`contracts`、`deadlock`）、`max_states`、
+/// `max_check_cost`（判定ゲートが証拠の検査にかける評価回数の上限）、
 /// `certificate`（真なら、受理された証明書を結果に含める）。
 pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["max_states", "certificate"])?;
+    let map = options(opts, &["max_states", "max_check_cost", "certificate"])?;
     let cond = conditions(model, map)?;
     let max_states = count(map, "max_states", 1)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
-    let outcome = search_check(model.checked(), &cond, &BfsOptions { max_states, interrupt });
+    let max_check_cost = count(map, "max_check_cost", 0)?;
+    let opts = BfsOptions {
+        max_states,
+        interrupt,
+        max_check_cost,
+    };
+    let outcome = search_check(model.checked(), &cond, &opts);
     let mut body = report::check_report(model, &cond, &outcome);
     if let (true, Evidence::Certificate(cert), Status::Verified) =
         (flag(map, "certificate")?, &outcome.evidence, outcome.status)
@@ -168,16 +177,24 @@ pub fn simulate(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
     ))
 }
 
-/// 提示された証明書を、オプションの検査条件で検査する。
-pub fn verify_certificate(model: &Model, certificate: &str, opts: &Value) -> Result<Value, String> {
-    let map = options(opts, &[])?;
+/// 提示された証明書を、オプションの検査条件で検査する。オプションは、検査条件と `max_check_cost`。
+pub fn verify_certificate(
+    model: &Model,
+    certificate: &str,
+    opts: &Value,
+    interrupt: Interrupt,
+) -> Result<Value, String> {
+    let map = options(opts, &["max_check_cost"])?;
     let cond = conditions(model, map)?;
+    let gate = GateOptions {
+        max_cost: count(map, "max_check_cost", 0)?,
+        interrupt,
+    };
     let cert = match certificate_from_json(model, certificate) {
         Ok(cert) => cert,
         Err(e) => return Ok(report::unreadable_evidence(model, &e.to_string())),
     };
-    let evidence = Evidence::Certificate(cert);
-    let verdict = decide(model.checked(), &cond, &evidence);
+    let (verdict, evidence) = judge(model.checked(), &cond, Evidence::Certificate(cert), &gate);
     Ok(report::evidence_report(model, &cond, &evidence, &verdict))
 }
 

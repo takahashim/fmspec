@@ -174,16 +174,33 @@ impl Session {
             .all(|(var, seen)| state.get(*var).map(|x| Seen::Value(*x)) == Some(*seen))
     }
 
-    /// 初期観測から候補集合を作る。観測と一致する初期状態があれば `true`。
-    pub fn start(&mut self, model: &CheckedModel, seen: &[Seen]) -> bool {
+    /// 初期観測から候補集合を作る。
+    /// 観測と一致する初期状態がなければ `Failure`、候補が上限を超えれば `TooManyCandidates` を返す。
+    pub fn start(&mut self, model: &CheckedModel, seen: &[Seen]) -> Observed {
         self.candidates.clear();
         self.matched = 0;
         for init in model.initials() {
             if self.agrees(init, seen) {
                 self.candidates.insert(init.clone());
+                if self.candidates.len() > self.max_candidates {
+                    self.candidates.clear();
+                    return Observed::TooManyCandidates;
+                }
             }
         }
-        !self.candidates.is_empty()
+        if self.candidates.is_empty() {
+            let possible = model
+                .initials()
+                .iter()
+                .take(MAX_POSSIBLE)
+                .map(|init| Outcome {
+                    output: None,
+                    state: init.clone(),
+                })
+                .collect();
+            return Observed::Failure { possible };
+        }
+        Observed::Continue
     }
 
     /// 状態での、対象の操作の有効な遷移。
@@ -305,6 +322,10 @@ impl Session {
                         violation.get_or_insert((true, i, t.state.clone()));
                     }
                     next.insert(t.state);
+                    // 上限を超えた時点で打ち切り、それ以上の候補を作らない。
+                    if next.len() > self.max_candidates {
+                        return Observed::TooManyCandidates;
+                    }
                 } else if possible.len() < MAX_POSSIBLE {
                     possible.insert(Outcome {
                         output: t.output,
@@ -327,9 +348,6 @@ impl Session {
                 index,
                 state,
             };
-        }
-        if next.len() > self.max_candidates {
-            return Observed::TooManyCandidates;
         }
         self.candidates = next;
         self.matched += 1;

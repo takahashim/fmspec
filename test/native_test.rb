@@ -22,6 +22,33 @@ class NativeTest < Minitest::Test
     assert_raises(Timeout::Error) { Timeout.timeout(0.3) { huge.simulate(traces: 10**9, max_steps: 1000, seed: 1) } }
   end
 
+  # 1状態の検査に時間のかかる、100状態の証明書。
+  def heavy_certificate
+    model = Fmspec.define(:heavy) do
+      state :n, int(0..99), initial: 0
+      action :inc do |s|
+        guard s.n < 99
+        update n: s.n + 1
+      end
+      invariant(:slow) { |s| forall(int(0..1023)) { |x| forall(int(0..1023)) { |y| (x + y + s.n) >= 0 } } }
+    end
+    conditions = { "actions" => ["inc"], "invariants" => ["slow"], "contracts" => [], "deadlock" => false }
+    certificate = { "certificate_version" => 1, "model_digest" => model.digest,
+                    "conditions" => conditions, "states" => (0..99).map { |n| [n] } }
+    [model, certificate]
+  end
+
+  def test_a_certificate_check_can_be_interrupted_by_timeout
+    model, certificate = heavy_certificate
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(Timeout::Error) { Timeout.timeout(0.3) { model.verify_certificate(certificate) } }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    assert_operator elapsed, :<, 3.0, "中断に時間がかかりすぎている"
+    # 見積もりが上限を超える証明書は、検査せずに :inconclusive にする。
+    result = model.verify_certificate(certificate, max_check_cost: 1000)
+    assert_equal [:inconclusive, :max_check_cost], [result.status, result.reason]
+  end
+
   def test_a_check_can_be_interrupted_from_another_thread
     worker = Thread.new { huge.check }
     sleep 0.2

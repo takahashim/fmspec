@@ -1,9 +1,10 @@
 //! モデル検査の経路。探索器で証拠を生成し、判定ゲートを通してから結果を返す（仕様書 §3.1、§8.3）。
 
 use crate::bfs::{bfs, BfsOptions, Stats};
+use crate::gate::{judge, GateOptions};
 use crate::simulate::{simulate, SimOptions, SimStats};
 use fmspec_core::evidence::{Evidence, Limit, Reject};
-use fmspec_core::gate::{decide, CheckedModel, Verdict, VerdictKind};
+use fmspec_core::gate::{CheckedModel, Verdict, VerdictKind};
 use fmspec_core::semantics::Conditions;
 use std::time::{Duration, Instant};
 
@@ -26,7 +27,7 @@ pub struct Outcome {
     pub status: Status,
     /// 判定ゲートが返した判定。
     pub verdict: Verdict,
-    /// 判定ゲートに渡した証拠。
+    /// 判定ゲートに渡した証拠。検査を打ち切った場合は、打ち切った理由の `Unavailable`。
     pub evidence: Evidence,
     /// 探索器の報告。検査済みの値ではない。
     pub stats: Stats,
@@ -38,8 +39,19 @@ pub struct Outcome {
 /// 探索器が生成した証拠を判定ゲートに渡し、判定を検査結果に分類する。
 /// 判定ゲートが証拠を拒否した場合は、探索器の不具合として `InternalError` にする。
 pub fn check_evidence(model: &CheckedModel, cond: &Conditions, evidence: Evidence, stats: Stats) -> Outcome {
+    check_evidence_with(model, cond, evidence, stats, &GateOptions::default())
+}
+
+/// `check_evidence` に、証拠の検査の資源上限と中断を付けたもの。
+pub fn check_evidence_with(
+    model: &CheckedModel,
+    cond: &Conditions,
+    evidence: Evidence,
+    stats: Stats,
+    gate: &GateOptions,
+) -> Outcome {
     let started = Instant::now();
-    let verdict = decide(model, cond, &evidence);
+    let (verdict, evidence) = judge(model, cond, evidence, gate);
     let gate_time = started.elapsed();
     let status = match verdict.kind() {
         VerdictKind::Verified => Status::Verified,
@@ -65,7 +77,11 @@ pub fn check(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Outc
     let started = Instant::now();
     let found = bfs(model, cond, opts);
     let search_time = started.elapsed();
-    let mut outcome = check_evidence(model, cond, found.evidence, found.stats);
+    let gate = GateOptions {
+        max_cost: opts.max_check_cost,
+        interrupt: opts.interrupt,
+    };
+    let mut outcome = check_evidence_with(model, cond, found.evidence, found.stats, &gate);
     outcome.search_time = search_time;
     outcome
 }

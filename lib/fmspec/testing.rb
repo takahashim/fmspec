@@ -259,7 +259,7 @@ module Fmspec
       steps = []
       observation = observe(context, steps)
       answer = ask(session.initial(JSON.generate(wire(observation))))
-      return outcome(:conformance_failure, steps, answer) unless answer["status"] == "continue"
+      return outcome(answer["status"].to_sym, steps, answer) unless answer["status"] == "continue"
 
       while (input = yield(session, steps))
         action, args = input

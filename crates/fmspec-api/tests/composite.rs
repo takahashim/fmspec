@@ -34,7 +34,7 @@ fn recheck(ir: &Value, result: &Value) {
     match result["status"].as_str().unwrap() {
         "verified" => {
             let cert = result["certificate"].to_string();
-            let again = verify_certificate(&m, &cert, &json!({})).unwrap();
+            let again = verify_certificate(&m, &cert, &json!({}), None).unwrap();
             assert_eq!(again["status"], "verified", "{again}");
         }
         "violated" | "error" => {

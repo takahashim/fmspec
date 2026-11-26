@@ -103,6 +103,7 @@ pub fn run_with(m: &Model, deadlock: bool, max_states: Option<usize>) -> Outcome
         &BfsOptions {
             max_states,
             interrupt: None,
+            max_check_cost: None,
         },
     )
 }

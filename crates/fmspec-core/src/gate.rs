@@ -199,7 +199,8 @@ impl Verdict {
 ///
 /// - `Verified`: 証拠は証明書で、モデルは検査条件の下で安全である。
 /// - `Violated` / `Error`: 証拠はトレースで、そのトレースは初期状態から始まって有効であり、末尾で主張どおりの違反 / 評価エラーが起きる。
-/// - `Inconclusive`: 証拠が得られなかった場合に限る。
+/// - `Inconclusive`: モデルについて何も主張しない。`decide` は、証拠が得られなかった場合に限って返す。
+///   `CertCheck` は、証明書の検査を資源上限か中断で打ち切った場合に返す。
 /// - `InvalidModel`: モデルが整形式でない場合に限る。それ以外の判定では、モデルは整形式である。
 /// - `Rejected`: 証拠が提示された場合に限る。証拠の拒否を成功や違反として扱わない。
 pub open spec fn verdict_sound(m: RawModel, c: Conditions, ev: Evidence, k: VerdictKind) -> bool {
@@ -223,7 +224,7 @@ pub open spec fn verdict_sound(m: RawModel, c: Conditions, ev: Evidence, k: Verd
             ) && claim_holds(m, c, start@, steps@, claim),
             _ => false,
         },
-        VerdictKind::Inconclusive => wf(m) && ev is Unavailable,
+        VerdictKind::Inconclusive => wf(m),
         VerdictKind::InvalidModel => !wf(m),
         VerdictKind::Rejected => wf(m) && !(ev is Unavailable),
     }
@@ -278,6 +279,7 @@ fn decide_wf(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
     ensures
         verdict_sound(*m, *c, *ev, v.spec_kind()),
         !(v.spec_kind() is InvalidModel),
+        v.spec_kind() is Inconclusive ==> ev is Unavailable,
 {
     match ev {
         Evidence::Certificate(cert) => {
@@ -311,8 +313,133 @@ pub fn decide(model: &CheckedModel, c: &Conditions, ev: &Evidence) -> (v: Verdic
     ensures
         verdict_sound(model@, *c, *ev, v.spec_kind()),
         !(v.spec_kind() is InvalidModel),
+        v.spec_kind() is Inconclusive ==> ev is Unavailable,
 {
     decide_wf(model.raw(), c, ev)
+}
+
+/// 途中で打ち切れる証明書の検査。`decide` と同じ検査を、状態の数を区切って進める。
+///
+/// 未検証の呼び出し側が、区切りごとに中断要求と資源上限を確かめ、必要なら `stop` で打ち切る。
+/// 打ち切った検査は `Inconclusive` になり、モデルについて何も主張しない。
+pub struct CertCheck<'a> {
+    model: &'a CheckedModel,
+    cond: &'a Conditions,
+    cert: &'a Certificate,
+    /// 検査を終えた状態の数。
+    next: usize,
+}
+
+impl<'a> CertCheck<'a> {
+    /// 初期状態をすべて含み、検査を終えた状態は性質を満たして遷移で閉じている。
+    #[verifier::type_invariant]
+    spec fn checked_prefix(self) -> bool {
+        let m = self.model@;
+        let states = self.cert.states@;
+        &&& wf(m)
+        &&& self.next <= states.len()
+        &&& forall|i: int| 0 <= i < m.inits@.len() ==> in_cert(states, (#[trigger] m.inits@[i])@)
+        &&& forall|j: int| 0 <= j < self.next ==> state_closed(m, *self.cond, states, (#[trigger] states[j])@)
+    }
+
+    pub closed spec fn spec_model(self) -> RawModel {
+        self.model@
+    }
+
+    pub closed spec fn spec_cond(self) -> Conditions {
+        *self.cond
+    }
+
+    pub closed spec fn spec_cert(self) -> Certificate {
+        *self.cert
+    }
+
+    /// 検査を始める。検査条件が一致しない証明書と、初期状態を含まない証明書は、ここで拒否する。
+    pub fn start(model: &'a CheckedModel, c: &'a Conditions, cert: &'a Certificate) -> (r: Result<
+        CertCheck<'a>,
+        Verdict,
+    >)
+        ensures
+            match r {
+                Ok(chk) => chk.spec_model() == model@ && chk.spec_cond() == *c && chk.spec_cert() == *cert,
+                Err(v) => v.spec_kind() is Rejected,
+            },
+    {
+        let m = model.raw();
+        if !conditions_eq(&cert.conditions, c) {
+            return Err(Verdict::rejected(Reject::ConditionMismatch));
+        }
+        match check_initials(m, &cert.states) {
+            Some(r) => Err(Verdict::rejected(r)),
+            None => Ok(CertCheck { model, cond: c, cert, next: 0 }),
+        }
+    }
+
+    /// まだ検査していない状態の数。
+    pub fn remaining(&self) -> usize {
+        proof {
+            use_type_invariant(self);
+        }
+        self.cert.states.len() - self.next
+    }
+
+    /// 状態を最大 `n` 個検査する。証明書をすべて検査し終えるか、拒否したら、判定を返す。
+    #[verifier::loop_isolation(false)]
+    pub fn advance(&mut self, n: usize) -> (r: Option<Verdict>)
+        ensures
+            final(self).spec_model() == old(self).spec_model(),
+            final(self).spec_cond() == old(self).spec_cond(),
+            final(self).spec_cert() == old(self).spec_cert(),
+            r matches Some(v) ==> (v.spec_kind() is Verified || v.spec_kind() is Rejected) && verdict_sound(
+                old(self).spec_model(),
+                old(self).spec_cond(),
+                Evidence::Certificate(old(self).spec_cert()),
+                v.spec_kind(),
+            ),
+    {
+        proof {
+            use_type_invariant(&*self);
+        }
+        let m = self.model.raw();
+        let states = &self.cert.states;
+        let mut k = self.next;
+        let mut left = n;
+        while k < states.len() && left > 0
+            invariant
+                self.next <= k <= states@.len(),
+                forall|j: int| 0 <= j < k ==> state_closed(*m, *self.cond, states@, (#[trigger] states@[j])@),
+            decreases states@.len() - k,
+        {
+            match check_state(m, self.cond, states, k) {
+                Some(r) => {
+                    return Some(Verdict::rejected(r));
+                },
+                None => {},
+            }
+            k = k + 1;
+            left = left - 1;
+        }
+        self.next = k;
+        if k < states.len() {
+            return None;
+        }
+        proof {
+            lemma_inductive_safe(*m, *self.cond, states@);
+        }
+        Some(Verdict::of(VerdictKind::Verified))
+    }
+
+    /// 検査を打ち切る。判定は `Inconclusive` で、理由に `limit` を記録する。
+    pub fn stop(self, limit: Limit) -> (v: Verdict)
+        ensures
+            v.spec_kind() is Inconclusive,
+            verdict_sound(self.spec_model(), self.spec_cond(), Evidence::Certificate(self.spec_cert()), v.spec_kind()),
+    {
+        proof {
+            use_type_invariant(&self);
+        }
+        Verdict { kind: VerdictKind::Inconclusive, reject: None, invalid: None, limit: Some(limit) }
+    }
 }
 
 /// IR検証を経ていないモデルに対する判定ゲート。モデルを検証してから `decide` と同じ検査を行う。

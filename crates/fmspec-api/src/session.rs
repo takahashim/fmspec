@@ -247,19 +247,16 @@ impl Session {
     pub fn start(&mut self, observation: &Value) -> Result<Value, String> {
         let seen = self.observation(observation)?;
         self.started = true;
-        if self.inner.start(self.model.checked(), &seen) {
-            return Ok(json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0}));
-        }
-        let possible: Vec<PossibleOutcome> = self
-            .model
-            .checked()
-            .initials()
-            .iter()
-            .map(|init| PossibleOutcome {
-                output: None,
-                state: init.clone(),
-            })
-            .collect();
+        let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.checked(), &seen) {
+            Observed::Continue => {
+                return Ok(json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0}));
+            }
+            Observed::TooManyCandidates => {
+                return Ok(json!({"status": "inconclusive", "reason": "max_candidates", "matched": 0}));
+            }
+            Observed::Failure { possible } => possible,
+            _ => return Err("初期観測の照合で想定しない結果になりました".to_string()),
+        };
         let expected: Vec<Value> = possible
             .iter()
             .map(|p| json!({"state": self.projected(&p.state)}))
