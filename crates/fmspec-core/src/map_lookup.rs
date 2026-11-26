@@ -12,6 +12,158 @@ verus! {
 
 pub const MISSING_KEY: i64 = 2;
 
+pub open spec fn put_presence_node(old: Expr, rank_local: usize, row: i64) -> Expr {
+    Expr::Or(
+        Box::new(old),
+        Box::new(Expr::Bin(
+            BinOp::Eq,
+            Box::new(Expr::Local(rank_local)),
+            Box::new(Expr::Const(Value::Int(row))),
+        )),
+    )
+}
+
+pub open spec fn put_payload_node(old: Expr, new: Expr, rank_local: usize, row: i64) -> Expr {
+    Expr::Ite(
+        Box::new(Expr::Bin(
+            BinOp::Eq,
+            Box::new(Expr::Local(rank_local)),
+            Box::new(Expr::Const(Value::Int(row))),
+        )),
+        Box::new(new),
+        Box::new(old),
+    )
+}
+
+pub open spec fn put_map_row_slot(
+    flat: Seq<Expr>, payload: Seq<Expr>, width: usize, rank_local: usize, row: int, column: int,
+) -> Expr {
+    let stride = 1 + width as int;
+    let base = row * stride;
+    if column == 0 {
+        put_presence_node(flat[base], rank_local, row as i64)
+    } else {
+        put_payload_node(flat[base + column], payload[column - 1], rank_local, row as i64)
+    }
+}
+
+/// Construct the updated expression row at one known map rank.
+pub fn put_map_row(
+    flat: &Vec<Expr>, payload: &Vec<Expr>, width: usize, rank_local: usize, row: usize,
+) -> (out: Option<Vec<Expr>>)
+    requires
+        payload@.len() == width,
+        width < usize::MAX,
+        row as int <= i64::MAX as int,
+        (row as int + 1) * (1 + width as int) <= flat@.len(),
+        (row as int) * (1 + width as int) <= usize::MAX as int,
+    ensures
+        out is Some,
+        out matches Some(result) ==> result@.len() == 1 + width
+            && forall|column: int| 0 <= column <= width
+                ==> #[trigger] result@[column] == put_map_row_slot(
+                    flat@, payload@, width, rank_local, row as int, column,
+                ),
+{
+    let stride = width + 1;
+    proof {
+        vstd::arithmetic::mul::lemma_mul_is_distributive_add_other_way(stride as int, row as int, 1);
+        assert((row as int) * (stride as int) <= flat@.len());
+        assert((row as int) * (stride as int) <= usize::MAX as int);
+    }
+    let base = row * stride;
+    proof {
+        assert(base as int == (row as int) * (stride as int));
+        assert(base < flat.len());
+        assert(base as int + stride as int <= flat@.len());
+    }
+    let mut result = Vec::new();
+    let present = put_presence_expr(copy_expr(&flat[base]), Expr::Local(rank_local), row as i64);
+    result.push(present);
+    let mut column = 0;
+    while column < width
+        invariant
+            column <= width,
+            result@.len() == column + 1,
+            base == row * stride,
+            stride == width + 1,
+            base + stride <= flat.len(),
+            payload@.len() == width,
+            row as int <= i64::MAX as int,
+            (row as int + 1) * stride as int <= flat@.len(),
+            forall|c: int| 0 <= c <= column
+                ==> #[trigger] result@[c] == put_map_row_slot(
+                    flat@, payload@, width, rank_local, row as int, c,
+                ),
+        decreases width - column,
+    {
+        proof {
+            assert(base + column + 1 < base + stride);
+        }
+        let offset = base + column + 1;
+        result.push(put_payload_expr(
+            copy_expr(&flat[offset]), copy_expr(&payload[column]), Expr::Local(rank_local), row as i64,
+        ));
+        column = column + 1;
+        proof {
+            assert(offset as int == (row as int) * stride as int + column as int);
+            assert(result@[column as int] == put_map_row_slot(
+                flat@, payload@, width, rank_local, row as int, column as int,
+            ));
+        }
+    }
+    Some(result)
+}
+
+/// Set a map row's presence bit when the evaluated rank equals this row.
+pub fn put_presence_expr(old: Expr, rank: Expr, row: i64) -> (out: Expr)
+    ensures
+        out == Expr::Or(
+            Box::new(old),
+            Box::new(Expr::Bin(BinOp::Eq, Box::new(rank), Box::new(Expr::Const(Value::Int(row))))),
+        ),
+        forall|env: Env, locals: Seq<Value>|
+        #[trigger] eval_l(out, env, locals) == match as_bool(eval_l(old, env, locals)) {
+            Err(error) => Err(error),
+            Ok(true) => Ok(Value::Bool(true)),
+            Ok(false) => match eval_l(
+                Expr::Bin(BinOp::Eq, Box::new(rank), Box::new(Expr::Const(Value::Int(row)))),
+                env, locals,
+            ) {
+                Ok(Value::Bool(hit)) => Ok(Value::Bool(hit)),
+                Ok(_) => Err(ErrKind::TypeMismatch),
+                Err(error) => Err(error),
+            },
+        },
+{
+    let hit = Expr::Bin(BinOp::Eq, Box::new(rank), Box::new(Expr::Const(Value::Int(row))));
+    let out = Expr::Or(Box::new(old), Box::new(hit));
+    proof { reveal_with_fuel(eval_l, 4); }
+    out
+}
+
+/// Replace a map row's payload exactly when the evaluated rank equals this row.
+pub fn put_payload_expr(old: Expr, new: Expr, rank: Expr, row: i64) -> (out: Expr)
+    ensures
+        out == Expr::Ite(
+            Box::new(Expr::Bin(BinOp::Eq, Box::new(rank), Box::new(Expr::Const(Value::Int(row))))),
+            Box::new(new), Box::new(old),
+        ),
+        forall|env: Env, locals: Seq<Value>|
+        #[trigger] eval_l(out, env, locals) == match as_bool(eval_l(
+            Expr::Bin(BinOp::Eq, Box::new(rank), Box::new(Expr::Const(Value::Int(row)))), env, locals,
+        )) {
+            Err(error) => Err(error),
+            Ok(true) => eval_l(new, env, locals),
+            Ok(false) => eval_l(old, env, locals),
+        },
+{
+    let hit = Expr::Bin(BinOp::Eq, Box::new(rank), Box::new(Expr::Const(Value::Int(row))));
+    let out = Expr::Ite(Box::new(hit), Box::new(new), Box::new(old));
+    proof { reveal_with_fuel(eval_l, 4); }
+    out
+}
+
 pub open spec fn selected(column: Seq<Expr>, rank: int, env: Env, locals: Seq<Value>) -> Result<Value, ErrKind> {
     eval_l(column[rank], env, locals)
 }
@@ -188,6 +340,12 @@ pub open spec fn flat_slot(flat: Seq<Expr>, width: usize, column: usize, rank: i
     eval_l(flat[rank * (1 + width as int) + column as int], env, locals)
 }
 
+pub open spec fn flat_slot_int(flat: Seq<Expr>, width: usize, column: int, rank: int, env: Env, locals: Seq<Value>)
+    -> Result<Value, ErrKind>
+{
+    eval_l(flat[rank * (1 + width as int) + column], env, locals)
+}
+
 /// Project and select directly from the actual row-major lowered operand.
 pub fn select_flat_map_slot(
     flat: &Vec<Expr>, rows: usize, width: usize, column: usize, rank_local: usize, fallback: Expr,
@@ -242,10 +400,10 @@ pub open spec fn guarded_map_slot(
 /// Compose the presence check and the selected payload as Block does with its let binding.
 pub proof fn guarded_lookup_matches_flat_row(
     check: Expr, payload: Expr, flat: Seq<Expr>, rows: usize, width: usize,
-    column: usize, rank_local: usize, env: Env, locals: Seq<Value>,
+    column: int, rank_local: usize, env: Env, locals: Seq<Value>,
 )
     requires
-        0 < column <= width,
+        0 < column <= width as int,
         rank_local < locals.len(),
         locals[rank_local as int] is Int,
         0 <= key_rank(locals, rank_local) < rows,
@@ -256,14 +414,14 @@ pub proof fn guarded_lookup_matches_flat_row(
             Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
             Err(error) => Err(error),
         },
-        eval_l(payload, env, locals.push(Value::Bool(true))) == flat_slot(
+        eval_l(payload, env, locals.push(Value::Bool(true))) == flat_slot_int(
             flat, width, column, key_rank(locals, rank_local), env, locals.push(Value::Bool(true)),
         ),
     ensures
         guarded_map_slot(check, payload, env, locals) == match as_bool(flat_slot(
             flat, width, 0, key_rank(locals, rank_local), env, locals,
         )) {
-            Ok(true) => flat_slot(
+            Ok(true) => flat_slot_int(
                 flat, width, column, key_rank(locals, rank_local), env, locals.push(Value::Bool(true)),
             ),
             Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
@@ -316,5 +474,100 @@ pub fn select_flat_map_check(flat: &Vec<Expr>, rows: usize, width: usize, rank_l
     }
     Some(check)
 }
+
+/// Build the complete checked lookup operands used by `Map#get` from one flat map.
+/// The payload vector is in slot order and is selected only for in-range ranks;
+/// the check expression reports a missing key before the caller evaluates it.
+pub fn select_flat_map_lookup(
+    flat: &Vec<Expr>, rows: usize, width: usize, rank_local: usize, defaults: &Vec<Expr>,
+) -> (out: Option<(Expr, Vec<Expr>)>)
+    ensures
+        out is Some <==> defaults@.len() == width
+            && (rows == 0 || width < usize::MAX)
+            && (rows as int) * (1 + width) == flat@.len(),
+        out matches Some(result) ==> result.1@.len() == width
+            && forall|env: Env, locals: Seq<Value>|
+                rank_local < locals.len() && locals[rank_local as int] is Int
+                    && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
+                ==> #[trigger] eval_l(result.0, env, locals) ==
+                    if key_rank(locals, rank_local) < 0 {
+                        Err(ErrKind::Failed(MISSING_KEY))
+                    } else {
+                        match as_bool(flat_slot(flat@, width, 0, key_rank(locals, rank_local), env, locals)) {
+                            Ok(true) => Ok(Value::Bool(true)),
+                            Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+                            Err(error) => Err(error),
+                        }
+                    }
+            && forall|i: int, env: Env, locals: Seq<Value>|
+                0 <= i < width && rank_local < locals.len() && locals[rank_local as int] is Int
+                    && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
+                ==> #[trigger] eval_l(result.1@[i], env, locals)
+                    == flat_slot_int(flat@, width, i + 1, key_rank(locals, rank_local), env, locals)
+            && forall|i: int, env: Env, locals: Seq<Value>|
+                0 <= i < width && rank_local < locals.len() && locals[rank_local as int] is Int
+                    && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
+                ==> #[trigger] guarded_map_slot(result.0, result.1@[i], env, locals) ==
+                    if key_rank(locals, rank_local) < 0 {
+                        Err(ErrKind::Failed(MISSING_KEY))
+                    } else {
+                        match as_bool(flat_slot_int(flat@, width, 0, key_rank(locals, rank_local), env, locals)) {
+                            Ok(true) => flat_slot_int(flat@, width, i + 1, key_rank(locals, rank_local), env,
+                                locals.push(Value::Bool(true))),
+                            Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+                            Err(error) => Err(error),
+                        }
+                    },
+{
+    if defaults.len() != width {
+        return None;
+    }
+    let check = select_flat_map_check(flat, rows, width, rank_local)?;
+    let mut payload = Vec::new();
+    let mut column = 0;
+    while column < width
+        invariant
+            column <= width,
+            defaults@.len() == width,
+            payload@.len() == column,
+            (rows as int) * (1 + width) == flat@.len(),
+            forall|i: int, env: Env, locals: Seq<Value>|
+                0 <= i < column && rank_local < locals.len() && locals[rank_local as int] is Int
+                    && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
+                ==> #[trigger] eval_l(payload@[i], env, locals)
+                    == flat_slot_int(flat@, width, i + 1, key_rank(locals, rank_local), env, locals),
+        decreases width - column,
+    {
+        let selected = select_flat_map_slot(flat, rows, width, column + 1, rank_local, copy_expr(&defaults[column]))?;
+        payload.push(selected);
+        column = column + 1;
+    }
+    proof {
+        assert forall|i: int, env: Env, locals: Seq<Value>|
+            0 <= i < width && rank_local < locals.len() && locals[rank_local as int] is Int
+                && (key_rank(locals, rank_local) < 0 || key_rank(locals, rank_local) < rows <= i64::MAX)
+            implies #[trigger] guarded_map_slot(check, payload@[i], env, locals) ==
+                if key_rank(locals, rank_local) < 0 {
+                    Err(ErrKind::Failed(MISSING_KEY))
+                } else {
+                    match as_bool(flat_slot_int(flat@, width, 0, key_rank(locals, rank_local), env, locals)) {
+                        Ok(true) => flat_slot_int(flat@, width, i + 1, key_rank(locals, rank_local), env,
+                            locals.push(Value::Bool(true))),
+                        Ok(false) => Err(ErrKind::Failed(MISSING_KEY)),
+                        Err(error) => Err(error),
+                    }
+                } by {
+            if 0 <= key_rank(locals, rank_local) < rows {
+                guarded_lookup_matches_flat_row(
+                    check, payload@[i], flat@, rows, width, i + 1, rank_local, env, locals,
+                );
+            } else {
+                reveal_with_fuel(eval_bindings, 2);
+            }
+        }
+    }
+    Some((check, payload))
+}
+
 
 } // verus!

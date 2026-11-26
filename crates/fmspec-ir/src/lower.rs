@@ -16,7 +16,7 @@ use crate::json::{array, int, object, operands, required, schema, single, string
 use crate::model::{EnumNames, LoadError};
 use crate::types::{core_value, SType, XType, MAX_KEYS, MAX_LIST, MAX_WIDTH};
 use fmspec_core::bindings::wrap_bindings;
-use fmspec_core::map_lookup::{select_flat_map_check, select_flat_map_slot, MISSING_KEY};
+use fmspec_core::map_lookup::{put_map_row, select_flat_map_lookup, MISSING_KEY};
 use fmspec_core::model::{BinOp, Expr as C, Type, Value as CV};
 use fmspec_core::ranking::{extend_rank, offset_rank, option_rank};
 use serde_json::Value;
@@ -1280,20 +1280,11 @@ impl<'a> Ctx<'a> {
                 };
                 let rows = k.keys(enums).unwrap_or(0) as usize;
                 let width = v.width(enums);
-                let select_column =
-                    |column, fallback| match select_flat_map_slot(&ms, rows, width, column, rank_local, fallback) {
-                        Some(expr) => Ok(expr),
-                        None => type_error(path, "Mapのスロット配置が型と一致しません"),
-                    };
-                let Some(check) = select_flat_map_check(&ms, rows, width, rank_local) else {
+                let fallback = defaults(enums, &v);
+                let Some((check, slots)) = select_flat_map_lookup(&ms, rows, width, rank_local, &fallback) else {
                     return type_error(path, "Mapのスロット配置が型と一致しません");
                 };
                 blk.bind(check);
-                let slots = defaults(enums, &v)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, fallback)| select_column(index + 1, fallback))
-                    .collect::<Res<Vec<_>>>()?;
                 Ok((v.xtype(), slots))
             }
             "put" => {
@@ -1425,24 +1416,21 @@ impl<'a> Ctx<'a> {
     ) -> Res<Vec<C>> {
         let r = self.element_rank(key, &format!("{path}[1]"), sc, blk, k)?;
         let x = self.element(value, &format!("{path}[2]"), sc, blk, v)?;
-        let (present, values) = map_parts(self.enums, k, v, ms);
-        let present = present
-            .into_iter()
-            .enumerate()
-            .map(|(i, p)| or(p, eq(r.clone(), ci(i as i64))))
-            .collect();
-        let values = values
-            .into_iter()
-            .enumerate()
-            .map(|(i, vs)| {
-                let hit = eq(r.clone(), ci(i as i64));
-                vs.into_iter()
-                    .zip(&x)
-                    .map(|(old, new)| ite(hit.clone(), new.clone(), old))
-                    .collect()
-            })
-            .collect();
-        Ok(map_join(present, values))
+        let rank_local = match blk.bind(r) {
+            C::Local(index) => index,
+            _ => return type_error(path, "Mapのrankを束縛できません"),
+        };
+        let rows = k.keys(self.enums).unwrap_or(0) as usize;
+        let width = v.width(self.enums);
+        let map_slots = ms.to_vec();
+        let mut updated = Vec::with_capacity(ms.len());
+        for row in 0..rows {
+            let Some(mut row_slots) = put_map_row(&map_slots, &x, width, rank_local, row) else {
+                return type_error(path, "Mapのスロット配置が型と一致しません");
+            };
+            updated.append(&mut row_slots);
+        }
+        Ok(updated)
     }
 
     /// `forall` と `exists`。集合（Set の要素、Map のキー、List の要素）か、型の全体をたどる。
