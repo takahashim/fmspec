@@ -142,3 +142,25 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
     }
     SimResult { evidence: None, stats }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SplitMix64;
+
+    /// 結果に記録する乱数の名前 `PRNG_NAME` のとおり、標準の SplitMix64 の列を作る。
+    /// 参照実装と同じ seed で同じトレースをたどることは、この列に依存する。
+    #[test]
+    fn the_generator_produces_the_standard_splitmix64_sequence() {
+        let mut rng = SplitMix64::new(0);
+        let first: Vec<u64> = (0..4).map(|_| rng.next()).collect();
+        assert_eq!(
+            first,
+            [
+                0xE220_A839_7B1D_CDAF,
+                0x6E78_9E6A_A1B9_65F4,
+                0x06C4_5D18_8009_454F,
+                0xF88B_B8A8_724C_81EC
+            ]
+        );
+    }
+}
