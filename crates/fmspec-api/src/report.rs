@@ -11,15 +11,22 @@ use fmspec_search::{Outcome, Sampled, SimOptions, Status, PRNG_NAME};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-fn base(model: &Model, cond: &Conditions, status: &str) -> Value {
+/// どの結果にもある項目。
+fn header(model: &Model, status: &str) -> Value {
     json!({
         "status": status,
         "model": model.names.model,
         "model_digest": model.digest,
         "engine_version": ENGINE_VERSION,
-        "ir_version": IR_VERSION,
-        "conditions": conditions_to_json(&model.names, cond),
     })
+}
+
+/// 検査条件のもとで判定した結果に共通の項目。
+fn base(model: &Model, cond: &Conditions, status: &str) -> Value {
+    let mut body = header(model, status);
+    body["ir_version"] = json!(IR_VERSION);
+    body["conditions"] = conditions_to_json(&model.names, cond);
+    body
 }
 
 fn limit_name(limit: Limit) -> &'static str {
@@ -30,23 +37,18 @@ fn limit_name(limit: Limit) -> &'static str {
     }
 }
 
-fn source_json(source: &Option<Source>) -> Value {
-    match source {
-        Some(s) => json!({"file": s.file, "line": s.line}),
-        None => Value::Null,
-    }
-}
-
 /// 主張の対象の定義のソース位置。
 fn claim_source(model: &Model, claim: &Claim) -> Value {
     let names = &model.names;
-    match claim {
-        Claim::Invariant(i) | Claim::InvariantError(i, _) => {
-            source_json(names.invariant_sources.get(*i).unwrap_or(&None))
-        }
-        Claim::Contract(k) | Claim::ContractError(k, _) => source_json(names.contract_sources.get(*k).unwrap_or(&None)),
-        Claim::StepError(a, _, _, _) => source_json(&names.actions.get(*a).and_then(|n| n.source.clone())),
-        Claim::Deadlock | Claim::TerminalError(_) => Value::Null,
+    let source: Option<&Source> = match claim {
+        Claim::Invariant(i) | Claim::InvariantError(i, _) => names.invariant_sources.get(*i).and_then(Option::as_ref),
+        Claim::Contract(k) | Claim::ContractError(k, _) => names.contract_sources.get(*k).and_then(Option::as_ref),
+        Claim::StepError(a, _, _, _) => names.actions.get(*a).and_then(|n| n.source.as_ref()),
+        Claim::Deadlock | Claim::TerminalError(_) => None,
+    };
+    match source {
+        Some(s) => json!({"file": s.file, "line": s.line}),
+        None => Value::Null,
     }
 }
 
@@ -223,13 +225,9 @@ fn invalid_message(invalid: InvalidModel) -> String {
     format!("モデルが整形式ではありません（{invalid:?}）")
 }
 
-/// 形式が合わない、または別のモデルに対する証拠。
+/// 形式が合わない、または別のモデルに対する証拠。検査条件を読めていないので、`conditions` は付けない。
 pub fn unreadable_evidence(model: &Model, message: &str) -> Value {
-    json!({
-        "status": "rejected",
-        "model": model.names.model,
-        "model_digest": model.digest,
-        "engine_version": ENGINE_VERSION,
-        "rejected": {"reason": "unreadable", "message": message},
-    })
+    let mut body = header(model, "rejected");
+    body["rejected"] = json!({"reason": "unreadable", "message": message});
+    body
 }
