@@ -15,7 +15,7 @@
 //! - panic は `Fmspec::InternalError` になる。`Exception` の子で、`rescue => e` では捕まらない。
 
 use nupur::args::string_arg;
-use nupur::rb::{prelude::*, Builtin, DataClass, Error, ExceptionClass, RbConst, Ruby, Value};
+use nupur::rb::{prelude::*, Builtin, DataClass, Error, RbConst, Ruby, Value};
 use nupur::string::ReadError;
 use nupur::typed::{Birth, Payload, TypedType};
 use nupur::{function, method};
@@ -47,7 +47,6 @@ static MODEL: TypedType<ModelBox, 0> = TypedType::base(c"Fmspec::Native::Model")
 static MODEL_CLASS: RbConst<DataClass> = RbConst::new();
 static SESSION: TypedType<SessionBox, 0> = TypedType::base(c"Fmspec::Native::Session");
 static SESSION_CLASS: RbConst<DataClass> = RbConst::new();
-static INTERNAL: RbConst<ExceptionClass> = RbConst::new();
 
 fn read(ruby: &Ruby, v: Value) -> Result<String, Error> {
     let copy = nupur::string::read_utf8(ruby, string_arg(v)?, |_| None::<()>).map_err(|e| match e {
@@ -258,7 +257,6 @@ fn check(ruby: &Ruby) -> Result<(), Error> {
 fn init(ruby: &Ruby) -> Result<(), Error> {
     let fmspec = ruby.define_module("Fmspec")?;
     let internal = fmspec.define_error("InternalError", ruby.exception_exception())?;
-    INTERNAL.set(internal)?;
     nupur::rb::error::INTERNAL_ERROR.set(internal)?;
 
     let native = fmspec.define_module("Native")?;
