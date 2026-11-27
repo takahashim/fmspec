@@ -396,6 +396,8 @@ JSONでは名前で並べる。
 
 `check`、`verify-certificate`、`replay`、`shrink` の `--max-check-cost`（`max_check_cost`）は、この見積もりの上限である。
 見積もりが上限を超える証拠は検査せず、`inconclusive`（理由は `max_check_cost`）とする。
+ただし、検査条件が要求された検査条件と違う証明書は、見積もらずに判定ゲートに渡し、`rejected`（理由は `condition_mismatch`）とする。
+判定ゲートは検査条件を比べてから状態を検査するので、この検査は状態の数によらない。
 `shrink` では元のトレースの見積もりに効く。縮小の候補は元のトレースより長くないので、候補の検査の見積もりも上限を超えない。
 省略時は上限を設けない。
 
