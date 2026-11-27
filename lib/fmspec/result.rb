@@ -58,6 +58,8 @@ module Fmspec
     def certificate = @raw["certificate"]
 
     # :inconclusive の理由。:max_states、:max_check_cost、:interrupted のいずれか。
+    # Ruby からの割り込みはふつう例外として伝わるので、:interrupted になるのは、
+    # 割り込みが例外を投げずに終わった場合（シグナルのトラップが例外を投げずに戻った場合など）に限る。
     def reason = @raw["reason"]&.to_sym
 
     # 探索器の報告。検査済みの値ではない。

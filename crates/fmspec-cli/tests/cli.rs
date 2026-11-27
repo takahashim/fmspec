@@ -355,6 +355,45 @@ fn refine_exit_codes_follow_the_status() {
 }
 
 #[test]
+fn shrink_lowers_arguments_and_choices_and_reruns_the_later_steps() {
+    // 購入の数量に加えて、遷移に効かない内部選択 gift を持つチケット例。
+    let mut ir = tickets_without_guard();
+    ir["actions"][0]["choices"] = json!([{"name": "gift", "type": {"bool": {}}}]);
+    let f = files();
+    f.put("gift.json", &ir);
+    // 1、2、1 と買う違反のトレース。gift はどれも真にする。売上3の状態では数量2の購入が範囲外更新になるが、
+    // 各ステップはその引数だけで再実行するので、この状態を通るトレースも縮小できる。
+    let step = |quantity: i64, sold: i64| {
+        json!({"action": "purchase", "args": {"quantity": quantity}, "choices": {"gift": true},
+               "output": {"unit": true}, "state": {"sold": sold}})
+    };
+    let (_, found) = f.json(&["check", "gift.json"]);
+    let mut long = found["trace"].clone();
+    long["steps"] = json!([step(1, 1), step(2, 3), step(1, 4)]);
+    f.put("long.json", &long);
+    let (code, replayed) = f.json(&["replay", "gift.json", "long.json"]);
+    assert_eq!((code, &replayed["status"]), (1, &json!("violated")), "{replayed}");
+
+    let (code, body) = f.json(&["shrink", "gift.json", "long.json", "--trace-out", "short.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("violated")), "{body}");
+    assert_eq!(body["original_steps"], json!(3));
+    // どの1ステップも削れず、数量も小さくできない（後続を再実行すると4に届かない）。gift だけが偽になる。
+    let short = f.get("short.json");
+    let quantities: Vec<&Value> = short["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| &s["args"]["quantity"])
+        .collect();
+    assert_eq!(quantities, [&json!(1), &json!(2), &json!(1)]);
+    for s in short["steps"].as_array().unwrap() {
+        assert_eq!(s["choices"]["gift"], json!(false), "{short}");
+    }
+    let (code, replayed) = f.json(&["replay", "gift.json", "short.json"]);
+    assert_eq!((code, &replayed["status"]), (1, &json!("violated")));
+}
+
+#[test]
 fn commands_reject_options_they_do_not_use() {
     let f = files();
     for (args, flag) in [

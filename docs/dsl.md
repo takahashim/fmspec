@@ -734,7 +734,7 @@ Workers.check(symmetry: false)     # 削減しない
 | `property` | 違反した性質、または評価エラーの箇所。定義のソース位置を含む |
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
-| `reason` | `:inconclusive` の理由 |
+| `reason` | `:inconclusive` の理由。`:max_states`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
 | `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
@@ -744,9 +744,10 @@ Workers.check(symmetry: false)     # 削減しない
 `:verified`、`:violated`、`:error` は、エンジンの判定ゲートが証拠を検査してから返した判定である。
 `:sampled` は指定したサンプルの検査を完了しただけで、網羅性の主張はない。
 
-`Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くする。
+`Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くし、引数と内部選択をドメインの正規順で小さくする。
 シミュレーションで見つけたトレースに使う。
-幅優先探索の反例は、不変条件の違反については最初から最短である。
+`attempts:` は、試す候補（ステップの削除と引数の変更）の数の上限である（既定 10000）。
+幅優先探索の反例は、不変条件の違反については最初から最短である（引数は小さくなることがある）。
 
 `:internal_error` は fmspec の不具合を示す。
 探索器が生成した証拠を判定ゲートが拒否した場合は `rejected` に理由があり、
