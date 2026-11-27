@@ -4,9 +4,11 @@
 //! 終了コードは次のとおり。成功の種類は出力の `status` で区別する。
 //!
 //! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`、`refines`）
-//! - `1`: 反例、または提示された証明書やトレースの拒否
-//! - `2`: 評価エラー、不正な入力、内部エラー
-//! - `3`: 探索未完了
+//! - `1`: 反例、詳細化の不成立、または提示された証明書やトレースの拒否（`violated`、`not_refines`、`rejected`）
+//! - `2`: 評価エラー、不正なモデル、使い方の誤り、ファイルの読み書きの失敗、内部エラー（`error`、`invalid_model`、
+//!   `usage_error`、`input_error`、`output_error`、`internal_error`）
+//! - `3`: 上限による検査の未完了（`inconclusive`）。探索の上限のほか、証拠の検査の `max_check_cost` や
+//!   `max_time_ms` でも未完了になる。理由は `reason` にある
 
 use fmspec_api::Model;
 use serde_json::{json, Map, Value};

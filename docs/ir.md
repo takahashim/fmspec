@@ -650,4 +650,4 @@ CLIは、最初の引数でコマンドを特定してから、残りの引数�
 `--help`（`-h`）はコマンドの後に書いてもよく、使い方を表示する。
 `--` 以降の引数は、`-` で始まっていてもファイルとして読む。
 
-終了コードは、`verified`、`sampled`、`valid` が0、`violated` と `rejected` が1、`error`、`invalid_model`、`usage_error`、`input_error`、`output_error`、`internal_error` が2、`inconclusive` が3である。
+終了コードは、`verified`、`sampled`、`valid`、`refines` が0、`violated`、`not_refines`、`rejected` が1、`error`、`invalid_model`、`usage_error`、`input_error`、`output_error`、`internal_error` が2、`inconclusive` が3である。
