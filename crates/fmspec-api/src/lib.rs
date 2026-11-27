@@ -7,6 +7,7 @@
 
 mod coverage;
 mod human;
+mod inject;
 mod options;
 mod report;
 mod session;

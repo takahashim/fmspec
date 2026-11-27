@@ -3,8 +3,8 @@
 //! どちらも、到達可能な状態と遷移のグラフ（`fmspec_search::explore`）を分母にする。
 //! モデルの検査ではないので、判定ゲートを通さず、`Verified` などの判定も返さない。
 
+use crate::inject::{inject_slots, input_json, parse_inject};
 use crate::options::{conditions, count, max_states, options, size};
-use crate::session::{inject_slots, input_json, parse_inject};
 use crate::Interrupt;
 use fmspec_ir::{args_to_json, state_to_json, Model};
 use fmspec_search::{explore, test_paths as search_paths};
