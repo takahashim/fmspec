@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "fmspec IR v1",
-  "description": "fmspec のモデルのIR（ir_version 1）の構造。名前の一意性、参照の解決、式の型、値の範囲は、エンジンのIR検証が検査する（docs/ir.md）。",
+  "description": "fmspec のモデルのIR（ir_version 1）の構造。名前の一意性、参照の解決、式の型、値の範囲は、エンジンのIR検証が検査する（docs/ir.md）。整数（integer）は、小数点や指数を含まない表記で書く。JSON Schema は 1.0 や 1e0 も integer とするが、エンジンは拒否する。",
   "type": "object",
   "properties": {
     "ir_version": {"const": 1},
@@ -18,8 +18,8 @@
   "required": ["ir_version", "name", "states"],
   "additionalProperties": false,
   "$defs": {
-    "index": {"type": "integer", "minimum": 0},
-    "int64": {"type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807},
+    "index": {"type": "integer", "minimum": 0, "description": "0以上の整数。小数点や指数を含む表記（1.0、1e0）はエンジンが拒否する。"},
+    "int64": {"type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807, "description": "符号付き64ビット整数。小数点や指数を含む表記（1.0、1e0）はエンジンが拒否する。"},
     "empty": {"type": "object", "additionalProperties": false},
     "source": {
       "oneOf": [

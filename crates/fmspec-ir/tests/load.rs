@@ -125,9 +125,11 @@ fn type_errors_are_rejected() {
     assert!(schema_error(|ir| ir["states"][1]["initial"] = json!({"int": 0})).contains("初期値の型"));
     let constant = json!([{"name": "k", "type": {"int": {"min": 0, "max": 3}}, "value": {"bool": true}}]);
     assert!(schema_error(|ir| ir["constants"] = constant).contains("定数の値の型"));
+    // 範囲外の初期値は、初期状態を作る前に見つかるので、初期状態の添字（InvalidModel::Initial）でなく、
+    // 初期値の位置を示す形式の誤りとする。
     assert_eq!(
-        invalid(|ir| ir["states"][0]["initial"] = json!({"int": 4})),
-        InvalidModel::Initial(0)
+        schema_error(|ir| ir["states"][0]["initial"] = json!({"int": 4})),
+        "$.states[0].initial: 状態変数 \"n\" の初期値 4 が型の範囲外です"
     );
     assert_eq!(
         invalid(|ir| ir["states"][0]["type"] = json!({"int": {"min": 1, "max": 0}})),
@@ -371,8 +373,8 @@ fn initial_states_are_the_filtered_product_of_candidates() {
     assert!(schema_error(|ir| ir["initial_constraint"] = json!({"bool": false})).contains("初期状態がありません"));
     assert!(schema_error(|ir| ir["initial_constraint"] = json!({"param": 0})).contains("初期条件"));
     assert_eq!(
-        invalid(|ir| set_initial(ir, 0, json!([{"int": 0}, {"int": 4}]))),
-        InvalidModel::Initial(1)
+        schema_error(|ir| set_initial(ir, 0, json!([{"int": 0}, {"int": 4}]))),
+        "$.states[0].initial_in[1]: 状態変数 \"n\" の初期値 4 が型の範囲外です"
     );
 }
 
