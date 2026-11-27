@@ -214,16 +214,18 @@ lintが直れば `expect` が満たされなくなり、`rake nupur:lint` が失
 
 | 対象 | バージョン |
 |---|---|
-| Verus | 0.2026.10.04.426d8b0（`rakelib/verus.rake` の `VERUS_VERSION`） |
-| `vstd`（cargoビルド用） | 0.0.0-2026-11-01-0251 |
-| Rust | 1.100.0（cargoビルド）、1.98.1（Verus）、nightly-2026-08-20（`nupur_lints`） |
+| Verus | 0.2026.11.02.8bf68ee（`rakelib/verus.rake` の `VERUS_VERSION`） |
+| `vstd`（cargoビルド用） | 0.0.0-2026-11-01-0251（`rakelib/verus.rake` の `VERUS_CRATES_VERSION`） |
+| Rust | 1.100.0（cargoビルド）、1.99.1（Verus）、nightly-2026-08-20（`nupur_lints`） |
 | Nupur | Makiri v0.17.0.rc3（`rakelib/nupur.rake` の `NUPUR_COMMIT`） |
 | Ruby | 3.3以上。開発は4.0.10 |
 | Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite |
 | json_schemer（IRのスキーマのテスト） | 2.5.0 |
 
-検証に使うVerusと、cargoビルドに使う `vstd` のリリースは一致していない。
-仕様書のスパイクはVerus 0.2026.11.02で行っており、リリースを揃えることは残作業である。
+cargoビルドに使う `vstd` は、検証に使うVerusと同じソースである。
+crates.ioの `vstd` は、Verusのリリースのコミットではなく、版番号だけを書き換えたコミットから公開されている。
+`vstd`、`verus_builtin`、`verus_builtin_macros`、`verus_state_machines_macros`、`verus_syn`、`verus_prettyplease` のソースは、0.2026.11.02.8bf68ee のコミットと、0.0.0-2026-11-01-0251 を公開したコミットとで一致する（違うのは `Cargo.toml` の版番号だけである）。
+`rake verus:version` は、Verusの版と、`Cargo.lock` にあるこれらのクレートの版が、固定したものと一致することを確かめる。
 
 ## 既知の制限
 

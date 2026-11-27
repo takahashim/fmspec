@@ -89,7 +89,7 @@ rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 ```
 
 `rake test:rails` の前に、`fmspec-rails` で `bundle install` を実行しておく。
-`rake verus` には Verus 0.2026.10.04.426d8b0 が必要で、実行ファイルを環境変数 `VERUS` で指定する。
+`rake verus` には Verus 0.2026.11.02.8bf68ee が必要で、実行ファイルを環境変数 `VERUS` で指定する。
 `rake nupur:lint` には、Makiriのチェックアウト（環境変数 `MAKIRI`、既定は `../makiri`）と cargo-dylint が必要である。
 何を証明し、何を信頼しているかは [docs/verification.md](docs/verification.md) にある。
 性能の測り方と測定結果は [docs/performance.md](docs/performance.md) にある。

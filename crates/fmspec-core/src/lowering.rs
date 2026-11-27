@@ -2416,10 +2416,17 @@ proof fn lemma_ite_prefix(
             assert(closed_slots(br, cx, sc, (d + j) as nat, t, f[j as int]));
             assert(ctx_ok(cx, sc, env, se, lj, sls));
             assert(j < f[j as int].len());
+            let fj = f[j as int][j as int];
+            assert(eval_l(c, env, lj) == Ok::<Value, ErrKind>(Value::Bool(bv)));
+            assert(eval_l(x, env, lj) == eval_l(fj, env, lj));
+            assert(slots_result(eval_src(br, se, sls), f[j as int], env, lj, t, se.enums));
             match eval_src(br, se, sls) {
                 Ok(v) => {
+                    assert(eval_l(f[j as int][j as int], env, lj) is Ok);
                     let val = eval_l(f[j as int][j as int], env, lj)->Ok_0;
                     let lk = lj.push(val);
+                    assert(run(ite_binds(c, fa, fb, k), env, l2) == Ok::<Seq<Value>, ErrKind>(lk));
+                    assert(slot_vals(f[j as int], env, lj)[j as int] == val);
                     assert(lk.take((d + j) as int) =~= lj);
                     assert forall|i: int| 0 <= i < k implies #[trigger] lk[d + i] == slot_vals(
                         f[i],
