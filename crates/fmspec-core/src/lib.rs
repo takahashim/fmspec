@@ -55,6 +55,8 @@ pub mod keys;
 pub mod limits;
 pub mod lists;
 pub mod lower_types;
+pub mod ir;
+pub mod ir_check;
 pub mod lowering;
 pub mod map_encoding;
 pub mod map_lookup;
