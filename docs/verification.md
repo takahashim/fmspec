@@ -147,7 +147,7 @@ TLCは、`rakelib/tlc.rake` の `TLA2TOOLS_VERSION` のリリースの tla2tools
 そこで、[tlaplus/Examples](https://github.com/tlaplus/Examples) の仕様を他人が書いたまま写し（`examples/tlaplus/vendor`）、同じモデルをDSLで書いたもの（`examples/tlaplus/models`）と比べる（`test/tlaplus_examples_test.rb`、`rake test:tlc`）。
 この比較は、DSLからIRへの変換、エンジンの意味論と探索を、まとめて独立の仕様と突き合わせる。
 
-対象は DieHard、TCommit、TwoPhase、EWD840、MissionariesAndCannibals、DiningPhilosophers と、PlusCalから翻訳された Simple、Lock、Peterson である。
+対象は DieHard、TCommit、TwoPhase、EWD840、MissionariesAndCannibals、DiningPhilosophers と、PlusCalから翻訳された Simple、Lock、Peterson、DiningPhilosophersPCal、Bakery である。
 PlusCalの仕様はDSLの `process` で書き、`pc` をインスタンスごとのプログラムカウンタに対応させる。
 これで、`process` の展開（プログラムカウンタ、ステップのguard、`goto`、インスタンスごとの番号、終端条件の既定）も独立の仕様と突き合わせる。
 DSLの状態変数は、TLA+の状態変数と一対一に対応させてある。
@@ -155,8 +155,8 @@ TLA+の側は、元の設定の定数、仕様、デッドロック検査の有�
 仕様ごとに、判定（違反した不変条件。TLA+の `ENABLED Next` はfmspecのデッドロック検査にあたる）、反例の長さ、違反で止まるまでに見つけた状態の数、不変条件を外したときの到達できる状態の数を比べる。
 到達できる状態の数は、tlaplus/Examples の manifest.json の記録とも比べる。
 DSLに意図的な誤り（比較演算子、Setの `&`、`ne`、`min`、`put` の値、guardの否定、2つ目以降のguardの脱落、`goto` の無視、ステップのプログラムカウンタのguardの脱落、`done` の否定、インスタンスの番号の取り違え、最後のステップの行き先、終端条件の既定の脱落）を入れると、この比較が失敗することを確かめている。
-条件付きの `goto` は、対象の仕様が使っていないので、この比較では確かめていない。
-DSLの `goto` は1つのステップに1つだけ書けるので、1つのラベルから次のラベル以外の2か所以上へ分かれる PlusCal の仕様（DiningPhilosophersPCal、DijkstraMutex、Bakery）は、状態の空間を変えずには書き写せない。
+1つのラベルから複数の行き先に分かれるところは、`goto` を複数書いて表す（DiningPhilosophersPCal の `Loop`、Bakery の `either` と `exit`）。
+`goto` の条件の反転、書いた順の取り違え、2つ目以降の `goto` の脱落、条件のない `goto` の無視も、この比較が検出する。
 
 ### DSLの具体的な実行との比較
 
