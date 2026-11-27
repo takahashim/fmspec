@@ -95,6 +95,8 @@ pub enum Reject {
     InitialMappingFailed(usize, usize),
     /// 初期状態（添字）が、抽象モデルの初期状態に写らない。
     InitialNotMapped(usize),
+    /// 宣言した入れ替え（添字）が、モデルと検査条件の対称性ではない。
+    NotSymmetric(usize),
 }
 
 } // verus!

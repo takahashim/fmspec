@@ -442,6 +442,34 @@ impl<'a> CertCheck<'a> {
     }
 }
 
+/// 対称性による削減を使う判定ゲート。前提条件を持たない。
+///
+/// `swaps` は、状態のスロットの入れ替え（隣り合うブロックの入れ替え）の列である。
+/// 証明書は軌道の代表元の集合でよい。判定ゲートは、入れ替えがどれもモデルと検査条件の対称性であること
+/// （`sym::swap_maps`）を確かめてから、代表元の証明書を検査する。トレースは `decide` と同じく検査する。
+/// 判定の意味は `decide` と同じ `verdict_sound` である。
+pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<usize>>, ev: &Evidence) -> (v: Verdict)
+    ensures
+        verdict_sound(model@, *c, *ev, v.spec_kind()),
+{
+    let m = model.raw();
+    match ev {
+        Evidence::Certificate(cert) => {
+            if !conditions_eq(&cert.conditions, c) {
+                return Verdict::rejected(Reject::ConditionMismatch);
+            }
+            match crate::sym::symmetry(m, c, swaps) {
+                Err(i) => Verdict::rejected(Reject::NotSymmetric(i)),
+                Ok(sw) => match crate::sym::check_sym_certificate(m, c, &sw, &cert.states) {
+                    None => Verdict::of(VerdictKind::Verified),
+                    Some(r) => Verdict::rejected(r),
+                },
+            }
+        },
+        _ => decide_wf(m, c, ev),
+    }
+}
+
 /// IR検証を経ていないモデルに対する判定ゲート。モデルを検証してから `decide` と同じ検査を行う。
 pub fn decide_raw(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
     ensures

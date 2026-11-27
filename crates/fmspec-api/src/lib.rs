@@ -17,7 +17,8 @@ use fmspec_core::gate::VerdictKind;
 use fmspec_core::semantics::Conditions;
 use fmspec_ir::{certificate_from_json, certificate_to_json, default_conditions, trace_from_json, LoadError};
 use fmspec_search::{
-    check as search_check, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions, Status,
+    check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions,
+    Status,
 };
 use serde_json::{json, Map, Value};
 use std::time::Instant;
@@ -80,6 +81,7 @@ pub(crate) fn conditions(model: &Model, map: &Map<String, Value>) -> Result<Cond
     select(&mut c.invariants, map.get("invariants"), "不変条件", |n| {
         model.names.invariant_index(n)
     })?;
+    model.names.spread_invariants(&mut c.invariants);
     select(&mut c.contracts, map.get("contracts"), "遷移契約", |n| {
         model.names.contract_index(n)
     })?;
@@ -120,7 +122,8 @@ pub fn describe(model: &Model) -> Value {
         "model_digest": model.digest,
         "states": model.names.states.len(),
         "actions": model.names.actions.len(),
-        "invariants": model.names.invariants.len(),
+        // 対称性の像として加えた不変条件は数えない。
+        "invariants": model.names.invariant_family.iter().enumerate().filter(|(j, f)| j == *f).count(),
         "contracts": model.names.contracts.len(),
     })
 }
@@ -136,17 +139,36 @@ pub fn load_error(e: &LoadError) -> Value {
 /// `max_check_cost`（判定ゲートが証拠の検査にかける評価回数の上限）、
 /// `certificate`（真なら、受理された証明書を結果に含める）。
 pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["max_states", "max_check_cost", "certificate"])?;
+    let map = options(opts, &["max_states", "max_check_cost", "certificate", "symmetry"])?;
     let cond = conditions(model, map)?;
     let max_states = count(map, "max_states", 1)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let max_check_cost = count(map, "max_check_cost", 0)?;
+    let use_symmetry = !model.names.symmetry.is_empty() && !matches!(map.get("symmetry"), Some(Value::Bool(false)));
+    if !matches!(map.get("symmetry"), None | Some(Value::Null | Value::Bool(_))) {
+        return Err("symmetry は真偽値です".to_string());
+    }
     let opts = BfsOptions {
         max_states,
         interrupt,
         max_check_cost,
     };
-    let outcome = search_check(model.checked(), &cond, &opts);
+    let outcome = if use_symmetry {
+        if max_check_cost.is_some() || flag(map, "certificate")? {
+            return Err("対称性による削減を使う検査では、max_check_cost と certificate を指定できません".to_string());
+        }
+        check_sym(model.checked(), &cond, &model.names.symmetry, &opts).map_err(|i| {
+            format!(
+                "宣言した対称性が成り立ちません（{}番目の入れ替え）。ブロックを入れ替えると、モデルの操作、不変条件、遷移契約、終端条件が対応しません",
+                i + 1
+            )
+        })?
+    } else {
+        search_check(model.checked(), &cond, &opts)
+    };
     let mut body = report::check_report(model, &cond, &outcome);
+    if use_symmetry {
+        body["symmetry"] = json!({"groups": model.names.symmetry_groups, "swaps": model.names.symmetry.len()});
+    }
     if let (true, Evidence::Certificate(cert), Status::Verified) =
         (flag(map, "certificate")?, &outcome.evidence, outcome.status)
     {

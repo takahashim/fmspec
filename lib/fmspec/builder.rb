@@ -43,6 +43,7 @@ module Fmspec
       @processes = {}
       @responses = []
       @migrations = {}
+      @symmetry = []
     end
 
     # ---- 型 ----
@@ -151,7 +152,19 @@ module Fmspec
     #   end
     #
     # 記号的な状態からは、`s.incr[0].seen`、`s.incr[0].pc`、`s.incr[0].done` で各インスタンスの状態を参照する。
-    def process(name, count: 1, &body)
+    # 対称性による削減（docs/plans/refinement_symmetry_constants.md の3）。
+    # 入れ替えても区別のない要素を、状態変数のブロックの列で宣言する。各ブロックは状態変数の名前の配列で、
+    # 同じ位置の状態変数は同じ型を持つ。`symmetric [:pc_a, :seen_a], [:pc_b, :seen_b]`。
+    # 検査は、隣り合うブロックを入れ替えてもモデルが変わらないことを確かめてから、代表元だけを探索する。
+    def symmetric(*blocks)
+      blocks = blocks.map { |b| Array(b).map(&:to_s) }
+      raise BuildError, "symmetric には2つ以上のブロックが必要です" if blocks.length < 2
+
+      @symmetry << blocks
+      nil
+    end
+
+    def process(name, count: 1, symmetric: false, &body)
       raise BuildError, "プロセス #{name} にはブロックが必要です" unless body
 
       claim(name, "プロセス")
@@ -172,6 +185,13 @@ module Fmspec
       end
       @processes[name] = { count: count, steps: labels }
       bodies.each_with_index { |b, id| process_steps(name, id, b, pc) }
+      if symmetric
+        raise BuildError, "プロセス #{name} の symmetric: には、2つ以上のインスタンスが必要です" if count < 2
+
+        @symmetry << bodies.each_with_index.map do |b, id|
+          ["#{name}[#{id}].pc", *b.locals.map { |local, *| "#{name}[#{id}].#{local}" }]
+        end
+      end
       nil
     end
 
@@ -350,6 +370,7 @@ module Fmspec
       terminal = @terminal || processes_done
       ir["terminal"] = terminal if terminal
       ir["initial_constraint"] = @initially if @initially
+      ir["symmetry"] = @symmetry unless @symmetry.empty?
       @responses.empty? ? ir : Response.expand(ir, @responses)
     end
 

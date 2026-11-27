@@ -131,6 +131,10 @@ pub(crate) fn reject_json_in(model: &Model, states: Option<&Vec<Vec<i64>>>, reje
             "reason": "initial_not_mapped",
             "message": "初期状態が、抽象モデルの初期状態に写りません",
         }),
+        Reject::NotSymmetric(i) => json!({
+            "reason": "not_symmetric", "swap": i,
+            "message": "宣言した入れ替えが、モデルの対称性ではありません",
+        }),
     }
 }
 

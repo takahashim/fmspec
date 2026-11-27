@@ -299,7 +299,15 @@ VERUS_MUTANTS = [
    "写した状態が抽象モデルの初期状態でも、初期状態の主張を受理する"],
   ["refine.rs", "        if act_on_exec(b, cb, ac) {\n            match check_ref_action", "        if false {\n            match check_ref_action",
    "具体モデルの遷移を照合しない"],
-  ["refine.rs", "    if vec_eq(x, y) {\n        return Move::Yes;", "    if true {\n        return Move::Yes;", "どの状態へも移れるとする"]
+  ["refine.rs", "    if vec_eq(x, y) {\n        return Move::Yes;", "    if true {\n        return Move::Yes;", "どの状態へも移れるとする"],
+  ["sym.rs", "(Expr::Var(i), Expr::Var(j)) => *j == rn_exec(*i, p),", "(Expr::Var(i), Expr::Var(j)) => true,", "状態の参照の添字を確かめない"],
+  ["sym.rs", "if act_on_exec(m, c, a) != act_on_exec(m, c, act[a]) {", "if false {", "対象の操作が入れ替えで写り合うかを確かめない"],
+  ["sym.rs", "if q >= p.len() || p[q] != j || !type_eq(&tys[q], &tys[j]) {", "if q >= p.len() || p[q] != j {", "入れ替えるスロットの型を確かめない"],
+  ["sym.rs", "if !find_rep(sw, cert, &t.state) {", "if false {", "後続の代表元が証明書にあるかを確かめない"],
+  ["sym.rs", "t.push(s[p[j]]);", "t.push(s[j]);", "入れ替えを施さない"],
+  ["sym.rs", "|| !find_rep(sw, cert, &m.inits[i]) {", "{", "初期状態の代表元が証明書にあるかを確かめない"],
+  ["sym.rs", "if !renamed_eq(e, e, p) {", "if false {", "終端条件が入れ替えで変わらないかを確かめない"],
+  ["sym.rs", "if f[i] >= n || f[f[i]] != i {", "if f[i] >= n {", "置換が対合かを確かめない"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -416,7 +424,11 @@ VERUS_CANARIES = [
   ["refine.rs", "        assert(ref_state_ok(b, cb, a, f, cert[j]@));\n    }\n}", "lemma_cert_refines の遷移"],
   ["refine.rs", "            Move::No\n", "find_move の移れない場合"],
   ["refine.rs", "            assert(reach(a, ca, y, m + 1));", "lemma_refines_reach の遷移"],
-  ["refine.rs", "    let am = a.raw();", "decide_refinement"]
+  ["refine.rs", "    let am = a.raw();", "decide_refinement"],
+  ["sym.rs", "        assert(reps(sw, cert, t));", "lemma_reach_reps の遷移"],
+  ["sym.rs", "                lemma_con_sw(m, c, w, k, s, s2, args, t, t2, o);", "lemma_safe_sw の遷移契約"],
+  ["sym.rs", "        lemma_rename_eval(body, p, e1, e2, l);", "lemma_rename_quant の本体"],
+  ["gate.rs", "                Ok(sw) => match crate::sym::check_sym_certificate", "decide_symmetric の受理"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

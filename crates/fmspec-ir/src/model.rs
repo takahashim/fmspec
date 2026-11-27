@@ -7,11 +7,13 @@ use crate::resolve::Fields;
 use crate::types::SType;
 use crate::IR_VERSION;
 use fmspec_core::eval::ErrKind;
+use fmspec_core::expr_copy::copy_expr;
 use fmspec_core::gate::{validate, CheckedModel};
 use fmspec_core::model::{Expr, RawModel, Value as CoreValue};
 use fmspec_core::model_lower::{lower_model_map, SMap};
 use fmspec_core::smodel::{Fault, LowerError, SAction, SConst, SContract, SModel, SOutput, SUpdate};
 use fmspec_core::source::TExpr;
+use fmspec_core::sym::renamed_eq;
 use fmspec_core::typing::InvalidModel;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -85,11 +87,27 @@ pub struct Names {
     pub invariant_sources: Vec<Option<Source>>,
     pub contracts: Vec<String>,
     pub contract_sources: Vec<Option<Source>>,
+    /// 対称性による削減の入れ替え。隣り合うブロックの入れ替えごとの、状態のスロットの置換。
+    pub symmetry: Vec<Vec<usize>>,
+    /// 宣言した対称性の、グループごとのブロックの数。
+    pub symmetry_groups: Vec<usize>,
+    /// 中核の不変条件ごとの、元の不変条件の添字。対称性を宣言したモデルでは、不変条件の入れ替えの像を
+    /// 元と同じ名前の不変条件として加える。元の不変条件では自分自身の添字である。
+    pub invariant_family: Vec<usize>,
 }
 
 impl Names {
     pub fn action_index(&self, name: &str) -> Option<usize> {
         self.actions.iter().position(|a| a.name == name)
+    }
+
+    /// 不変条件の選択を、入れ替えの像にも広げる。像は、元の不変条件と同じく選ぶ。
+    pub fn spread_invariants(&self, mask: &mut [bool]) {
+        for (j, &f) in self.invariant_family.iter().enumerate() {
+            if f != j && j < mask.len() && f < mask.len() {
+                mask[j] = mask[f];
+            }
+        }
     }
 
     pub fn invariant_index(&self, name: &str) -> Option<usize> {
@@ -464,6 +482,7 @@ pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel,
             "contracts",
             "terminal",
             "initial_constraint",
+            "symmetry",
         ],
     )?;
     let version = required(map, path, "ir_version")?;
@@ -716,7 +735,7 @@ pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel,
         contracts,
         terminal,
     };
-    let names = Names {
+    let mut names = Names {
         model: model_name,
         enums,
         states,
@@ -728,15 +747,141 @@ pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel,
         invariant_sources,
         contracts: contract_names,
         contract_sources,
+        symmetry: Vec::new(),
+        symmetry_groups: Vec::new(),
+        invariant_family: Vec::new(),
     };
-    let (raw, slots) = lower_model_map(&sm, &smaps).map_err(|e| match e {
+    if let Some(groups) = map.get("symmetry").filter(|v| !v.is_null()) {
+        parse_symmetry(groups, &mut names)?;
+    }
+    let (mut raw, slots) = lower_model_map(&sm, &smaps).map_err(|e| match e {
         LowerError::Mapping(i) => LoadError::Schema {
             path: maps.get(i).map_or("$".to_string(), |m| m.path.clone()),
             message: "内部エラー: 中核の下ろしが写像の式を受理しません".to_string(),
         },
         e => lower_error(e, &names, &constants, &choice_paths),
     })?;
+    names.invariant_family = (0..raw.invariants.len()).collect();
+    if !names.symmetry.is_empty() {
+        close_invariants(&mut raw, &mut names);
+    }
     Ok((raw, names, slots))
+}
+
+/// 1つの不変条件に加える入れ替えの像の数の上限。超えたら、それ以上は加えない（判定ゲートが対称性を拒否する）。
+const MAX_IMAGES: usize = 720;
+
+/// 状態のスロットの添字を `p` で付け替えた式（中核の `sym::rename` の実行版）。
+fn rename_expr(e: &Expr, p: &[usize]) -> Expr {
+    let r = |x: &Expr| Box::new(rename_expr(x, p));
+    let slot = |i: usize| p.get(i).copied().unwrap_or(i);
+    match e {
+        Expr::Var(i) => Expr::Var(slot(*i)),
+        Expr::Next(i) => Expr::Next(slot(*i)),
+        Expr::Bin(op, a, b) => Expr::Bin(*op, r(a), r(b)),
+        Expr::Not(a) => Expr::Not(r(a)),
+        Expr::And(a, b) => Expr::And(r(a), r(b)),
+        Expr::Or(a, b) => Expr::Or(r(a), r(b)),
+        Expr::Implies(a, b) => Expr::Implies(r(a), r(b)),
+        Expr::Ite(c, a, b) => Expr::Ite(r(c), r(a), r(b)),
+        Expr::Let(a, b) => Expr::Let(r(a), r(b)),
+        Expr::Forall(ty, lo, hi, b) => Expr::Forall(*ty, *lo, *hi, r(b)),
+        Expr::Exists(ty, lo, hi, b) => Expr::Exists(*ty, *lo, *hi, r(b)),
+        Expr::Code(a) => Expr::Code(r(a)),
+        other => copy_expr(other),
+    }
+}
+
+/// 対称性を宣言したモデルで、各不変条件に、入れ替えの像を元と同じ名前の不変条件として加える。
+/// モデルが対称なら、不変条件がすべての到達可能な状態で成り立つことと、その像が成り立つことは同値なので、
+/// 検査する性質は変わらない。像を加えたモデルが対称であることは、判定ゲートが確かめる。
+fn close_invariants(raw: &mut RawModel, names: &mut Names) {
+    let identity: Vec<usize> = (0..raw.state_types.len()).collect();
+    let n = raw.invariants.len();
+    for j in 0..n {
+        let mut images: Vec<Expr> = vec![copy_expr(&raw.invariants[j])];
+        let mut k = 0;
+        while k < images.len() && images.len() < MAX_IMAGES {
+            for p in &names.symmetry {
+                let image = rename_expr(&images[k], p);
+                if !images.iter().any(|e| renamed_eq(e, &image, &identity)) {
+                    images.push(image);
+                }
+            }
+            k += 1;
+        }
+        for image in images.into_iter().skip(1) {
+            raw.invariants.push(image);
+            names.invariants.push(names.invariants[j].clone());
+            names.invariant_sources.push(names.invariant_sources[j].clone());
+            names.invariant_family.push(j);
+        }
+    }
+}
+
+/// 対称性の宣言を読む（docs/ir.md の「対称性」）。
+///
+/// `symmetry` はグループの配列で、グループはブロックの配列、ブロックは状態変数の名前の配列である。
+/// 同じグループのブロックは、同じ数の状態変数を持ち、対応する状態変数は同じ型を持つ。
+/// 1つの状態変数は、1つのブロックにだけ現れる。
+/// 隣り合う2つのブロックごとに、対応する状態変数のスロットを入れ替える置換を作る。
+/// 置換がモデルの対称性であることは、ここでは確かめない。判定ゲートが確かめる。
+fn parse_symmetry(groups: &Value, names: &mut Names) -> Res<()> {
+    let n_slots = names.state_offsets.last().map_or(0, |&o| {
+        o + names.state_types.last().map_or(0, |t| t.width(&names.enums))
+    });
+    let mut used = HashSet::new();
+    for (g, group) in array(groups, "$.symmetry")?.iter().enumerate() {
+        let gpath = format!("$.symmetry[{g}]");
+        let mut blocks: Vec<Vec<usize>> = Vec::new();
+        for (b, block) in array(group, &gpath)?.iter().enumerate() {
+            let bpath = format!("{gpath}[{b}]");
+            let mut vars = Vec::new();
+            for (k, name) in array(block, &bpath)?.iter().enumerate() {
+                let path = format!("{bpath}[{k}]");
+                let name = string(name, &path)?;
+                let Some(v) = names.state_index(&name) else {
+                    return schema(&path, format!("未定義の状態変数 {name:?}"));
+                };
+                if !used.insert(v) {
+                    return schema(&path, format!("状態変数 {name:?} は、別のブロックにも現れます"));
+                }
+                vars.push(v);
+            }
+            if let Some(first) = blocks.first() {
+                if first.len() != vars.len() {
+                    return schema(&bpath, "同じグループのブロックは、同じ数の状態変数を持ちます");
+                }
+                for (x, y) in first.iter().zip(&vars) {
+                    if names.state_types[*x] != names.state_types[*y] {
+                        return schema(
+                            &bpath,
+                            format!(
+                                "状態変数 {:?} と {:?} の型が違います",
+                                names.states[*x], names.states[*y]
+                            ),
+                        );
+                    }
+                }
+            }
+            blocks.push(vars);
+        }
+        if blocks.len() < 2 {
+            return schema(&gpath, "グループには2つ以上のブロックが必要です");
+        }
+        for pair in blocks.windows(2) {
+            let mut p: Vec<usize> = (0..n_slots).collect();
+            for (x, y) in pair[0].iter().zip(&pair[1]) {
+                for (i, j) in names.state_slots(*x).zip(names.state_slots(*y)) {
+                    p[i] = j;
+                    p[j] = i;
+                }
+            }
+            names.symmetry.push(p);
+        }
+        names.symmetry_groups.push(blocks.len());
+    }
+    Ok(())
 }
 
 /// 中核の下ろしの失敗を、読み込みの誤りにする。

@@ -38,8 +38,10 @@ module Fmspec
     #   deadlock        非終端のデッドロックを検査する
     #   actions、invariants、contracts   対象の名前の配列。省略時はすべて
     #   certificate     真なら、受理された証明書を結果に含める
-    def check(max_states: nil, max_check_cost: nil, certificate: false, **conditions)
+    #   symmetry        偽なら、宣言した対称性による削減を使わない（既定は、宣言があれば使う）
+    def check(max_states: nil, max_check_cost: nil, certificate: false, symmetry: nil, **conditions)
       options = condition_options(conditions)
+      options["symmetry"] = symmetry unless symmetry.nil?
       options["max_states"] = max_states if max_states
       options["max_check_cost"] = max_check_cost if max_check_cost
       options["certificate"] = true if certificate

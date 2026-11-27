@@ -61,6 +61,7 @@ pub mod slots;
 pub mod smodel;
 pub mod source;
 pub mod step;
+pub mod sym;
 pub mod total;
 pub mod total_check;
 pub mod trace;

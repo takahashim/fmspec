@@ -15,11 +15,14 @@ pub fn default_conditions(model: &Model, deadlock: bool) -> Conditions {
 }
 
 fn selected<'a>(mask: &[bool], names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
-    names
-        .enumerate()
-        .filter(|(i, _)| mask.get(*i).copied().unwrap_or(false))
-        .map(|(_, n)| n)
-        .collect()
+    let mut out: Vec<&str> = Vec::new();
+    for (i, n) in names.enumerate() {
+        // 対称性の像の不変条件は元と同じ名前なので、1度だけ並べる。
+        if mask.get(i).copied().unwrap_or(false) && !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
 }
 
 pub fn conditions_to_json(names: &Names, c: &Conditions) -> Value {
@@ -53,13 +56,15 @@ pub fn conditions_from_json(names: &Names, v: &Value) -> Result<Conditions, Stri
             return Err(format!("conditions: 未知のキー {key:?}"));
         }
     }
+    let mut invariants = mask(map.get("invariants"), "invariants", names.invariants.len(), |n| {
+        names.invariant_index(n)
+    })?;
+    names.spread_invariants(&mut invariants);
     Ok(Conditions {
         actions: mask(map.get("actions"), "actions", names.actions.len(), |n| {
             names.action_index(n)
         })?,
-        invariants: mask(map.get("invariants"), "invariants", names.invariants.len(), |n| {
-            names.invariant_index(n)
-        })?,
+        invariants,
         contracts: mask(map.get("contracts"), "contracts", names.contracts.len(), |n| {
             names.contract_index(n)
         })?,

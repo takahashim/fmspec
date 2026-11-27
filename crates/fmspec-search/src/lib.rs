@@ -13,6 +13,7 @@ pub mod refine;
 pub mod session;
 pub mod shrink;
 pub mod simulate;
+pub mod sym;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
 pub use check::{check, check_evidence, check_evidence_with, sample, Outcome, Sampled, Status};
@@ -24,3 +25,4 @@ pub use session::{
 };
 pub use shrink::shrink;
 pub use simulate::{simulate, SimOptions, SimResult, SimStats, PRNG_NAME};
+pub use sym::{bfs_sym, check_sym};
