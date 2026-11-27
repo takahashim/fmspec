@@ -3,7 +3,7 @@
 
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
-use fmspec_core::gate::{decide, decide_raw, validate, CertCheck, CheckedModel, VerdictKind};
+use fmspec_core::gate::{decide, decide_raw, validate, CertCheck, CheckedModel, VerdictKind, VerdictOutcome};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, Output, RawModel, Type, Update, Value};
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::{Enumerated, Site, StepR};
@@ -580,6 +580,7 @@ fn every_verdict_carries_its_reason() {
             (v.kind(), v.limit(), v.reject(), v.invalid()),
             (VerdictKind::Inconclusive, Some(limit), None, None)
         );
+        assert_eq!(v.outcome(), VerdictOutcome::Inconclusive(limit));
         let v = decide_raw(&base(), &all(false), &Evidence::Unavailable(limit));
         assert_eq!((v.kind(), v.limit()), (VerdictKind::Inconclusive, Some(limit)));
     }
@@ -588,6 +589,7 @@ fn every_verdict_carries_its_reason() {
         (v.kind(), v.limit(), v.reject(), v.invalid()),
         (VerdictKind::Rejected, None, Some(Reject::BadStart), None)
     );
+    assert_eq!(v.outcome(), VerdictOutcome::Rejected(Reject::BadStart));
     let cert = Evidence::Certificate(Certificate {
         conditions: all(false),
         states: vec![vec![0], vec![1], vec![2], vec![3]],
@@ -597,6 +599,7 @@ fn every_verdict_carries_its_reason() {
         (v.kind(), v.limit(), v.reject(), v.invalid()),
         (VerdictKind::Verified, None, None, None)
     );
+    assert_eq!(v.outcome(), VerdictOutcome::Verified);
     let mut raw = base();
     raw.inits.clear();
     let v = decide_raw(&raw, &all(false), &Evidence::Unavailable(Limit::MaxStates));
@@ -605,6 +608,7 @@ fn every_verdict_carries_its_reason() {
         (VerdictKind::InvalidModel, None, None)
     );
     assert!(v.invalid().is_some());
+    assert_eq!(v.outcome(), VerdictOutcome::InvalidModel(InvalidModel::NoInitial));
 }
 
 #[test]

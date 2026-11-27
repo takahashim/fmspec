@@ -5,8 +5,9 @@ use crate::gate::{judge, GateOptions};
 use crate::inconsistency::Inconsistency;
 use crate::simulate::{simulate, SimOptions, SimStats};
 use fmspec_core::evidence::{Evidence, Limit, Reject};
-use fmspec_core::gate::{CheckedModel, Verdict, VerdictKind};
+use fmspec_core::gate::{CheckedModel, Verdict, VerdictOutcome};
 use fmspec_core::semantics::Conditions;
+use fmspec_core::typing::InvalidModel;
 use std::time::{Duration, Instant};
 
 /// 検査結果の分類。
@@ -31,6 +32,10 @@ pub enum Internal {
     Rejected(Reject),
     /// 探索器が内部の不整合を見つけ、証拠を生成できなかった。
     Inconsistent(Inconsistency),
+    /// 判定ゲートがモデルを拒否した。検証済みのモデルに対する判定ゲートはモデルを拒否しない（証明済み）ので、起きない。
+    InvalidModel(InvalidModel),
+    /// 写像の式の数が、抽象モデルの状態のスロットの数と違う（詳細化の検査）。読み込みは写像の式の数を揃えるので、起きない。
+    InvalidMapping,
 }
 
 pub struct Outcome {
@@ -76,18 +81,16 @@ pub(crate) fn check_evidence_with(
     }
 }
 
-/// 判定ゲートの判定を、検査結果の分類にする。
+/// 判定ゲートの判定を、検査結果の分類にする。理由は、判定ゲートが判定と一緒に返したもの（`Verdict::outcome`）である。
 pub(crate) fn status_of(verdict: &Verdict) -> Status {
-    match verdict.kind() {
-        VerdictKind::Verified => Status::Verified,
-        VerdictKind::Violated => Status::Violated,
-        VerdictKind::Error => Status::Error,
-        VerdictKind::Inconclusive => Status::Inconclusive(verdict.limit().unwrap_or(Limit::Interrupted)),
-        VerdictKind::Rejected => Status::InternalError(Internal::Rejected(
-            verdict.reject().unwrap_or(Reject::ClaimNotReproduced),
-        )),
-        // 判定ゲートは検証済みのモデルに対して InvalidModel を返さない。
-        VerdictKind::InvalidModel => Status::InternalError(Internal::Rejected(Reject::ClaimNotReproduced)),
+    match verdict.outcome() {
+        VerdictOutcome::Verified => Status::Verified,
+        VerdictOutcome::Violated => Status::Violated,
+        VerdictOutcome::Error => Status::Error,
+        VerdictOutcome::Inconclusive(limit) => Status::Inconclusive(limit),
+        VerdictOutcome::Rejected(reject) => Status::InternalError(Internal::Rejected(reject)),
+        // 検証済みのモデルに対する判定ゲート（`decide`、`CertCheck`）は InvalidModel を返さない（証明済み）。
+        VerdictOutcome::InvalidModel(invalid) => Status::InternalError(Internal::InvalidModel(invalid)),
     }
 }
 

@@ -147,6 +147,10 @@ pub(crate) fn refine_report(r: &Refinement, cond: &Conditions, outcome: &RefOutc
             body["message"] = json!(INCONSISTENCY_MESSAGE);
             body.as_object_mut().map(|m| m.remove("reason"));
         }
+        // 読み込みは写像の式の数を揃えるので、起きない。
+        RefStatus::InternalError(Internal::InvalidMapping) => {
+            body["message"] = json!("写像の式の数が、抽象モデルの状態のスロットの数と違います。fmspec の不具合です");
+        }
         _ => {}
     }
     body
