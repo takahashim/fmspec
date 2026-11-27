@@ -161,6 +161,18 @@ fn model_replay(ruby: &Ruby, this: Value, trace: Value) -> Result<Value, Error> 
     text(ruby, &result)
 }
 
+/// `#shrink(trace_json, options_json)`: モデル違反のトレースを縮小する。
+fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(this)?;
+    let trace = read(ruby, trace)?;
+    let options = read_json(ruby, options)?;
+    let model: &fmspec_api::Model = &handle.data().model;
+    let result = nupur::gvl::without_gvl(ruby, move || {
+        fmspec_api::to_text(fmspec_api::shrink(model, &trace, &options))
+    })?;
+    text(ruby, &result)
+}
+
 /// `Session.start(model, options_json)`: セッションを作る。
 /// オプションに誤りがあれば、その内容を書いたJSON文字列を返す。
 fn session_start(ruby: &Ruby, model: Value, options: Value) -> Result<Value, Error> {
@@ -218,18 +230,6 @@ fn session_candidates(ruby: &Ruby, this: Value) -> Result<Value, Error> {
     let handle = SESSION.check(this)?;
     let candidates = handle.data().lock().candidates();
     text(ruby, &candidates.to_string())
-}
-
-/// `#shrink(trace_json, options_json)`: モデル違反のトレースを縮小する。
-fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Result<Value, Error> {
-    let handle = MODEL.check(this)?;
-    let trace = read(ruby, trace)?;
-    let options = read_json(ruby, options)?;
-    let model: &fmspec_api::Model = &handle.data().model;
-    let result = nupur::gvl::without_gvl(ruby, move || {
-        fmspec_api::to_text(fmspec_api::shrink(model, &trace, &options))
-    })?;
-    text(ruby, &result)
 }
 
 /// `Native.format(result_json)`: 結果の人間向けの表示。
