@@ -84,3 +84,21 @@ fn usage_errors_have_the_shape_of_a_result() {
         r#"{"message":"未知のオプション \"bogus\"","status":"usage_error"}"#
     );
 }
+
+#[test]
+fn option_errors_are_found_before_the_search() {
+    // 探索は状態を取り出すごとに中断要求を確かめる。誤った指定なら、探索を始めずに誤りを返す。
+    let asked = std::cell::Cell::new(0);
+    let interrupt = || {
+        asked.set(asked.get() + 1);
+        false
+    };
+    for opts in [json!({"certificate": 1}), json!({"certificate": "yes", "max_depth": 1})] {
+        let err = check(&counter(), &opts, Some(&interrupt)).unwrap_err();
+        assert!(err.starts_with("certificate は真偽値です"), "{err}");
+    }
+    assert_eq!(asked.get(), 0);
+    // 正しい指定なら探索する。
+    check(&counter(), &json!({"certificate": true}), Some(&interrupt)).unwrap();
+    assert!(asked.get() > 0);
+}
