@@ -141,7 +141,7 @@ jobs:
 
   verus-mutants:
     name: Verus (mutants)
-    # 変異162件と assert(false) 100件のそれぞれで crate 全体を検証し直すので、push ごとには回さない。
+    # 変異163件と assert(false) 102件のそれぞれで crate 全体を検証し直すので、push ごとには回さない。
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
