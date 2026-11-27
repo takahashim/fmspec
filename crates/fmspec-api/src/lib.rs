@@ -145,8 +145,9 @@ const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 /// モデル違反のトレースを縮小する（仕様書 §10）。
 ///
 /// 元のトレースを判定ゲートが受理しなければ、その拒否を報告する。
+/// ステップの削除と、引数（公開引数と内部選択）を小さくする変更を試す。
 /// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に記録する。
-/// オプションは `attempts`（試す候補の数の上限）。
+/// オプションは `attempts`（試す候補の数の上限。削除と引数の変更で共有する）。
 pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
     let map = keys(opts, &["attempts"])?;
     let attempts = count(map, "attempts", 1)?.unwrap_or(DEFAULT_SHRINK_ATTEMPTS);
