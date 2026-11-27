@@ -69,6 +69,7 @@ DSLの説明は [docs/dsl.md](docs/dsl.md) に、Railsアプリケーション�
 cargo build
 target/debug/fmspec validate examples/models/tickets.json
 target/debug/fmspec check examples/models/tickets.json --max-states 100000
+target/debug/fmspec check examples/models/tickets.json --max-depth 10 --max-time-ms 5000
 target/debug/fmspec simulate examples/models/tickets.json --traces 100 --max-steps 20 --seed 42
 target/debug/fmspec check MODEL.json --json --certificate-out CERT.json --trace-out TRACE.json
 target/debug/fmspec verify-certificate MODEL.json CERT.json

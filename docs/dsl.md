@@ -585,13 +585,21 @@ end
 
 | メソッド | 内容 |
 |---|---|
-| `check(max_states: nil, max_check_cost: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
-| `simulate(traces: 100, max_steps: 100, seed: nil, **検査条件)` | ランダムシミュレーション |
-| `verify_certificate(証明書, max_check_cost: nil, **検査条件)` | 証明書の検査 |
+| `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
+| `simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **検査条件)` | ランダムシミュレーション |
+| `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, **検査条件)` | 証明書の検査 |
 | `replay(トレース)` | トレースの再生 |
 
 `max_check_cost:` は、判定ゲートが証拠の検査にかける評価回数の上限である（[ir.md](ir.md) の「証拠の検査の資源上限と中断」）。
 検査の見積もりが上限を超えると、結果は `:inconclusive`（理由は `:max_check_cost`）になる。
+
+`max_depth:` は、幅優先探索の深さ（初期状態からの遷移数）の上限である（[ir.md](ir.md) の「探索順と結果」）。
+上限より深い状態が残れば、結果は `:inconclusive`（理由は `:max_depth`）になり、`:verified` にはならない。
+上限の内側で見つかった違反と評価エラーは、そのまま `:violated` と `:error` になる。
+
+`max_time_ms:` は、検査の時間の上限（ミリ秒）である（[ir.md](ir.md) の「時間の上限」）。
+過ぎると、結果は `:inconclusive`（理由は `:max_time_ms`）になる。
+`Timeout` による割り込みと違い、例外にならず、結果として返る。
 
 検査条件は、`deadlock:`（非終端のデッドロックを検査する）と、`actions:`、`invariants:`、`contracts:`（対象の名前の配列）である。
 省略時は、すべての操作、不変条件、遷移契約が対象で、デッドロック検査は無効である。
@@ -608,7 +616,7 @@ end
 | `property` | 違反した性質、または評価エラーの箇所。定義のソース位置を含む |
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
-| `reason` | `:inconclusive` の理由。`:max_states`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
+| `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
 | `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
