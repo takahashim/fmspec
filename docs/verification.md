@@ -23,7 +23,7 @@ fmspecの判定のうち、何を機械証明で保証し、何をテストで�
 
 - 対象の不変条件がすべて真に評価される。
 - 対象の操作とドメイン内の引数のどの組でも、適用が評価エラーにならず、有効な遷移は対象の契約をすべて満たす。
-- デッドロック検査が有効なら、有効な遷移のない状態で終端条件が真に評価される。
+- デッドロック検査が有効なら、対象の操作の有効な遷移のない状態で終端条件が真に評価される。
 
 これらの定義は `semantics.rs` にあり、探索器にも検査器の実装にも依存しない。
 
@@ -46,7 +46,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | Trace Validity | `check_trace` が受理したなら、トレースの開始状態は初期状態の1つで、`trace_ok` と `claim_holds` が成り立つ。`lemma_trace_reach`：初期状態から始まる有効なトレースの各状態は到達可能である | `trace.rs` |
 | Refinement（§14.1の表の外） | `check_refinement_certificate` が受理したなら、具体モデルの証明書は帰納的で、`refines`（初期状態が抽象モデルの初期状態に写り、到達可能な状態で写像の評価が成功し、到達可能な遷移が抽象モデルの遷移か状態の変わらないステップに写る）が成り立つ（`lemma_cert_refines`）。`check_refinement_trace` が受理したなら、トレースは有効で、末尾で主張どおりに詳細化が破れるか評価が失敗する。`find_move` が「移れない」と答えるのは、抽象モデルの遷移列挙の完全性による。`decide_refinement` は前提条件を持たず、判定は `refinement_sound` を満たす。`lemma_refines_invariants`：詳細化し、抽象モデルが安全なら、具体モデルの到達可能な状態を写した状態で、抽象モデルの不変条件が成り立つ。`lemma_refines_excludes_trace`：詳細化するモデルに、詳細化の破れる有効なトレースはない | `refine.rs` |
 | Symmetry Reduction（§14.1の表の外） | `lemma_rename_eval`：状態のスロットの添字を対合 `p` で付け替えた式を、状態を `p` で入れ替えた環境で評価すると、元の式を元の環境で評価した結果と同じになる。`lemma_step_sw`、`lemma_safe_sw`、`lemma_edge_sw`：入れ替えが `sym_ok`（操作、不変条件、遷移契約が付け替えで写り合い、検査条件の対象を保つ）なら、遷移と安全性が入れ替えで保たれる。`lemma_sym_safe`：入れ替えがどれも対称性で、代表元の証明書が帰納的（初期状態と各状態の後続が、入れ替えの列で証明書の状態に移れる）なら、`safe` が成り立つ。`swap_maps` が返す置換は `sym_ok` を満たす。`decide_symmetric` は前提条件を持たず、判定は `verdict_sound` を満たす | `sym.rs`、`gate.rs` |
-| Verdict Gate | `decide` と `decide_raw` は前提条件を持たず、判定は `verdict_sound` を満たす。`CertCheck` は証明書の検査を区切って進め、検査し終えたときだけ `Verified` を返す。型不変条件として、検査を終えた状態が性質を満たして遷移で閉じていることを保つ | `gate.rs` |
+| Verdict Gate | `decide` と `decide_raw` は前提条件を持たず、判定は `verdict_sound` を満たす。判定の理由は種類に対応する（`reasons_ok`：`Rejected`、`InvalidModel`、`Inconclusive` のとき、かつそのときに限り、それぞれ拒否の理由、モデルを拒否した理由、証拠を得られなかった理由がある）。証拠が `Unavailable(l)` なら、`decide` の判定は `Inconclusive` で理由は `l` である。`CertCheck` は証明書の検査を区切って進め、検査し終えたときだけ `Verified` を返し、`stop(l)` の理由は `l` である。型不変条件として、検査を終えた状態が性質を満たして遷移で閉じていることを保つ | `gate.rs` |
 | MBT Candidate Soundness / Completeness | `mbt::Session` の型不変条件：候補の列は、初期観測とこれまでの応答のすべてと矛盾しない状態（`consistent`）の集合とちょうど一致し、空でない。`start` と `observe` はこの不変条件を保つ。`lemma_consistent_reach`：候補は、応答の数と同じ回数の遷移で初期状態から到達できる | `mbt.rs` |
 | MBT Input Soundness | `common_inputs` が返す入力と、`check_input` が有効とした入力は、どの候補にもその入力の有効な遷移がある。有効な入力を持つ候補がないと報告したなら、どの候補にも有効な遷移はない | `mbt.rs` |
 | MBT Conformance Failure Soundness | `observe` が `Failure` を返すのは、入力がどの候補でも有効で、応答を加えた列と矛盾しない状態がないときに限る。`start` の `Failure` は、初期観測と一致する初期状態がないときに限る。`InvalidInput` なら入力が無効な候補がある。`ModelError` と `ModelViolation` は、候補からの実際の遷移で起きる評価エラーと性質の違反である | `mbt.rs` |
