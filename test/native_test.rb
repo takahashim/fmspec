@@ -94,6 +94,71 @@ class NativeTest < Minitest::Test
     refute_predicate worker, :alive?
   end
 
+  def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+  # 例外を伴わない割り込みを、0.1秒後に1回起こしながらブロックを実行する。
+  # 子プロセスの終了（SIGCHLD）、Thread#wakeup、例外を投げずに戻るシグナルのトラップの3通り。
+  def each_interrupt_without_exception
+    caller = Thread.current
+    pid = spawn("sleep 0.1")
+    yield :sigchld
+    Process.wait(pid)
+
+    waker = Thread.new { sleep 0.1; caller.wakeup }
+    yield :wakeup
+    waker.join
+
+    previous = trap("USR1") {}
+    begin
+      signaler = Thread.new { sleep 0.1; Process.kill("USR1", Process.pid) }
+      yield :trap
+      signaler.join
+    ensure
+      trap("USR1", previous)
+    end
+  end
+
+  # 例外を伴わない割り込みでは、探索を打ち切った結果（:interrupted）を返さず、最初からやり直す。
+  def test_an_interrupt_without_an_exception_does_not_stop_a_check
+    each_interrupt_without_exception do |kind|
+      started = now
+      result = huge.check(max_time_ms: 600)
+      assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason], kind
+      # 時間の上限は、やり直した探索でも最初の呼び出しからの時間である。
+      assert_operator now - started, :>=, 0.55, kind
+      assert_operator now - started, :<, 3.0, kind
+    end
+    # 時間の上限がなければ、やり直した探索が終わるまで続く。
+    model = TestModels.counters(2, 299)
+    each_interrupt_without_exception do |kind|
+      assert_equal :verified, model.check.status, kind
+    end
+  end
+
+  def test_an_interrupt_without_an_exception_does_not_stop_a_simulation_or_a_shrink
+    each_interrupt_without_exception do |kind|
+      result = huge.simulate(traces: 10**9, max_steps: 1000, seed: 1, max_time_ms: 400)
+      assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason], kind
+    end
+    model, trace = long_shrink
+    each_interrupt_without_exception do |kind|
+      result = model.shrink(trace, max_time_ms: 400)
+      assert_equal "max_time_ms", result.shrink["limit"], kind
+    end
+  end
+
+  def test_a_certificate_check_has_a_time_limit
+    model, certificate = heavy_certificate
+    started = now
+    result = model.verify_certificate(certificate, max_time_ms: 100)
+    assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason]
+    assert_operator now - started, :<, 3.0
+    each_interrupt_without_exception do |kind|
+      result = model.verify_certificate(certificate, max_time_ms: 400)
+      assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason], kind
+    end
+  end
+
   # 検査の間、GVL を解放している。
   def test_other_ruby_threads_run_during_a_check
     ticks = 0

@@ -746,7 +746,10 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 省略時は、すべての操作、不変条件、遷移契約が対象で、デッドロック検査は無効である。
 
 検査の間はGVLを解放するので、他のRubyスレッドが動作できる。
-`Timeout` や `Thread#kill` などの割り込みは、探索、証明書の検査、縮小を打ち切って例外として伝わる。
+`Timeout` や `Thread#kill` などの割り込みは、探索、証明書の検査、縮小、カバレッジとテスト経路の探索を打ち切って例外として伝わる。
+Ruby は、例外を伴わない割り込み（子プロセスの終了による SIGCHLD、`Thread#wakeup`、例外を投げずに戻るシグナルのトラップなど）でも探索を止めさせる。
+この場合、fmspec は打ち切った探索の結果を返さず、探索を最初からやり直す（GVL を解放したまま、割り込みが例外を伴うかを確かめる手段がないので、途中から続けることはできない）。
+やり直した探索の時間の上限 `max_time_ms:` は、最初の呼び出しからの時間である。
 `replay` と、縮小の前後で行うトレースの検査は、判定ゲートがトレースを区切らずに検査するので、検査を終えてから例外として伝わる（検査の量は `max_check_cost:` で抑えられる）。
 
 結果は `Fmspec::Result` である。
@@ -758,7 +761,7 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 | `property` | 違反した性質、または評価エラーの箇所。定義のソース位置を含む |
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
-| `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
+| `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`。Ruby からの割り込みは例外として伝わり、例外を伴わない割り込みでは探索をやり直すので、エンジンの理由 `:interrupted` は Ruby からは返らない |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `evidence_model_digest` | `allow_other_model: true` で別のモデルに対する証拠を扱ったときの、証拠の digest |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
@@ -773,8 +776,8 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 シミュレーションで見つけたトレースに使う。
 `attempts:` は、試す候補（ステップの削除と引数の変更）の数の上限である（既定 10000）。
 `max_time_ms:` は縮小の時間の上限で、`max_check_cost:` は元のトレースの検査の上限である。
-候補の数か時間の上限に達するか、`Timeout` などで割り込まれると、縮小を打ち切る。上限で打ち切った結果は、それまでに判定ゲートが受理したトレースで、`status` は違反のままである。
-`Result#shrink` は縮小器の報告で、`"complete"`（打ち切らずに終わったか）、`"limit"`（打ち切った理由。`"attempts"`、`"max_time_ms"`、`"interrupted"`）、`"attempts"`（試した候補の数）を持つ。打ち切った結果は局所最小とは限らない。
+候補の数か時間の上限に達すると、縮小を打ち切る（`Timeout` などの割り込みは例外として伝わる）。上限で打ち切った結果は、それまでに判定ゲートが受理したトレースで、`status` は違反のままである。
+`Result#shrink` は縮小器の報告で、`"complete"`（打ち切らずに終わったか）、`"limit"`（打ち切った理由。`"attempts"` か `"max_time_ms"`）、`"attempts"`（試した候補の数）を持つ。打ち切った結果は局所最小とは限らない。
 幅優先探索の反例は、不変条件の違反については最初から最短である（引数は小さくなることがある）。
 
 `:internal_error` は fmspec の不具合を示す。
