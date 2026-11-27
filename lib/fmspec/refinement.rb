@@ -161,7 +161,8 @@ module Fmspec
       t && [t["initial_abstract"], *t["steps"].map { |s| s["abstract"] }]
     end
 
-    # :inconclusive の理由。:max_states、:max_depth、:max_time_ms、:interrupted、:abstract_failed のいずれか。
+    # :inconclusive の理由。:max_states、:max_depth、:max_time_ms、:abstract_failed のいずれか。
+    # 割り込みの扱いは `Result#reason` と同じで、:interrupted は Ruby からは返らない。
     def reason = @raw["reason"]&.to_sym
 
     def search = @raw["search"]

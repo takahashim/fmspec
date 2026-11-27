@@ -125,6 +125,26 @@ class CoverageTest < Minitest::Test
     assert_equal :passed, tickets.test(office, paths: true, steps: 1).status
   end
 
+  # 探索を打ち切って作った経路は、到達可能な状態と入力の組の一部しか覆わないので、全経路が成功しても :passed にしない。
+  def test_paths_from_an_incomplete_search_are_not_a_pass
+    full = tickets.test_paths(office)
+    assert_predicate full, :complete?
+    assert_equal full.targets, full.covered
+
+    partial = tickets.test_paths(office, max_states: 2)
+    refute_predicate partial, :complete?
+    assert_operator partial.targets, :<, full.targets
+    result = tickets.test(office, paths: partial)
+    assert_equal [:inconclusive, :incomplete_paths], [result.status, result.reason]
+    assert_equal partial.length, result.cases
+    assert_match(/テスト経路の探索を打ち切った/, result.to_s)
+    assert_raises(Fmspec::TestFailed) { result.assert_passed! }
+
+    # 失敗はそのまま失敗として報告する。操作列の配列（Array）を渡せば、これまでどおり各操作列を再実行する。
+    assert_equal :conformance_failure, tickets.test(office(:double_refund), paths: full).status
+    assert_equal :passed, tickets.test(office, paths: partial.to_a).status
+  end
+
   def test_test_paths_find_a_wrong_implementation
     result = tickets.test(office(:double_refund), paths: true, steps: 20)
     assert_equal :conformance_failure, result.status
