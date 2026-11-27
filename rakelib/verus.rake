@@ -428,7 +428,7 @@ VERUS_CANARIES = [
   ["sym.rs", "        assert(reps(sw, cert, t));", "lemma_reach_reps の遷移"],
   ["sym.rs", "                lemma_con_sw(m, c, w, k, s, s2, args, t, t2, o);", "lemma_safe_sw の遷移契約"],
   ["sym.rs", "        lemma_rename_eval(body, p, e1, e2, l);", "lemma_rename_quant の本体"],
-  ["gate.rs", "                Ok(sw) => match crate::sym::check_sym_certificate", "decide_symmetric の受理"]
+  ["gate.rs", "            match crate::sym::symmetry(m, c, swaps) {", "decide_symmetric の証明書"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)
