@@ -144,14 +144,15 @@ fn malformed_traces_are_rejected_as_format_errors() {
     assert!(matches!(trace_from_json(&m, "{"), Err(TraceError::Json(_))));
 }
 
-/// `model_digest` のない証拠は受理しない。現状は `DigestMismatch`（found が空）になるが、
-/// `Format` にするべきかは決めていないので、拒否することだけを確かめる。
+/// `model_digest` のない証拠は、別のモデルに対する証拠でなく、形式の誤りとして拒否する。
 #[test]
-fn evidence_without_a_model_digest_is_rejected() {
+fn evidence_without_a_model_digest_is_a_format_error() {
     let m = model();
     let mut json = trace_json(&m, Claim::Deadlock);
     json.as_object_mut().unwrap().remove("model_digest");
-    assert!(read_back(&m, &json).is_err());
+    assert!(format_error(&m, &json).contains("model_digest"));
+    json["model_digest"] = json!(1);
+    assert!(format_error(&m, &json).contains("model_digest"));
 
     let cert = Certificate {
         conditions: default_conditions(&m, false),
@@ -159,7 +160,10 @@ fn evidence_without_a_model_digest_is_rejected() {
     };
     let mut json = certificate_to_json(&m, &cert);
     json.as_object_mut().unwrap().remove("model_digest");
-    assert!(certificate_from_json(&m, &json.to_string()).is_err());
+    match certificate_from_json(&m, &json.to_string()) {
+        Err(TraceError::Format(message)) => assert!(message.contains("model_digest"), "{message}"),
+        other => panic!("形式の誤りとして拒否されるはず: {other:?}"),
+    }
 }
 
 #[test]

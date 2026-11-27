@@ -58,7 +58,9 @@ fn header<'a>(
     if map.get(version_key).and_then(Value::as_i64) != Some(version) {
         return format(format!("未対応の {version_key} です（対応しているのは {version}）"));
     }
-    let found = map.get("model_digest").and_then(Value::as_str).unwrap_or("");
+    let Some(found) = map.get("model_digest").and_then(Value::as_str) else {
+        return format("model_digest（文字列）が必要です");
+    };
     if found != model.digest {
         return Err(TraceError::DigestMismatch {
             expected: model.digest.clone(),
