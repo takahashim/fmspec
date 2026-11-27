@@ -394,7 +394,14 @@ pub fn trace_from_json(model: &Model, json: &str) -> Result<Trace, TraceError> {
         });
     }
     let claim = claim_from_json(model, map.get("claim"))?;
-    let seed = map.get("seed").and_then(Value::as_u64);
+    // seed は表示と記録のためのもので、再生には使わない。省略と null は、seed なしとする。
+    let seed = match map.get("seed") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v.as_u64() {
+            Some(seed) => Some(seed),
+            None => return format("seed は null か0以上の整数です"),
+        },
+    };
     Ok(Trace {
         conditions,
         start,

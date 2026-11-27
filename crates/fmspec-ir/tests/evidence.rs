@@ -167,6 +167,22 @@ fn evidence_without_a_model_digest_is_a_format_error() {
 }
 
 #[test]
+fn a_seed_is_null_or_a_non_negative_integer() {
+    let m = model();
+    let mut json = trace_json(&m, Claim::Deadlock);
+    assert_eq!(json["seed"], Value::Null);
+    assert_eq!(read_back(&m, &json).unwrap().seed, None);
+    json.as_object_mut().unwrap().remove("seed");
+    assert_eq!(read_back(&m, &json).unwrap().seed, None);
+    json["seed"] = json!(u64::MAX);
+    assert_eq!(read_back(&m, &json).unwrap().seed, Some(u64::MAX));
+    for bad in [json!("7"), json!(-1), json!(1.5)] {
+        json["seed"] = bad;
+        assert!(format_error(&m, &json).contains("seed"));
+    }
+}
+
+#[test]
 fn certificates_are_deduplicated_and_rows_must_match_the_state_variables() {
     let m = model();
     let cert = Certificate {
