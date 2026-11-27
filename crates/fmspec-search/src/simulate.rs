@@ -79,7 +79,12 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
     // 有効な遷移の作業用の列。ステップごとに空にして使い回す。
     let mut enabled: Vec<(usize, Transition)> = Vec::new();
 
+    let interrupted = || opts.interrupt.is_some_and(|requested| requested());
     for _ in 0..opts.traces {
+        // 最大ステップ数が0で、ステップのないトレースが続いても打ち切れるように、トレースごとにも確かめる。
+        if interrupted() {
+            return found(Evidence::Unavailable(Limit::Interrupted), stats);
+        }
         // 初期状態が1つなら乱数を消費しない。同じシードで、初期状態が1つのモデルの結果を変えないためである。
         let inits = model.initials();
         let start = if inits.len() > 1 {
@@ -92,7 +97,7 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
             return found(Evidence::Trace(start, steps, claim), stats);
         }
         for _ in 0..opts.max_steps {
-            if opts.interrupt.is_some_and(|requested| requested()) {
+            if interrupted() {
                 return found(Evidence::Unavailable(Limit::Interrupted), stats);
             }
             // 現在の状態は、最後のステップの遷移先である。状態を複製して別に持たない。

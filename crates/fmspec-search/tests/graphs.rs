@@ -447,6 +447,24 @@ fn an_interrupt_request_stops_the_simulation() {
     assert_eq!(sampled.stats.traces, 0);
 }
 
+#[test]
+fn an_interrupt_request_stops_a_simulation_without_steps() {
+    // 最大ステップ数が0でも、トレースごとに中断要求を確かめる。完了したトレースを数えるだけで止まらない、ということがない。
+    let m = graph(3, &[(0, 1), (1, 0)], &[]);
+    let opts = SimOptions {
+        seed: 0,
+        traces: 10,
+        max_steps: 0,
+        interrupt: Some(&|| true),
+    };
+    let result = simulate(&m, &conditions(&m, false), &opts);
+    assert!(matches!(
+        result.evidence,
+        Some(Evidence::Unavailable(Limit::Interrupted))
+    ));
+    assert_eq!(result.stats.traces, 0);
+}
+
 // ---- トレースの縮小（仕様書 §10）----
 
 /// 辺の添字の列を、開始頂点から再実行したトレースのステップ。無効な辺があれば `None`。
