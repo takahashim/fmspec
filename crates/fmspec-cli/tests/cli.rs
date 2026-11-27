@@ -444,8 +444,33 @@ fn a_failed_write_is_an_error() {
     let read = |_: &str| Ok(model.clone());
     let write = |_: &str, _: &str| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
     let run = fmspec_cli::run(&args, &read, &write);
-    // 違反を見つけても、書き出せなければ終了コード2にする。
+    // 違反を見つけても、書き出せなければ終了コード2にする。入力の誤りとは区別する。
     assert_eq!(run.code, 2);
     let body: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(body["status"], json!("output_error"), "{body}");
     assert!(body["message"].as_str().unwrap().starts_with("out.json: "), "{body}");
+}
+
+#[test]
+fn an_option_is_not_taken_as_the_value_of_another() {
+    let f = files();
+    // `--json` を `--trace-out` の値として読むと、結果は人間向けになり、`--json` という名前のファイルに書き出す。
+    for args in [
+        vec!["check", "noguard.json", "--trace-out", "--json"],
+        vec!["check", "--trace-out", "--json"],
+    ] {
+        let (code, out, err) = f.run(&args);
+        let body: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}\n{out}{err}"));
+        assert_eq!(
+            (code, &body["status"], &body["message"]),
+            (2, &json!("usage_error"), &json!("--trace-out には値が必要です")),
+            "{args:?}"
+        );
+    }
+    assert!(!f.has("--json"));
+    let (code, _, err) = f.run(&["check", "tickets.json", "--max-states", "--deadlock"]);
+    assert_eq!(
+        (code, err.as_str()),
+        (2, "usage_error: --max-states には値が必要です\n")
+    );
 }
