@@ -488,40 +488,21 @@ fn code_exec(v: &Value) -> (r: i64)
     }
 }
 
-fn copy_values(v: &Vec<Value>) -> (r: Vec<Value>)
-    ensures
-        r@ == v@,
-{
-    let mut r: Vec<Value> = Vec::new();
-    let mut i: usize = 0;
-    while i < v.len()
-        invariant
-            i <= v@.len(),
-            r@ == v@.subrange(0, i as int),
-        decreases v@.len() - i,
-    {
-        r.push(v[i]);
-        i = i + 1;
-        assert(r@ =~= v@.subrange(0, i as int));
-    }
-    assert(v@.subrange(0, v@.len() as int) =~= v@);
-    r
-}
-
 /// 式を評価する。結果は意味論 `eval_spec` と一致する。
 pub fn eval(e: &Expr, c: &Ctx) -> (r: Result<Value, ErrKind>)
     ensures
         r == eval_spec(*e, c@),
 {
-    let ls: Vec<Value> = Vec::new();
+    let mut ls: Vec<Value> = Vec::new();
     assert(ls@ =~= Seq::<Value>::empty());
-    eval_in(e, c, &ls)
+    eval_in(e, c, &mut ls)
 }
 
 /// 局所変数 `ls` の下で式を評価する。結果は意味論 `eval_l` と一致する。
-fn eval_in(e: &Expr, c: &Ctx, ls: &Vec<Value>) -> (r: Result<Value, ErrKind>)
+fn eval_in(e: &Expr, c: &Ctx, ls: &mut Vec<Value>) -> (r: Result<Value, ErrKind>)
     ensures
-        r == eval_l(*e, c@, ls@),
+        r == eval_l(*e, c@, old(ls)@),
+        final(ls)@ == old(ls)@,
     decreases e, 0int,
 {
     match e {
@@ -578,12 +559,15 @@ fn eval_in(e: &Expr, c: &Ctx, ls: &Vec<Value>) -> (r: Result<Value, ErrKind>)
         } else {
             Err(ErrKind::Unbound)
         },
+        // 局所変数の列は、束縛を積んで本体を評価し、降ろして元に戻す。列をコピーしない。
         Expr::Let(a, b) => match eval_in(a, c, ls) {
             Err(k) => Err(k),
             Ok(v) => {
-                let mut inner = copy_values(ls);
-                inner.push(v);
-                eval_in(b, c, &inner)
+                ls.push(v);
+                let r = eval_in(b, c, ls);
+                ls.pop();
+                assert(ls@ =~= old(ls)@);
+                r
             },
         },
         Expr::Forall(ty, lo, hi, body) => quant(true, ty, *lo, *hi, body, c, ls),
@@ -598,53 +582,85 @@ fn eval_in(e: &Expr, c: &Ctx, ls: &Vec<Value>) -> (r: Result<Value, ErrKind>)
 
 /// 量化を評価する。結果は意味論 `quant_l` と一致する。
 #[verifier::loop_isolation(false)]
-fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &Vec<Value>) -> (r: Result<
+fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &mut Vec<Value>) -> (r: Result<
     Value,
     ErrKind,
 >)
     ensures
-        r == quant_l(all, *ty, *body, c@, ls@, lo as int, hi as int),
+        r == quant_l(all, *ty, *body, c@, old(ls)@, lo as int, hi as int),
+        final(ls)@ == old(ls)@,
     decreases body, 1int,
 {
-    let mut inner = copy_values(ls);
-    inner.push(Value::Bool(false));
+    // 束縛する値の場所を局所変数の列の末尾に積み、値を置き換えながら本体を評価する。最後に降ろして元に戻す。
+    let ghost ls0 = ls@;
     let n = ls.len();
+    ls.push(Value::Bool(false));
     let mut x: i128 = lo as i128;
     while x <= hi as i128
         invariant
             lo <= x,
-            n == ls@.len(),
-            inner@.len() == n + 1,
-            inner@.subrange(0, n as int) == ls@,
-            quant_l(all, *ty, *body, c@, ls@, x as int, hi as int) == quant_l(
+            n == ls0.len(),
+            ls@.len() == n + 1,
+            ls@.subrange(0, n as int) == ls0,
+            quant_l(all, *ty, *body, c@, ls0, x as int, hi as int) == quant_l(
                 all,
                 *ty,
                 *body,
                 c@,
-                ls@,
+                ls0,
                 lo as int,
                 hi as int,
             ),
         decreases hi - x + 1,
     {
-        inner.set(n, decode_value(ty, x as i64));
-        assert(inner@ =~= ls@.push(decode(*ty, x as i64)));
-        match to_bool(eval_in(body, c, &inner)) {
+        ls.set(n, decode_value(ty, x as i64));
+        assert(ls@ =~= ls0.push(decode(*ty, x as i64)));
+        match to_bool(eval_in(body, c, ls)) {
             Err(k) => {
+                ls.pop();
+                assert(ls@ =~= ls0);
                 return Err(k);
             },
             Ok(b) => {
                 if b != all {
+                    ls.pop();
+                    assert(ls@ =~= ls0);
                     return Ok(Value::Bool(b));
                 }
             },
         }
-        assert(inner@.subrange(0, n as int) =~= ls@);
+        assert(ls@.subrange(0, n as int) =~= ls0);
         x = x + 1;
     }
+    ls.pop();
+    assert(ls@ =~= ls0);
     Ok(Value::Bool(all))
 }
 
+
+/// 作業用の局所変数の列 `ls` を使って評価する。`ls` は空で渡し、空に戻る。
+/// 何度も評価する呼び出し元が、列の確保を評価ごとに繰り返さないためのもの。
+pub(crate) fn eval_with(e: &Expr, c: &Ctx, ls: &mut Vec<Value>) -> (r: Result<Value, ErrKind>)
+    requires
+        old(ls)@.len() == 0,
+    ensures
+        r == eval_spec(*e, c@),
+        final(ls)@.len() == 0,
+{
+    assert(ls@ =~= Seq::<Value>::empty());
+    eval_in(e, c, ls)
+}
+
+/// `eval_with` の述語版。
+pub(crate) fn eval_prop_with(e: &Expr, c: &Ctx, ls: &mut Vec<Value>) -> (r: Result<bool, ErrKind>)
+    requires
+        old(ls)@.len() == 0,
+    ensures
+        r == prop_spec(*e, c@),
+        final(ls)@.len() == 0,
+{
+    to_bool(eval_with(e, c, ls))
+}
 
 /// 述語として評価する。結果は `prop_spec` と一致する。
 pub fn eval_prop(e: &Expr, c: &Ctx) -> (r: Result<bool, ErrKind>)

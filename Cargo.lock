@@ -159,6 +159,8 @@ name = "fmspec-search"
 version = "0.1.0"
 dependencies = [
  "fmspec-core",
+ "hashbrown",
+ "rustc-hash",
 ]
 
 [[package]]
