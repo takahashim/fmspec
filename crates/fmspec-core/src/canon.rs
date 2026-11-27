@@ -33,6 +33,8 @@ use crate::limits::*;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{flat, lemma_list_join, lemma_list_parts, pad, pad_vals, parts_ok, row_at, rows_at, rows_view};
 #[cfg(verus_keep_ghost)]
+use crate::lower_types::*;
+#[cfg(verus_keep_ghost)]
 use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, mparts_ok, mrow_at, row_vals};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
@@ -45,6 +47,8 @@ use crate::slots::keys_or_zero_exec;
 use crate::slots::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, list_parts, map_rows, split, sub_exprs};
 #[cfg(verus_keep_ghost)]
 use crate::slots::{bool_lit, int_lit, ite_s, lits, split_ok, tree_s, Join};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -1036,10 +1040,50 @@ pub proof fn lemma_eq_default(xs: Seq<Expr>, t: STy, env: Env, ls: Seq<Value>, e
 
 // ---- 正規形の判定 ----
 
+pub proof fn lemma_etys_sub(xs: Seq<Type>, lo: int, hi: int)
+    requires
+        0 <= lo <= hi <= xs.len(),
+    ensures
+        etys(xs.subrange(lo, hi)) == etys(xs).subrange(lo, hi),
+{
+    assert(etys(xs.subrange(lo, hi)) =~= etys(xs).subrange(lo, hi));
+}
+
+/// 同じ型のスロットの列の比較は Bool の型を持つ。
+pub proof fn lemma_eq_all_typed(xs: Seq<Expr>, ys: Seq<Expr>, es: Seq<ETy>, tv: TyEnv, lt: Seq<ETy>)
+    requires
+        typed(xs, es, tv, lt),
+        typed(ys, es, tv, lt),
+    ensures
+        has_ty(eq_all_s(xs, ys), tv, lt, ETy::Bool),
+{
+    let items = eq_items(xs, ys);
+    assert forall|i: int| 0 <= i < items.len() implies #[trigger] has_ty(items[i], tv, lt, ETy::Bool) by {
+        assert(has_ty(xs[i], tv, lt, es[i]) && has_ty(ys[i], tv, lt, es[i]));
+    }
+    lemma_tree_typed(items, bool_lit(true), Join::And, tv, lt, ETy::Bool);
+}
+
+/// 型の既定値のリテラルの比較は Bool の型を持つ。
+pub proof fn lemma_eq_default_typed(xs: Seq<Expr>, x: STy, tv: TyEnv, lt: Seq<ETy>)
+    requires
+        wf_stype(x, tv.enums),
+        small(x),
+        typed(xs, etys(slot_tys(x, tv.enums)), tv, lt),
+    ensures
+        has_ty(eq_all_s(xs, lits(enc(default_val(x, tv.enums), x, tv.enums))), tv, lt, ETy::Bool),
+{
+    lemma_defaults_typed(x, tv, lt);
+    lemma_eq_all_typed(xs, lits(enc(default_val(x, tv.enums), x, tv.enums)), etys(slot_tys(x, tv.enums)), tv, lt);
+}
+
 /// [`canonical`] の結果 `c` の性質。`c` は純粋で、スロットの値がスロットの型の値なら、
 /// `c` の値は、スロットの値が型 `t` の正規形の符号化であることである。
 pub open spec fn canon_spec(t: STy, slots: Seq<Expr>, enums: Seq<i64>, c: Expr) -> bool {
     &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(c, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && wf_stype(t, enums) && small(t) && #[trigger] typed(slots, etys(slot_tys(t, enums)), tv, lt)
+            ==> has_ty(c, tv, lt, ETy::Bool)
     &&& forall|env: Env, ls: Seq<Value>|
         clean(slots, env, ls) && #[trigger] in_slots(slot_vals(slots, env, ls), slot_tys(t, enums), enums) ==> eval_l(
             c,
@@ -1111,6 +1155,17 @@ proof fn lemma_canon_record(names: Seq<usize>, ts: Seq<STy>, slots: Seq<Expr>, e
     ensures
         canon_spec(STy::Record(names, ts), slots, enums, c),
 {
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && wf_stype(STy::Record(names, ts), enums) && small(STy::Record(names, ts)) && #[trigger] typed(
+            slots,
+            etys(slot_tys(STy::Record(names, ts), enums)),
+            tv,
+            lt,
+        ) implies has_ty(c, tv, lt, ETy::Bool) by {
+        assert(slot_tys(STy::Record(names, ts), enums) == slot_tys(STy::Tuple(ts), enums));
+        assert(wf_stype(STy::Tuple(ts), enums) && small(STy::Tuple(ts)));
+        assert(typed(slots, etys(slot_tys(STy::Tuple(ts), enums)), tv, lt));
+    }
     let r = STy::Record(names, ts);
     let u = STy::Tuple(ts);
     assert forall|xs: Seq<Value>| canon_ok(xs, r, enums) == canon_ok(xs, u, enums) by {
@@ -1183,6 +1238,21 @@ proof fn lemma_canon_option(x: STy, slots: Seq<Expr>, enums: Seq<i64>, inner: Ex
     let t = STy::Option(Box::new(x));
     let payload = slots.subrange(1, slots.len() as int);
     let d = enc(default_val(x, enums), x, enums);
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && wf_stype(t, enums) && small(t) && #[trigger] typed(slots, etys(slot_tys(t, enums)), tv, lt)
+            implies has_ty(r, tv, lt, ETy::Bool) by {
+        let ys = etys(slot_tys(x, enums));
+        lemma_etys_concat(seq![Type::Bool], slot_tys(x, enums));
+        assert(etys(seq![Type::Bool]) =~= seq![ETy::Bool]);
+        assert(etys(slot_tys(t, enums)) == seq![ETy::Bool] + ys);
+        assert((seq![ETy::Bool] + ys)[0] == ETy::Bool);
+        assert(has_ty(slots[0], tv, lt, (seq![ETy::Bool] + ys)[0]));
+        lemma_typed_sub(slots, seq![ETy::Bool] + ys, tv, lt, 1, slots.len() as int);
+        assert((seq![ETy::Bool] + ys).subrange(1, slots.len() as int) =~= ys);
+        assert(typed(payload, ys, tv, lt));
+        assert(has_ty(inner, tv, lt, ETy::Bool));
+        lemma_eq_default_typed(payload, x, tv, lt);
+    }
     assert forall|n: nat| #[trigger] all_pure(slots, n) implies pure_below(r, n) by {
         lemma_sub_pure(slots, 1, slots.len() as int, n);
         lemma_lits_pure(d, n);
@@ -1255,6 +1325,34 @@ proof fn lemma_canon_map(
     let t = STy::Map(Box::new(k), Box::new(x));
     let s = (1 + width(x, enums)) as nat;
     let d = enc(default_val(x, enums), x, enums);
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && wf_stype(t, enums) && small(t) && #[trigger] typed(slots, etys(slot_tys(t, enums)), tv, lt)
+            implies has_ty(tree_s(items, bool_lit(true), Join::And), tv, lt, ETy::Bool) by {
+        let rowt = seq![Type::Bool] + slot_tys(x, enums);
+        let ys = etys(slot_tys(x, enums));
+        lemma_slot_tys_len(x, enums);
+        assert(rowt.len() == s);
+        lemma_etys_concat(seq![Type::Bool], slot_tys(x, enums));
+        assert(etys(seq![Type::Bool]) =~= seq![ETy::Bool]);
+        assert forall|p: int| 0 <= p < items.len() implies #[trigger] has_ty(items[p], tv, lt, ETy::Bool) by {
+            assert(map_item_ok(items[p], cs[p], rows[p], x, enums));
+            assert(mrow_at(rows[p], slots, p, s));
+            let n = keys_or_zero(k, enums);
+            lemma_ty_repeat_sub(rowt, n, p);
+            lemma_etys_sub(ty_repeat(rowt, n), p * s, p * s + s);
+            lemma_typed_sub(slots, etys(slot_tys(t, enums)), tv, lt, p * s, p * s + s);
+            let row = rows[p];
+            assert(typed(row, seq![ETy::Bool] + ys, tv, lt));
+            assert((seq![ETy::Bool] + ys)[0] == ETy::Bool);
+            assert(has_ty(row[0], tv, lt, (seq![ETy::Bool] + ys)[0]));
+            lemma_typed_sub(row, seq![ETy::Bool] + ys, tv, lt, 1, row.len() as int);
+            assert((seq![ETy::Bool] + ys).subrange(1, row.len() as int) =~= ys);
+            assert(canon_wf(x, row.subrange(1, row.len() as int), enums, cs[p]));
+            assert(has_ty(cs[p], tv, lt, ETy::Bool));
+            lemma_eq_default_typed(row.subrange(1, row.len() as int), x, tv, lt);
+        }
+        lemma_tree_typed(items, bool_lit(true), Join::And, tv, lt, ETy::Bool);
+    }
     assert forall|n: nat| #[trigger] all_pure(slots, n) implies pure_below(tree_s(items, bool_lit(true), Join::And), n) by {
         assert forall|p: int| 0 <= p < items.len() implies pure_below(#[trigger] items[p], n) by {
             assert(map_item_ok(items[p], cs[p], rows[p], x, enums));
@@ -1443,6 +1541,34 @@ proof fn lemma_canon_list(
     let t = STy::List(Box::new(e), max);
     let w = width(e, enums);
     let d = enc(default_val(e, enums), e, enums);
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && wf_stype(t, enums) && small(t) && #[trigger] typed(slots, etys(slot_tys(t, enums)), tv, lt)
+            implies has_ty(tree_s(items, bool_lit(true), Join::And), tv, lt, ETy::Bool) by {
+        let et = slot_tys(e, enums);
+        let ys = etys(et);
+        lemma_slot_tys_len(e, enums);
+        let all = etys(slot_tys(t, enums));
+        lemma_etys_concat(seq![Type::Int(0, max as i64)], ty_repeat(et, max as nat));
+        assert(etys(seq![Type::Int(0, max as i64)]) =~= seq![ETy::Int]);
+        assert(all == seq![ETy::Int] + etys(ty_repeat(et, max as nat)));
+        assert(has_ty(slots[0], tv, lt, all[0]));
+        assert(has_ty(len, tv, lt, ETy::Int));
+        assert forall|p: int| 0 <= p < items.len() implies #[trigger] has_ty(items[p], tv, lt, ETy::Bool) by {
+            assert(list_item_ok(items[p], cs[p], rows[p], len, p, e, enums));
+            assert(row_at(rows[p], slots, p, w));
+            lemma_ty_repeat_sub(et, max as nat, p);
+            lemma_etys_sub(ty_repeat(et, max as nat), p * w, p * w + w);
+            lemma_typed_sub(slots, all, tv, lt, 1 + p * w, 1 + p * w + w);
+            assert(all.subrange(1 + p * w, 1 + p * w + w) =~= etys(ty_repeat(et, max as nat)).subrange(p * w, p * w + w));
+            assert(typed(rows[p], ys, tv, lt));
+            assert(canon_wf(e, rows[p], enums, cs[p]));
+            assert(has_ty(cs[p], tv, lt, ETy::Bool));
+            lemma_eq_default_typed(rows[p], e, tv, lt);
+            assert(has_ty(int_lit(p as i64), tv, lt, ETy::Int));
+            assert(has_ty(Expr::Bin(BinOp::Lt, Box::new(int_lit(p as i64)), Box::new(len)), tv, lt, ETy::Bool));
+        }
+        lemma_tree_typed(items, bool_lit(true), Join::And, tv, lt, ETy::Bool);
+    }
     assert forall|n: nat| #[trigger] all_pure(slots, n) implies pure_below(tree_s(items, bool_lit(true), Join::And), n) by {
         assert forall|p: int| 0 <= p < items.len() implies pure_below(#[trigger] items[p], n) by {
             assert(list_item_ok(items[p], cs[p], rows[p], len, p, e, enums));
@@ -1619,6 +1745,24 @@ proof fn lemma_canon_tuple(
     let t = STy::Tuple(ts);
     let xts = to_xtys(ts);
     lemma_to_xtys(ts);
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && wf_stype(t, enums) && small(t) && #[trigger] typed(slots, etys(slot_tys(t, enums)), tv, lt)
+            implies has_ty(tree_s(cs, bool_lit(true), Join::And), tv, lt, ETy::Bool) by {
+        lemma_xetys_seq_of(ts, enums);
+        assert forall|i: int| 0 <= i < cs.len() implies #[trigger] has_ty(cs[i], tv, lt, ETy::Bool) by {
+            assert(split_ok(parts[i], slots, xts, i, enums));
+            lemma_wf_index(ts, i, enums);
+            lemma_smalls_at(ts, i);
+            assert(canon_wf(ts[i], parts[i], enums, cs[i]));
+            lemma_xetys_part(xts, i, enums);
+            lemma_xetys_of(ts[i], enums);
+            let lo = xoff(xts, i, enums);
+            let hi = lo + xwidth(xts[i], enums);
+            lemma_typed_sub(slots, etys(slot_tys(t, enums)), tv, lt, lo, hi);
+            assert(typed(parts[i], etys(slot_tys(ts[i], enums)), tv, lt));
+        }
+        lemma_tree_typed(cs, bool_lit(true), Join::And, tv, lt, ETy::Bool);
+    }
     assert forall|n: nat| #[trigger] all_pure(slots, n) implies pure_below(tree_s(cs, bool_lit(true), Join::And), n) by {
         assert forall|i: int| 0 <= i < cs.len() implies pure_below(#[trigger] cs[i], n) by {
             assert(split_ok(parts[i], slots, xts, i, enums));

@@ -216,10 +216,10 @@ VERUS_MUTANTS = [
   ["slots.rs", "let y = bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi));", "let y = bin(BinOp::Lt, copy_expr(&slots[0]), ci(*hi));", "整数の型の上限を除く"],
   ["lowering.rs", "let r = lookup_rank(x, cx, sc, blk, &k)?;\n    let ghost b2", "let r = lookup_rank(x, cx, sc, blk, &v)?;\n    let ghost b2", "Mapのキーの番号を値の型で計算する"],
   ["lowering.rs", "out.push(bin(*op, x, y));", "out.push(bin(*op, y, x));", "比較の左右を入れ替える"],
-  ["lowering.rs", "let k = w - 1 - j;", "let k = w - j;", "条件式のスロットの深さを空の let で1つ余分に埋める"],
+  ["lowering.rs", "pad_lets(&ds, j, w - 1, copy_expr(&xa[j]))", "pad_lets(&ds, j, w, copy_expr(&xa[j]))", "条件式のスロットの深さを既定値の let で1つ余分に埋める"],
   ["lowering.rs", "out.push(not(x));", "out.push(x);", "否定を落とす"],
   ["lowering.rs", "out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);", "out.push(bind(blk, Expr::Or(Box::new(p), Box::new(q)))?);", "含意を論理和にする"],
-  ["lowering.rs", "if all { Join::RawAnd } else { Join::RawOr }", "if all { Join::RawOr } else { Join::RawAnd }", "allとanyのたたみ方を入れ替える"],
+  ["lowering.rs", "let joined = tree(&terms, cb(all), if all { Join::RawAnd } else { Join::RawOr });", "let joined = tree(&terms, cb(all), if all { Join::RawOr } else { Join::RawAnd });", "allとanyのたたみ方を入れ替える"],
   ["lowering.rs", "let out = need(ite_slots(&c, &xs, &ys, d))?;", "let out = need(ite_slots(&c, &ys, &xs, d))?;", "条件式の枝を入れ替える"],
   ["quant.rs", "out.push(bin(BinOp::Add, copy_expr(r), ci(*lo)));", "out.push(bin(BinOp::Sub, copy_expr(r), ci(*lo)));", "整数の番号に下端を足さない"],
   ["quant.rs", "acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, k)), acc);", "acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, 0)), acc);", "列挙型の番号をラベルに対応させない"],
@@ -244,7 +244,7 @@ VERUS_MUTANTS = [
   ["slots.rs", "XType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "XType::List(e, _) => small_stype(e),", "Listの長さの上限を確かめずに等しさを比べる"],
   ["equality.rs", "SType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),", "SType::List(e, _) => small_stype(e),", "入れ子のListの長さの上限を確かめない"],
   ["lowering.rs", "out.push(ci(es.len() as i64));", "out.push(ci(0));", "Listのリテラルの長さを0にする"],
-  ["lowering.rs", "while p < *max", "while p + 1 < *max", "Listのリテラルを上限まで埋めない"],
+  ["lowering.rs", "append_rows(&mut out, &defs, *max - es.len(),", "append_rows(&mut out, &defs, *max - es.len() - 1,", "Listのリテラルを上限まで埋めない"],
   ["lowering.rs", "let cond = and(bin(BinOp::Ge, copy_expr(&i), ci(0)), bin(BinOp::Lt, copy_expr(&i), len));", "let cond = and(bin(BinOp::Ge, copy_expr(&i), ci(0)), bin(BinOp::Le, copy_expr(&i), len));", "添字の範囲に長さを含める"],
   ["lowering.rs", "copy_exprs(&rows[0])", "copy_exprs(&rows[rows.len() - 1])", "Listの先頭の代わりに最後の行を返す"],
   ["lowering.rs", "let i = bind(blk, bin(BinOp::Sub, len, ci(1)))?;", "let i = bind(blk, bin(BinOp::Sub, len, ci(0)))?;", "Listの末尾の添字を長さにする"],
@@ -308,7 +308,10 @@ VERUS_MUTANTS = [
   ["sym.rs", "t.push(s[p[j]]);", "t.push(s[j]);", "入れ替えを施さない"],
   ["sym.rs", "|| !find_rep(sw, cert, &m.inits[i]) {", "{", "初期状態の代表元が証明書にあるかを確かめない"],
   ["sym.rs", "if !renamed_eq(e, e, p) {", "if false {", "終端条件が入れ替えで変わらないかを確かめない"],
-  ["sym.rs", "if f[i] >= n || f[f[i]] != i {", "if f[i] >= n {", "置換が対合かを確かめない"]
+  ["sym.rs", "if f[i] >= n || f[f[i]] != i {", "if f[i] >= n {", "置換が対合かを確かめない"],
+  ["smodel.rs", "            Some(w) => if w != out.len() {", "            Some(w) => if false {", "代入のスロットの数を型の幅と照合しない"],
+  ["model_wf.rs", "                    lemma_layouts_disjoint(st, ts, enums, v1, v2);", "", "別の状態変数の範囲が重ならないことを使わない"],
+  ["lowering.rs", "                let pk = if max == 0 {", "                let pk = if false {", "上限0のListをたどる量化で、要素のスロットを既定値にしない"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -360,8 +363,8 @@ VERUS_CANARIES = [
   ["preserve_ops.rs", "            assert(ctx_ok(cx, sc2, env, se, l2, sls2));", "lemma_let の局所変数の対応"],
   ["preserve_ops.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
   ["preserve_ops.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
-  ["preserve_ops.rs", "            lemma_pad_eval(k, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
-  ["lowering.rs", "                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(*tx), xa@);", "low_ite のスロットの束縛"],
+  ["preserve_ops.rs", "            lemma_pad_eval(ds, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
+  ["lowering.rs", "                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), xa@);", "low_ite のスロットの束縛"],
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
   ["preserve_quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
@@ -420,7 +423,7 @@ VERUS_CANARIES = [
   ["model_lower.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
   ["model_lower.rs", "        lemma_init_ok(*sm, cv, m, stg, sx, psg, cc);", "lower_model の結論"],
   ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"],
-  ["model_lower.rs", "            lemma_state_ctx(*sm, cv, cx, stys(sa.args@));\n            assert(out_sty(*sa)", "lower_model の遷移契約の文脈"],
+  ["model_lower.rs", "            crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), stys(sa.args@));\n            assert(out_sty(*sa)", "lower_model の遷移契約の文脈"],
   ["smodel.rs", "                lemma_upd_pre(*sa, *cx, u as int);", "lower_action の代入の前提"],
   ["refine.rs", "        assert(ref_state_ok(b, cb, a, f, cert[j]@));\n    }\n}", "lemma_cert_refines の遷移"],
   ["refine.rs", "            Move::No\n", "find_move の移れない場合"],
@@ -429,7 +432,15 @@ VERUS_CANARIES = [
   ["sym.rs", "        assert(reps(sw, cert, t));", "lemma_reach_reps の遷移"],
   ["sym.rs", "                lemma_con_sw(m, c, w, k, s, s2, args, t, t2, o);", "lemma_safe_sw の遷移契約"],
   ["sym.rs", "        lemma_rename_eval(body, p, e1, e2, l);", "lemma_rename_quant の本体"],
-  ["gate.rs", "            match crate::sym::symmetry(m, c, swaps) {", "decide_symmetric の証明書"]
+  ["gate.rs", "            match crate::sym::symmetry(m, c, swaps) {", "decide_symmetric の証明書"],
+  ["model_wf.rs", "        lemma_action_frame(sm, m, a, cs[a]);", "lemma_model_frame の操作"],
+  ["lowering.rs", "                    lemma_tree_typed(hits@, bool_lit(false), Join::Or, tv, blt(b2, *cx), ETy::Bool);", "low_list_contains の型"],
+  ["lowering.rs", "                    lemma_lrows_typed(ls@, len, rows_view(rows@), slot_tys(st, cx.enums@), max as nat, tv, blt(b3, *cx));", "low_at の型"],
+  ["lowering.rs", "            lemma_bind_typed(b1, *blk, q, z, *cx, ETy::Bool);", "low_quant の型"],
+  ["smodel.rs", "                lemma_ups_typed(before, ups@, out@, cx.states->Some_0@, su.var as int, tv, enums);", "lower_action の代入の型"],
+  ["model_lower.rs", "    crate::model_wf::lemma_model_wf(m);", "lemma_model_types"],
+  ["model_wf.rs", "        crate::canon::lemma_member_in(cv[i], t, enums);", "lemma_cx_tok の定数"],
+  ["lower_types.rs", "    lemma_mrows_typed(ms, rows, row, n, t, lt);", "lemma_map_rows_typed"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

@@ -774,6 +774,7 @@ pub proof fn lemma_delete(
 
 /// `Map#get` の下ろしの正しさ（[`low_get`]）。
 #[verifier::spinoff_prover]
+#[verifier::rlimit(40)]
 pub proof fn lemma_get(
     e: TExpr,
     cx: LowerCtx,
