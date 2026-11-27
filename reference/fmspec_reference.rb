@@ -883,6 +883,6 @@ module FmspecReference
   end
 
   def self.load(path)
-    Model.new(JSON.parse(File.read(path)))
+    Model.new(JSON.parse(File.read(path, encoding: Encoding::UTF_8)))
   end
 end

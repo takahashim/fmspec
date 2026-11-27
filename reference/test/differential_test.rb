@@ -28,7 +28,7 @@ class DifferentialTest < Minitest::Test
 
   def cli(*args)
     out, status = Open3.capture2(BIN, *args, "--json")
-    [JSON.parse(out), status.exitstatus]
+    [JSON.parse(out.force_encoding(Encoding::UTF_8)), status.exitstatus]
   end
 
   def flags(deadlock: false, max_states: nil, actions: nil)
@@ -56,7 +56,7 @@ class DifferentialTest < Minitest::Test
     assert_equal expected["visited_states"], actual["search"]["visited_states"], context
     case expected["status"]
     when "verified"
-      assert_equal expected["certificate"], JSON.parse(File.read(cert))["states"], context
+      assert_equal expected["certificate"], JSON.parse(File.read(cert, encoding: Encoding::UTF_8))["states"], context
     when "violated", "error"
       assert_equal expected["property"], actual["property"].except("source"), context
       assert_equal expected["initial"], actual["trace"]["initial"], context
@@ -222,7 +222,7 @@ class DifferentialTest < Minitest::Test
     variants << expected["certificate"].reject { rng.rand < 0.4 }
     make_state ||= -> { random_state(ir, rng) }
     variants << (expected["certificate"] + Array.new(3) { make_state.call }).uniq
-    document = JSON.parse(File.read(cert))
+    document = JSON.parse(File.read(cert, encoding: Encoding::UTF_8))
     variants.each do |states|
       File.write(cert, JSON.generate(document.merge("states" => states)))
       reason = m.reject_certificate(states.map { |row| m.state_from_json(row) }, **cert_options)

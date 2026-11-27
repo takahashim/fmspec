@@ -8,7 +8,11 @@
 # - verus:contract  未検証コードから呼べる公開関数が、前提条件（requires）を持たない（仕様書 §3.1）。
 # - verus:mutants   検査を1つ壊した変異と、到達点に assert(false) を置いた変種が、証明に失敗する。
 #
-# `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
+# `rake verus` と `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
+# 変異の検査は、変種ごとに crate 全体を検証し直すので、すべて回すと数時間かかる。CI では回さない。
+# 証明を変えたときに手元で、変えたファイルに絞って実行する。
+#
+#   VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants
 #
 # Verus の実行ファイルは環境変数 VERUS で指定する（なければ PATH の verus）。
 # バージョンは VERUS_VERSION に固定する。更新は証明の再確認とあわせて行う。
@@ -16,7 +20,12 @@ require "open3"
 require "tmpdir"
 require "fileutils"
 
-VERUS_VERSION = "0.2026.10.04.426d8b0"
+VERUS_VERSION = "0.2026.11.02.8bf68ee"
+# cargoビルドで使う vstd とその依存（crates.io の版）。VERUS_VERSION のリリースのコミットと、
+# この版を公開したコミットとで、これらのクレートのソースは一致する（違うのは Cargo.toml の版番号だけ）。
+# VERUS_VERSION を更新するときは、対応する版を選び直し、ソースの一致を確かめる。
+VERUS_CRATES_VERSION = "0.0.0-2026-11-01-0251"
+VERUS_CRATES = %w[vstd verus_builtin verus_builtin_macros verus_state_machines_macros verus_syn verus_prettyplease].freeze
 VERUS_CRATE = File.join(ROOT, "crates/fmspec-core")
 VERUS_SOURCES = Dir[File.join(VERUS_CRATE, "src/*.rs")].sort
 # 証明の対象外の、標準トレイトの手書き実装。`verus!` の外にあり、判定の経路から呼ばれない。
@@ -29,12 +38,13 @@ def verus_bin
 end
 
 def verus_code(path)
-  File.read(path).gsub(%r{/\*.*?\*/}m, "").lines.map { |l| l.sub(%r{//.*$}, "") }.join
+  File.read(path, encoding: Encoding::UTF_8).gsub(%r{/\*.*?\*/}m, "").lines.map { |l| l.sub(%r{//.*$}, "") }.join
 end
 
 # Verus を実行し、[成功したか, 検証した数, エラーの数, 出力] を返す。エラーの数が nil なら、検証まで進んでいない。
 def verus_run(dir)
   out, status = Open3.capture2e(verus_bin, "--crate-type=lib", File.join(dir, "src/lib.rs"))
+  out.force_encoding(Encoding::UTF_8)
   m = out.match(/verification results:: (\d+) verified, (\d+) errors/)
   [status.success?, m && m[1].to_i, m && m[2].to_i, out]
 end
@@ -201,6 +211,7 @@ VERUS_MUTANTS = [
   ["slots.rs", "let y = bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi));", "let y = bin(BinOp::Lt, copy_expr(&slots[0]), ci(*hi));", "整数の型の上限を除く"],
   ["lowering.rs", "let r = lookup_rank(x, cx, sc, blk, &k)?;\n    let ghost b2", "let r = lookup_rank(x, cx, sc, blk, &v)?;\n    let ghost b2", "Mapのキーの番号を値の型で計算する"],
   ["lowering.rs", "out.push(bin(*op, x, y));", "out.push(bin(*op, y, x));", "比較の左右を入れ替える"],
+  ["lowering.rs", "let k = w - 1 - j;", "let k = w - j;", "条件式のスロットの深さを空の let で1つ余分に埋める"],
   ["lowering.rs", "out.push(not(x));", "out.push(x);", "否定を落とす"],
   ["lowering.rs", "out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);", "out.push(bind(blk, Expr::Or(Box::new(p), Box::new(q)))?);", "含意を論理和にする"],
   ["lowering.rs", "if all { Join::RawAnd } else { Join::RawOr }", "if all { Join::RawOr } else { Join::RawAnd }", "allとanyのたたみ方を入れ替える"],
@@ -324,6 +335,8 @@ VERUS_CANARIES = [
   ["lowering.rs", "            assert(ctx_ok(cx, sc2, env, se, l2, sls2));", "lemma_let の局所変数の対応"],
   ["lowering.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
   ["lowering.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
+  ["lowering.rs", "            lemma_pad_eval(k, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
+  ["lowering.rs", "                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(*tx), xa@);", "low_ite のスロットの束縛"],
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
   ["lowering.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
@@ -395,7 +408,7 @@ def verus_variant(name, file, description)
   FileUtils.mkdir_p(dir)
   FileUtils.cp_r(File.join(VERUS_CRATE, "src"), dir)
   path = File.join(dir, "src", file)
-  File.write(path, yield(File.read(path)))
+  File.write(path, yield(File.read(path, encoding: Encoding::UTF_8)))
   ok, verified, errors, out = verus_run(dir)
   if ok || errors.nil? || errors.zero?
     reason = errors.nil? && !ok ? "検証まで進まなかった" : "証明が通ってしまった"
@@ -427,11 +440,21 @@ def verus_parallel(jobs)
 end
 
 namespace :verus do
-  desc "Verus のバージョンが固定したものと一致することを確かめる"
+  desc "Verus と、cargoビルドで使う vstd の版が、固定したものと一致することを確かめる"
   task :version do
     out, = Open3.capture2e(verus_bin, "--version")
+    out.force_encoding(Encoding::UTF_8)
     version = out[/Version: (\S+)/, 1]
     abort "verus: #{verus_bin} のバージョンは #{version.inspect}。固定したバージョンは #{VERUS_VERSION}" unless version == VERUS_VERSION
+
+    lock = File.read(File.join(ROOT, "Cargo.lock"), encoding: Encoding::UTF_8)
+    VERUS_CRATES.each do |name|
+      found = lock.scan(/^name = "#{name}"\nversion = "([^"]+)"/).flatten
+      abort "verus: Cargo.lock に #{name} がない" if found.empty?
+      found.each do |v|
+        abort "verus: Cargo.lock の #{name} は #{v}。VERUS_VERSION に対応する版は #{VERUS_CRATES_VERSION}" unless v == VERUS_CRATES_VERSION
+      end
+    end
   end
 
   desc "信頼する項目（assume、external_body など）が中核にないことを確かめる"
@@ -449,7 +472,7 @@ namespace :verus do
       name = File.basename(path)
       next if name == "lib.rs"
 
-      code = File.read(path)
+      code = File.read(path, encoding: Encoding::UTF_8)
       inside = code.include?("verus! {")
       abort "verus: #{name} は証明の対象外のはずだが verus! ブロックがある" if VERUS_UNVERIFIED.include?(name) && inside
       next if VERUS_UNVERIFIED.include?(name)
@@ -484,10 +507,20 @@ namespace :verus do
 
   desc "検査を壊した変異と assert(false) が、証明に失敗することを確かめる"
   task mutants: :version do
-    jobs = VERUS_MUTANTS.each_with_index.map do |(file, from, to, description), n|
+    # VERUS_MUTANTS_FILES（カンマ区切りのファイル名）があれば、そのファイルの変異と assert(false) だけを検査する。
+    files = ENV.fetch("VERUS_MUTANTS_FILES", "").split(",").map(&:strip).reject(&:empty?)
+    unless files.empty?
+      known = (VERUS_MUTANTS + VERUS_CANARIES).map(&:first).uniq
+      unknown = files - known
+      abort "verus: VERUS_MUTANTS_FILES の #{unknown.join(', ')} には変異も assert(false) もない" unless unknown.empty?
+    end
+    selected = ->(file) { files.empty? || files.include?(file) }
+    mutants = VERUS_MUTANTS.each_with_index.select { |(file, *), _| selected.(file) }
+    canaries = VERUS_CANARIES.each_with_index.select { |(file, *), _| selected.(file) }
+    jobs = mutants.map do |(file, from, to, description), n|
       -> { verus_variant("mutant#{n}", file, description) { |src| verus_replace_once(src, from, to, description) } }
     end
-    jobs += VERUS_CANARIES.each_with_index.map do |(file, anchor, description), n|
+    jobs += canaries.map do |(file, anchor, description), n|
       lambda do
         verus_variant("canary#{n}", file, "assert(false): #{description}") do |src|
           verus_replace_once(src, anchor, "assert(false);\n#{anchor}", description)
@@ -499,13 +532,12 @@ namespace :verus do
       puts failures
       abort "verus: #{failures.length} 件の変異または assert(false) が証明を通った。証明が検査を捉えていない"
     end
-    puts "verus: 変異 #{VERUS_MUTANTS.length} 件と assert(false) #{VERUS_CANARIES.length} 件は、すべて証明に失敗した"
+    puts "verus: 変異 #{mutants.length} 件と assert(false) #{canaries.length} 件は、すべて証明に失敗した"
   end
 end
 
 namespace :verus do
-  # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行し、
-  # 変異の検査は main への PR と定期実行で行う（.github/workflows/ci.yml）。
+  # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行する。
   desc "中核の証明だけを検証する（変異と assert(false) の検査を除く）"
   task proof: %w[verus:version verus:trusted verus:coverage verus:contract] do
     ok, verified, errors, out = verus_run(VERUS_CRATE)
@@ -516,5 +548,6 @@ namespace :verus do
   end
 end
 
-desc "中核の証明と、証明が空虚でないことの検査（Verus #{VERUS_VERSION} が必要）"
-task verus: %w[verus:proof verus:mutants]
+# 変異の検査（verus:mutants）は数時間かかるので含めない。
+desc "中核の証明（Verus #{VERUS_VERSION} が必要）"
+task verus: %w[verus:proof]

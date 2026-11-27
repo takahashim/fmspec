@@ -2280,7 +2280,8 @@ proof fn lemma_ite_tpre(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, m: nat)
     lemma_sc_wf_mono(sc, n, m, cx.enums@);
 }
 
-/// 束縛を持つ `ite` の枝を、スロット `j` ごとにその位置の深さで単独に下ろし直し、`j` 番目のスロットを選ぶ式を束縛する。
+/// 束縛を持つ `ite` の枝を、最後のスロットを束縛する深さで一度だけ単独に評価する式に下ろす。
+/// スロット `j` ごとに、足りない深さを空の `let` で埋めて、`j` 番目のスロットを選ぶ式を束縛する。
 #[verifier::spinoff_prover]
 #[verifier::rlimit(60)]
 fn low_ite_slots(
@@ -2296,6 +2297,7 @@ fn low_ite_slots(
 ) -> (r: Result<(Vec<Expr>, Ghost<Seq<Seq<Expr>>>, Ghost<Seq<Seq<Expr>>>), Fail>)
     requires
         old(blk).wf(),
+        w > 0,
         decreases_to!(*_parent => *a),
         decreases_to!(*_parent => *b),
     ensures
@@ -2325,22 +2327,39 @@ fn low_ite_slots(
 {
     let ghost b2 = *blk;
     let ghost sc0 = sc@;
-    let ghost d = blk.depth_s();
+    let d = depth(blk);
     let ghost pre = tpre(*a, *cx, sc0, d as nat) && tpre(*b, *cx, sc0, d as nat) && type_of(*a, sctx(*cx), bound_tys(sc0))
         == Some(xty(*tx)) && type_of(*b, sctx(*cx), bound_tys(sc0)) == Some(xty(*tx)) && w == xwidth(xty(*tx), cx.enums@);
-    let ghost mut fa: Seq<Seq<Expr>> = Seq::empty();
-    let ghost mut fb: Seq<Seq<Expr>> = Seq::empty();
-    let mut out: Vec<Expr> = Vec::new();
     proof {
         lemma_extends_refl(*blk);
     }
+    if w - 1 >= usize::MAX - d {
+        return Err(Fail::Depth);
+    }
+    let top = d + (w - 1);
+    proof {
+        if pre {
+            lemma_sc_wf_mono(sc0, d as nat, top as nat, cx.enums@);
+        }
+    }
+    // 各枝を、最後のスロットを束縛する深さ `top` で一度だけ下ろす。
+    // スロット `j` は深さ `d + j` で束縛するので、足りない `w - 1 - j` 個の深さを空の `let` で埋めてから評価する。
+    let (ta, xa) = closed_in(a, cx, sc, top)?;
+    let (tb, yb) = closed_in(b, cx, sc, top)?;
+    if !xtype_eq(&ta, tx) || !xtype_eq(&tb, tx) || xa.len() != w || yb.len() != w {
+        return Err(Fail::Type);
+    }
+    let ghost mut fa: Seq<Seq<Expr>> = Seq::empty();
+    let ghost mut fb: Seq<Seq<Expr>> = Seq::empty();
+    let mut out: Vec<Expr> = Vec::new();
     let mut j = 0;
     while j < w
         invariant
-            decreases_to!(*_parent => *a),
-            decreases_to!(*_parent => *b),
             sc@ == sc0,
             j <= w,
+            w == xa@.len(),
+            w == yb@.len(),
+            top == d + w - 1,
             b2.wf(),
             d == b2.depth_s(),
             b2 == *old(blk),
@@ -2350,6 +2369,8 @@ fn low_ite_slots(
             fa.len() == j,
             fb.len() == j,
             out@ == Seq::new(j as nat, |i: int| Expr::Local((d + i) as usize)),
+            frag(*a) ==> closed_slots(*a, *cx, sc0, top as nat, xty(*tx), xa@),
+            frag(*b) ==> closed_slots(*b, *cx, sc0, top as nat, xty(*tx), yb@),
             frag(*a) ==> forall|i: int|
                 0 <= i < j ==> #[trigger] closed_slots(*a, *cx, sc0, (d + i) as nat, xty(*tx), fa[i]),
             frag(*b) ==> forall|i: int|
@@ -2357,47 +2378,42 @@ fn low_ite_slots(
             forall|i: int| 0 <= i < fa.len() ==> i < (#[trigger] fa[i]).len(),
             forall|i: int| 0 <= i < fb.len() ==> i < (#[trigger] fb[i]).len(),
             sc0 == old(sc)@,
-            pre == (tpre(*a, *cx, sc0, d as nat) && tpre(*b, *cx, sc0, d as nat) && type_of(*a, sctx(*cx), bound_tys(sc0))
-                == Some(xty(*tx)) && type_of(*b, sctx(*cx), bound_tys(sc0)) == Some(xty(*tx)) && w == xwidth(xty(*tx), cx.enums@)),
         decreases w - j,
     {
-        let dj = depth(blk);
-        proof {
-            if pre {
-                lemma_sc_wf_mono(sc0, d as nat, dj as nat, cx.enums@);
-            }
-        }
-        let (ta, xa) = closed_in(a, cx, sc, dj)?;
-        let (tb, yb) = closed_in(b, cx, sc, dj)?;
-        if !xtype_eq(&ta, tx) || !xtype_eq(&tb, tx) || j >= xa.len() || j >= yb.len() {
-            return Err(Fail::Type);
-        }
-        proof {
-            assert(dj == d + j);
-        }
+        let k = w - 1 - j;
         let ghost bj = *blk;
-        let o = bind(blk, ite(copy_expr(c), copy_expr(&xa[j]), copy_expr(&yb[j])))?;
+        let o = bind(blk, ite(copy_expr(c), pad_lets(k, copy_expr(&xa[j])), pad_lets(k, copy_expr(&yb[j]))))?;
         out.push(o);
         proof {
             lemma_extends_trans(b2, bj, *blk);
             let fa0 = fa;
             let fb0 = fb;
-            fa = fa.push(xa@);
-            fb = fb.push(yb@);
-            lemma_ite_binds_push(*c, fa0, fb0, xa@, yb@, j as nat);
+            let pa = pad_lets_seq(xa@, k as nat);
+            let pb = pad_lets_seq(yb@, k as nat);
+            assert(pa[j as int] == pad_lets_s(k as nat, xa@[j as int]));
+            assert(pb[j as int] == pad_lets_s(k as nat, yb@[j as int]));
+            fa = fa.push(pa);
+            fb = fb.push(pb);
+            lemma_ite_binds_push(*c, fa0, fb0, pa, pb, j as nat);
             assert(blk.binds@ == b2.binds@ + ite_binds(*c, fa, fb, (j + 1) as nat));
             assert(out@ =~= Seq::new((j + 1) as nat, |i: int| Expr::Local((d + i) as usize)));
-            assert(fa[j as int] == xa@ && fb[j as int] == yb@);
-            assert(j < xa@.len() && j < yb@.len());
-            assert forall|i: int| 0 <= i < j + 1 implies i < (#[trigger] fa[i]).len() && i < fb[i].len() by {
+            assert(fa[j as int] == pa && fb[j as int] == pb);
+            assert forall|i: int| 0 <= i < j + 1 implies i < (#[trigger] fa[i]).len() by {
                 if i < j {
-                    assert(fa[i] == fa0[i] && fb[i] == fb0[i]);
-                    assert(i < fa0[i].len() && i < fb0[i].len());
+                    assert(fa[i] == fa0[i]);
                 } else {
-                    assert(fa[i] == xa@ && fb[i] == yb@);
+                    assert(fa[i] == pa);
+                }
+            }
+            assert forall|i: int| 0 <= i < j + 1 implies i < (#[trigger] fb[i]).len() by {
+                if i < j {
+                    assert(fb[i] == fb0[i]);
+                } else {
+                    assert(fb[i] == pb);
                 }
             }
             if frag(*a) {
+                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(*tx), xa@);
                 assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
                     *a,
                     *cx,
@@ -2412,6 +2428,7 @@ fn low_ite_slots(
                 }
             }
             if frag(*b) {
+                lemma_pads_closed(*b, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(*tx), yb@);
                 assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
                     *b,
                     *cx,
@@ -2425,15 +2442,18 @@ fn low_ite_slots(
                     }
                 }
             }
-            assert(forall|i: int| 0 <= i < j + 1 ==> i < (#[trigger] fa[i]).len() && i < fb[i].len());
         }
         j += 1;
+    }
+    proof {
+        assert forall|i: int| 0 <= i < w implies i < (#[trigger] fa[i]).len() && i < fb[i].len() by {}
     }
     Ok((out, Ghost(fa), Ghost(fb)))
 }
 
 /// 条件式。条件を束縛する。枝が束縛を持たなければ、スロットごとに `ite` で選ぶ。
-/// 束縛を持つなら、スロットごとに、その位置の深さで枝を単独に評価する式に下ろし直して束縛する。
+/// 束縛を持つなら、各枝を単独に評価する式に一度だけ下ろし、スロットごとに、その位置の深さで評価できるように
+/// 空の `let` で深さを合わせて束縛する（[`low_ite_slots`]）。
 /// 中核の `ite` は2つの枝が同じ型でなければならないので、枝の束縛を条件で守って並べることはしない。
 #[verifier::spinoff_prover]
 #[verifier::rlimit(120)]
@@ -2759,6 +2779,82 @@ proof fn lemma_ite_binds_push(c: Expr, fa: Seq<Seq<Expr>>, fb: Seq<Seq<Expr>>, x
     assert forall|i: int| 0 <= i < j implies #[trigger] fa.push(xa)[i] == fa[i] && fb.push(yb)[i] == fb[i] by {}
 }
 
+/// `k` 個の空の `let` の下で `x` を評価する。局所変数の数を `k` だけ増やす。
+spec fn pad_lets_s(k: nat, x: Expr) -> Expr
+    decreases k,
+{
+    if k == 0 {
+        x
+    } else {
+        Expr::Let(Box::new(bool_lit(true)), Box::new(pad_lets_s((k - 1) as nat, x)))
+    }
+}
+
+fn pad_lets(k: usize, x: Expr) -> (r: Expr)
+    ensures
+        r == pad_lets_s(k as nat, x),
+    decreases k,
+{
+    if k == 0 {
+        x
+    } else {
+        Expr::Let(Box::new(Expr::Const(Value::Bool(true))), Box::new(pad_lets(k - 1, x)))
+    }
+}
+
+spec fn pad_lets_seq(xs: Seq<Expr>, k: nat) -> Seq<Expr> {
+    xs.map_values(|x: Expr| pad_lets_s(k, x))
+}
+
+spec fn trues(k: nat) -> Seq<Value> {
+    Seq::new(k, |i: int| Value::Bool(true))
+}
+
+proof fn lemma_pad_eval(k: nat, x: Expr, env: Env, l: Seq<Value>)
+    ensures
+        eval_l(pad_lets_s(k, x), env, l) == eval_l(x, env, l + trues(k)),
+    decreases k,
+{
+    if k == 0 {
+        assert(l + trues(0) =~= l);
+    } else {
+        let inner = pad_lets_s((k - 1) as nat, x);
+        assert(pad_lets_s(k, x) == Expr::Let(Box::new(bool_lit(true)), Box::new(inner)));
+        assert(eval_l(bool_lit(true), env, l) == Ok::<Value, ErrKind>(Value::Bool(true)));
+        lemma_pad_eval((k - 1) as nat, x, env, l.push(Value::Bool(true)));
+        assert(l.push(Value::Bool(true)) + trues((k - 1) as nat) =~= l + trues(k));
+    }
+}
+
+/// 深さ `n == d + k` で単独に評価する式は、空の `let` を `k` 個かぶせると、深さ `d` で単独に評価する式になる。
+proof fn lemma_pads_closed(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, d: nat, k: nat, t: XTy, xs: Seq<Expr>)
+    requires
+        n == d + k,
+        closed_slots(e, cx, sc, n, t, xs),
+    ensures
+        closed_slots(e, cx, sc, d, t, pad_lets_seq(xs, k)),
+{
+    let ps = pad_lets_seq(xs, k);
+    assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
+        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == d implies slots_result(
+        eval_src(e, se, sls),
+        ps,
+        env,
+        ls,
+        t,
+        se.enums,
+    ) by {
+        let l2 = ls + trues(k);
+        assert(prefix(ls, l2));
+        lemma_ctx_weaken(cx, sc, env, se, ls, l2, sls);
+        assert(ctx_ok(cx, sc, env, se, l2, sls) && l2.len() == n);
+        assert forall|j: int| 0 <= j < ps.len() implies #[trigger] eval_l(ps[j], env, ls) == eval_l(xs[j], env, l2) by {
+            lemma_pad_eval(k, xs[j], env, ls);
+        }
+        assert(slot_vals(ps, env, ls) =~= slot_vals(xs, env, l2));
+    }
+}
+
 /// 枝が束縛を持たない条件式の下ろし。
 proof fn lemma_ite_simple(
     e: TExpr,
@@ -2913,10 +3009,17 @@ proof fn lemma_ite_prefix(
             assert(closed_slots(br, cx, sc, (d + j) as nat, t, f[j as int]));
             assert(ctx_ok(cx, sc, env, se, lj, sls));
             assert(j < f[j as int].len());
+            let fj = f[j as int][j as int];
+            assert(eval_l(c, env, lj) == Ok::<Value, ErrKind>(Value::Bool(bv)));
+            assert(eval_l(x, env, lj) == eval_l(fj, env, lj));
+            assert(slots_result(eval_src(br, se, sls), f[j as int], env, lj, t, se.enums));
             match eval_src(br, se, sls) {
                 Ok(v) => {
+                    assert(eval_l(f[j as int][j as int], env, lj) is Ok);
                     let val = eval_l(f[j as int][j as int], env, lj)->Ok_0;
                     let lk = lj.push(val);
+                    assert(run(ite_binds(c, fa, fb, k), env, l2) == Ok::<Seq<Value>, ErrKind>(lk));
+                    assert(slot_vals(f[j as int], env, lj)[j as int] == val);
                     assert(lk.take((d + j) as int) =~= lj);
                     assert forall|i: int| 0 <= i < k implies #[trigger] lk[d + i] == slot_vals(
                         f[i],

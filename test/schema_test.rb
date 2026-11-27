@@ -12,7 +12,9 @@ require_relative "../reference/test/composite_generator"
 # docs/ir.schema.json が、エンジンの受理するIRをすべて受け入れることを確かめる。
 # スキーマは構造だけを定めるので、スキーマを満たしてもIR検証で拒否されるIRはある。逆は起きてはならない。
 class SchemaTest < Minitest::Test
-  SCHEMA = JSONSchemer.schema(Pathname.new(File.join(ROOT, "docs/ir.schema.json")))
+  # json_schemer は Pathname を既定の外部エンコーディングで読むので、UTF-8 として読んだものを渡す。参照はすべて文書内（#/...）。
+  SCHEMA_JSON = JSON.parse(File.read(File.join(ROOT, "docs/ir.schema.json"), encoding: Encoding::UTF_8))
+  SCHEMA = JSONSchemer.schema(SCHEMA_JSON)
 
   def errors(ir) = SCHEMA.validate(ir).map { |e| e["error"] }
 
@@ -23,12 +25,12 @@ class SchemaTest < Minitest::Test
   def loads?(ir) = !Fmspec::Native::Model.load(JSON.generate(ir)).is_a?(String)
 
   def test_the_schema_is_a_valid_schema
-    assert_empty JSONSchemer.validate_schema(JSON.parse(File.read(File.join(ROOT, "docs/ir.schema.json")))).to_a
+    assert_empty JSONSchemer.validate_schema(SCHEMA_JSON).to_a
   end
 
   def test_examples_follow_the_schema
     Dir[File.join(ROOT, "examples/models/*.json")].each do |path|
-      ir = JSON.parse(File.read(path))
+      ir = JSON.parse(File.read(path, encoding: Encoding::UTF_8))
       assert loads?(ir), path
       assert_schema_valid(ir, path)
     end

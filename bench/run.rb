@@ -24,7 +24,7 @@ def run(fmspec, path)
   out = +""
   rss = nil
   status = Open3.popen2(fmspec, "check", path, "--json") do |_in, stdout, wait|
-    reader = Thread.new { out << stdout.read }
+    reader = Thread.new { out << stdout.read.force_encoding(Encoding::UTF_8) }
     proc_status = "/proc/#{wait.pid}/status"
     while wait.alive?
       hwm = begin

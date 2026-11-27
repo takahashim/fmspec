@@ -104,17 +104,22 @@ module Fmspec
         super(scope, name, {}, source)
         @pc = pc
         @following = following
-        @goto = nil
+        # [行き先, 条件（なければ nil）] の列。書いた順に並べる。
+        @gotos = []
       end
 
       # 次に実行するステップを変える。条件を渡すと、条件が真のときだけ変える。
+      # 複数書くと、書いた順に条件を調べ、最初に真になった goto の行き先に進む。どれも偽なら次のステップに進む。
+      # 条件のない goto は「それ以外」で、そのあとには goto を書けない。条件は遷移前の状態で評価する。
       # `goto :done` で、プロセスを終える。
       def goto(step, condition = nil)
         top_level!("goto")
-        raise BuildError, "操作 #{@name}: goto は1つだけ書けます" if @goto
+        if @gotos.any? { |_, c| c.nil? }
+          raise BuildError, "操作 #{@name}: 条件のない goto のあとに goto は書けません（その goto には進みません）"
+        end
 
         target = label(step)
-        @goto = condition.nil? ? target : ite(lift(condition).expect(:bool, "操作 #{@name} の goto の条件"), target, @following)
+        @gotos << [target, condition.nil? ? nil : lift(condition).expect(:bool, "操作 #{@name} の goto の条件")]
         nil
       end
 
@@ -123,11 +128,18 @@ module Fmspec
         at = Expr.new({ "var" => @pc[:index] }, @pc[:type]).eq(@pc[:type][@pc[:label]])
         guard = action["guard"]
         action["guard"] = guard == { "bool" => true } ? at.node : { "all" => [at.node, guard] }
-        action["updates"] << { "target" => @pc[:index], "expr" => (@goto || @following).node }
+        action["updates"] << { "target" => @pc[:index], "expr" => next_step.node }
         [action, contracts.map { |c| c.merge("name" => @model.qualify(c["name"])) }]
       end
 
       private
+
+      # 次のプログラムカウンタの式。goto を書いた順に条件式で重ね、最後は次のステップにする。
+      def next_step
+        @gotos.reverse.reduce(@following) do |rest, (target, condition)|
+          condition.nil? ? target : ite(condition, target, rest)
+        end
+      end
 
       def label(step)
         unless step.is_a?(Symbol) && @pc[:type].labels.include?(step)
