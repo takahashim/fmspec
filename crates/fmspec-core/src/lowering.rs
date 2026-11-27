@@ -22,9 +22,9 @@ use crate::encoding::{copy_stype, copy_xtype, keys_exec, stype_eq, to_xtype, usi
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_repeat, keys, keys_or_zero, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_models_enc, lemma_stys, lemma_xtys, lemma_xwidth_of, member, sty, stys, to_xty};
+use crate::encoding::{lemma_models_enc, lemma_stys, lemma_xtys, lemma_xwidth_of, lemma_xwidth_pos, member, sty};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_xtype, width, xty, xtys, xwidth, xwidth_sum, STy, SVal, XTy};
+use crate::encoding::{stys, to_xty, wf_xtype, width, xty, xtys, xwidth, xwidth_sum, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
 use crate::expr_copy::copy_expr;

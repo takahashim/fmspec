@@ -5,7 +5,7 @@
 //! 下ろしは `Fail::Type` で失敗せず、型の幅だけの純粋なスロットを返す（[`tpost`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, lemma_width_pos, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, wf_xtype};
+use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, wf_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, STy, XTy, XType};
 #[cfg(verus_keep_ghost)]
@@ -27,7 +27,7 @@ use crate::preserve::{all_pure, lemma_pure_mono, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{mark_s, setop_s};
 #[cfg(verus_keep_ghost)]
-use crate::quant::{picks, picks_in};
+use crate::quant::picks;
 #[cfg(verus_keep_ghost)]
 use crate::slots::Fail;
 #[cfg(verus_keep_ghost)]
@@ -148,34 +148,6 @@ pub proof fn lemma_sc_wf_mono(sc: Seq<Bound>, n: nat, m: nat, enums: Seq<i64>)
     ) by {
         lemma_all_pure_mono(sc[i].slots@, n, m);
     }
-}
-
-/// 整形式の式の型の幅は1以上である。
-pub proof fn lemma_xwidth_pos(t: XTy, enums: Seq<i64>)
-    requires
-        wf_xtype(t, enums),
-    ensures
-        xwidth(t, enums) >= 1,
-    decreases t, 1nat,
-{
-    match t {
-        XTy::Tuple(ts) => lemma_xwidth_sum_pos(ts, enums),
-        XTy::Record(_, ts) => lemma_xwidth_sum_pos(ts, enums),
-        XTy::Set(e) => lemma_width_pos(STy::Set(e), enums),
-        XTy::Map(k, v) => lemma_width_pos(STy::Map(k, v), enums),
-        _ => {},
-    }
-}
-
-pub proof fn lemma_xwidth_sum_pos(ts: Seq<XTy>, enums: Seq<i64>)
-    requires
-        wf_xtypes(ts, enums),
-        ts.len() >= 1,
-    ensures
-        xwidth_sum(ts, enums) >= 1,
-    decreases ts, 0nat,
-{
-    lemma_xwidth_pos(ts.last(), enums);
 }
 
 /// 格納の型が条件を満たせば、それから作った式の型も満たす。
