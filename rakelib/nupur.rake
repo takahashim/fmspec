@@ -34,6 +34,7 @@ end
 
 def makiri_git(*args)
   out, status = Open3.capture2("git", "-C", makiri_dir, *args)
+  out.force_encoding(Encoding::UTF_8)
   abort "nupur: git #{args.join(' ')} に失敗した" unless status.success?
   out
 end
@@ -51,7 +52,7 @@ def nupur_local_files
 end
 
 def nupur_manifest
-  lines = File.readlines(NUPUR_MANIFEST, chomp: true).reject { |l| l.empty? || l.start_with?("#") }
+  lines = File.readlines(NUPUR_MANIFEST, chomp: true, encoding: Encoding::UTF_8).reject { |l| l.empty? || l.start_with?("#") }
   lines.to_h { |l| l.split("  ", 2).reverse }
 end
 
@@ -76,7 +77,7 @@ namespace :nupur do
 
   desc "Nupur の写しが、記録した内容と一致することを確かめる"
   task :check do
-    recorded = File.read(NUPUR_MANIFEST)[/^# #{Regexp.escape(NUPUR_REPOSITORY)} \S+ (\h{40})$/, 1]
+    recorded = File.read(NUPUR_MANIFEST, encoding: Encoding::UTF_8)[/^# #{Regexp.escape(NUPUR_REPOSITORY)} \S+ (\h{40})$/, 1]
     abort "nupur: vendor/nupur.sha256 のコミットは #{recorded.inspect}。固定したコミットは #{NUPUR_COMMIT}" unless recorded == NUPUR_COMMIT
     manifest = nupur_manifest
     local = nupur_local_files

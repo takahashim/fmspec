@@ -12,7 +12,7 @@ class IrTest < Minitest::Test
   end
 
   def test_the_tickets_example_becomes_the_documented_ir
-    expected = JSON.parse(File.read(File.join(ROOT, "examples/models/tickets.json")))
+    expected = JSON.parse(File.read(File.join(ROOT, "examples/models/tickets.json"), encoding: Encoding::UTF_8))
     actual = without_sources(JSON.parse(TestModels.tickets.to_json))
     # 例のIRは省略できるキーを省いている。DSL は常に書く。
     expected["enums"] = []

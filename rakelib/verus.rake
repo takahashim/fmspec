@@ -34,12 +34,13 @@ def verus_bin
 end
 
 def verus_code(path)
-  File.read(path).gsub(%r{/\*.*?\*/}m, "").lines.map { |l| l.sub(%r{//.*$}, "") }.join
+  File.read(path, encoding: Encoding::UTF_8).gsub(%r{/\*.*?\*/}m, "").lines.map { |l| l.sub(%r{//.*$}, "") }.join
 end
 
 # Verus を実行し、[成功したか, 検証した数, エラーの数, 出力] を返す。エラーの数が nil なら、検証まで進んでいない。
 def verus_run(dir)
   out, status = Open3.capture2e(verus_bin, "--crate-type=lib", File.join(dir, "src/lib.rs"))
+  out.force_encoding(Encoding::UTF_8)
   m = out.match(/verification results:: (\d+) verified, (\d+) errors/)
   [status.success?, m && m[1].to_i, m && m[2].to_i, out]
 end
@@ -391,7 +392,7 @@ def verus_variant(name, file, description)
   FileUtils.mkdir_p(dir)
   FileUtils.cp_r(File.join(VERUS_CRATE, "src"), dir)
   path = File.join(dir, "src", file)
-  File.write(path, yield(File.read(path)))
+  File.write(path, yield(File.read(path, encoding: Encoding::UTF_8)))
   ok, verified, errors, out = verus_run(dir)
   if ok || errors.nil? || errors.zero?
     reason = errors.nil? && !ok ? "検証まで進まなかった" : "証明が通ってしまった"
@@ -426,10 +427,11 @@ namespace :verus do
   desc "Verus と、cargoビルドで使う vstd の版が、固定したものと一致することを確かめる"
   task :version do
     out, = Open3.capture2e(verus_bin, "--version")
+    out.force_encoding(Encoding::UTF_8)
     version = out[/Version: (\S+)/, 1]
     abort "verus: #{verus_bin} のバージョンは #{version.inspect}。固定したバージョンは #{VERUS_VERSION}" unless version == VERUS_VERSION
 
-    lock = File.read(File.join(ROOT, "Cargo.lock"))
+    lock = File.read(File.join(ROOT, "Cargo.lock"), encoding: Encoding::UTF_8)
     VERUS_CRATES.each do |name|
       found = lock.scan(/^name = "#{name}"\nversion = "([^"]+)"/).flatten
       abort "verus: Cargo.lock に #{name} がない" if found.empty?
@@ -454,7 +456,7 @@ namespace :verus do
       name = File.basename(path)
       next if name == "lib.rs"
 
-      code = File.read(path)
+      code = File.read(path, encoding: Encoding::UTF_8)
       inside = code.include?("verus! {")
       abort "verus: #{name} は証明の対象外のはずだが verus! ブロックがある" if VERUS_UNVERIFIED.include?(name) && inside
       next if VERUS_UNVERIFIED.include?(name)
