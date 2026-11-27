@@ -22,8 +22,6 @@ use crate::quant::{at_rank, lemma_bin_const, picks, vals_at};
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{count_some, count_true, eval_set_items, eval_src, SEnv, SetOp, TExpr};
-#[cfg(verus_keep_ghost)]
-use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {

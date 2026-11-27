@@ -5,8 +5,6 @@
 //! （仕様書 §14.1 Certificate Soundness）。
 //! 検査器は探索器が記録した辺を使わず、各状態の後続を遷移列挙で再計算する。
 
-#[allow(unused_imports)]
-use crate::eval::*;
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;

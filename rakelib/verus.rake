@@ -6,6 +6,7 @@
 #
 # - verus:trusted   信頼する項目（assume、admit、external_body など）が1つもない。
 # - verus:contract  未検証コードから呼べる公開関数が、前提条件（requires）を持たない（仕様書 §3.1）。
+# - verus:imports   使われない use がない。ghost コードでだけ使う #[cfg(verus_keep_ghost)] の use も調べる。
 # - verus:mutants   検査を1つ壊した変異と、到達点に assert(false) を置いた変種が、証明に失敗する。
 #
 # `rake verus` と `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
@@ -505,6 +506,24 @@ namespace :verus do
     puts "verus: 公開関数は前提条件を持たない"
   end
 
+  # ghost コードだけで使う use には #[cfg(verus_keep_ghost)] を付けるので、cargoビルドでは消えて警告されない。
+  # Verus も unused_imports を止めている（#![allow] を足す）ので、使われなくなっても残る。
+  # ここでは、ghost コードを残したビルドの型検査だけを Verus に行わせ（証明と寿命の検査はしない）、
+  # --force-warn で、その allow と、ソースの #[allow(unused_imports)] を越えて警告させる。
+  # 寿命の検査では ghost コードを消したビルドも型検査するので、--no-lifetime を付けないと誤検出が出る。
+  desc "使われない use（ghost コードでだけ使う use も含めて）がないことを確かめる"
+  task imports: :version do
+    out, status = Open3.capture2e(verus_bin, "--crate-type=lib", "--no-verify", "--no-lifetime",
+                                  File.join(VERUS_CRATE, "src/lib.rs"), "--force-warn", "unused_imports")
+    out.force_encoding(Encoding::UTF_8)
+    abort "verus: 型検査に失敗した\n#{out}" unless status.success?
+    found = out.scan(/^warning: (unused imports?: .*)\n\s*--> (\S+)/).map do |message, at|
+      "#{at.delete_prefix("#{ROOT}/")}: #{message}"
+    end
+    abort "verus: 使われない use がある\n#{found.join("\n")}" unless found.empty?
+    puts "verus: 使われない use は0件"
+  end
+
   desc "検査を壊した変異と assert(false) が、証明に失敗することを確かめる"
   task mutants: :version do
     # VERUS_MUTANTS_FILES（カンマ区切りのファイル名）があれば、そのファイルの変異と assert(false) だけを検査する。
@@ -539,7 +558,7 @@ end
 namespace :verus do
   # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行する。
   desc "中核の証明だけを検証する（変異と assert(false) の検査を除く）"
-  task proof: %w[verus:version verus:trusted verus:coverage verus:contract] do
+  task proof: %w[verus:version verus:trusted verus:coverage verus:contract verus:imports] do
     ok, verified, errors, out = verus_run(VERUS_CRATE)
     puts out.lines.grep(/verification results|^(error|warning)/)
     abort "verus: 証明に失敗した\n#{out}" unless ok && errors&.zero?

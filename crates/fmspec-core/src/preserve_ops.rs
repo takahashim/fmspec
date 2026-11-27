@@ -22,8 +22,6 @@ use crate::slots::*;
 use crate::source::{eval_fold, eval_src, src_bool, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;
-#[cfg(verus_keep_ghost)]
-use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {

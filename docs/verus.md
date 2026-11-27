@@ -47,6 +47,8 @@ Verusは、再帰的な型や `Vec` を持つ型の `derive` に仕様を付け�
 したがって、`cargo build` や `cargo test` だけでは証明は検査されない。
 証明を変えたら `rake verus` を実行する。
 `Cargo.toml` の `cfg(verus_keep_ghost)` は、Verusがghostコードを残すときに使う設定で、cargoビルドの警告を抑えるために書いてある。
+ghostコードでだけ使う `use` には `#[cfg(verus_keep_ghost)]` を付ける（付けないと、cargoビルドで使われない `use` の警告が出る）。
+付けた `use` は、使われなくなってもcargoビルドでもVerusでも警告されないので、`rake verus:imports`（`rake verus:proof` に含まれる）が検査する。
 
 ## 3種類の関数
 

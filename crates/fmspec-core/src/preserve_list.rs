@@ -27,9 +27,7 @@ use crate::quant::{at_rank, lemma_bin_const, lemma_items_member};
 #[cfg(verus_keep_ghost)]
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_elements, eval_src, SEnv, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NOT_IN_DOMAIN};
-#[cfg(verus_keep_ghost)]
-use vstd::pervasive::arbitrary;
+use crate::source::{eval_elements, eval_src, SEnv, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX};
 use vstd::prelude::*;
 
 verus! {
