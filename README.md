@@ -86,6 +86,10 @@ target/debug/fmspec refine REFINEMENT.json --max-states 100000
 `shrink` は、試す候補の数（`--attempts`、既定 10000）か時間（`--max-time-ms`）の上限に達したら縮小を打ち切り、それまでに判定ゲートが受理したトレースを返す（結果の `shrink` に打ち切ったことを記録する）。
 `replay` と `shrink` の `--max-check-cost` は、判定ゲートがトレースの検査にかける評価回数の上限である。
 
+`fmspec COMMAND --help` で使い方を表示する。
+コマンドが受け付けないオプションや、同じオプションを2回書いた指定（`--json` を除く）は、使い方の誤り（終了コード2）として拒否する。
+`--` 以降の引数は、`-` で始まっていてもファイルとして読む。
+
 IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
 
 ## 検査

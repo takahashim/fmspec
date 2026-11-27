@@ -188,6 +188,56 @@ fn certificates_can_be_saved_and_verified_separately() {
 }
 
 #[test]
+fn certificate_checks_stop_at_their_limits() {
+    // 使わない操作 wide の引数の領域が広いので、状態ごとの検査の費用が大きく、証明書の検査は複数の区切りに分かれる。
+    // 期限は区切りごとに確かめるので、1つの区切りで終わる証明書では打ち切りを確かめられない。
+    let wide = json!({
+        "ir_version": 1,
+        "name": "wide",
+        "states": [{"id": 0, "name": "n", "type": {"int": {"min": 0, "max": 19}}, "initial": {"int": 0}}],
+        "actions": [
+            {
+                "name": "inc",
+                "guard": {"lt": [{"var": 0}, {"int": 19}]},
+                "updates": [{"target": 0, "expr": {"add": [{"var": 0}, {"int": 1}]}}]
+            },
+            {
+                "name": "wide",
+                "params": [{"name": "k", "type": {"int": {"min": 0, "max": 65535}}}],
+                "choices": [],
+                "guard": {"bool": false},
+                "updates": []
+            }
+        ],
+        "invariants": []
+    });
+    let f = files();
+    f.put("wide.json", &wide);
+    let (code, _) = f.json(&["check", "wide.json", "--certificate-out", "cert.json"]);
+    assert_eq!(code, 0);
+    let (code, body) = f.json(&["verify-certificate", "wide.json", "cert.json", "--max-time-ms", "0"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_time_ms")),
+        "{body}"
+    );
+    let (code, body) = f.json(&[
+        "verify-certificate",
+        "wide.json",
+        "cert.json",
+        "--max-time-ms",
+        "600000",
+    ]);
+    assert_eq!((code, &body["status"]), (0, &json!("verified")), "{body}");
+    let (code, body) = f.json(&["verify-certificate", "wide.json", "cert.json", "--max-check-cost", "1"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_check_cost")),
+        "{body}"
+    );
+}
+
+#[test]
 fn traces_can_be_saved_and_replayed() {
     let f = files();
     let (code, _) = f.json(&["check", "noguard.json", "--trace-out", "trace.json"]);
@@ -254,6 +304,41 @@ fn evidence_for_another_model_is_checked_only_when_allowed() {
             json!(format!("{command} は --allow-other-model を受け付けません"))
         );
     }
+}
+
+#[test]
+fn evidence_for_another_model_can_be_carried_over_when_accepted() {
+    let f = files();
+    // 取り消しの guard だけを変えたモデル。購入だけの反例は、このモデルでも同じ遷移である。
+    let mut changed = tickets_without_guard();
+    changed["actions"][1]["guard"] = json!({"gt": [{"var": 0}, {"int": 1}]});
+    f.put("changed.json", &changed);
+    let (_, found) = f.json(&["check", "noguard.json", "--trace-out", "old.json"]);
+    let (_, model) = f.json(&["validate", "changed.json"]);
+    assert_ne!(found["model_digest"], model["model_digest"]);
+    let (code, body) = f.json(&["replay", "changed.json", "old.json"]);
+    assert_eq!((code, &body["rejected"]["reason"]), (1, &json!("unreadable")), "{body}");
+
+    for command in ["replay", "shrink"] {
+        let (code, body) = f.json(&[command, "changed.json", "old.json", "--allow-other-model"]);
+        assert_eq!((code, &body["status"]), (1, &json!("violated")), "{command}: {body}");
+        assert_eq!(body["model_digest"], model["model_digest"]);
+        assert_eq!(body["evidence_model_digest"], found["model_digest"]);
+    }
+    // 縮小して書き出したトレースは今のモデルの digest を持つので、指定なしで再生できる。
+    let (code, _) = f.json(&[
+        "shrink",
+        "changed.json",
+        "old.json",
+        "--allow-other-model",
+        "--trace-out",
+        "new.json",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(f.get("new.json")["model_digest"], model["model_digest"]);
+    let (code, body) = f.json(&["replay", "changed.json", "new.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("violated")), "{body}");
+    assert!(body.get("evidence_model_digest").is_none(), "{body}");
 }
 
 #[test]
@@ -408,7 +493,10 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     assert_eq!((code, &body["shrink"]["limit"]), (1, &json!("max_time_ms")), "{body}");
     assert_eq!(body["trace"]["steps"], f.get("long.json")["steps"]);
     let (code, body) = f.json(&["shrink", "noguard.json", "long.json", "--attempts", "0"]);
-    assert_eq!((code, &body["message"]), (2, &json!("attempts は1以上の整数です（0）")));
+    assert_eq!(
+        (code, &body["message"]),
+        (2, &json!("--attempts は1以上の整数です（\"0\"）"))
+    );
     // 見積もりが上限を超えるトレースは検査しない。
     for command in ["replay", "shrink"] {
         let (code, body) = f.json(&[command, "noguard.json", "long.json", "--max-check-cost", "1"]);
@@ -546,11 +634,41 @@ fn usage_errors_go_to_stderr_without_json() {
         ),
         (
             vec!["check", "tickets.json", "--max-states", "-1"],
-            "--max-states は0以上の整数です（\"-1\"）",
+            "--max-states は1以上の整数です（\"-1\"）",
         ),
         (
             vec!["simulate", "tickets.json", "--seed", "x"],
             "--seed は0以上の整数です（\"x\"）",
+        ),
+        // 下限はフラグごとに違い、fmspec-api のキー名でなくフラグの名前で報告する。
+        (
+            vec!["check", "tickets.json", "--max-states", "0"],
+            "--max-states は1以上の整数です（\"0\"）",
+        ),
+        (
+            vec!["simulate", "tickets.json", "--traces", "0"],
+            "--traces は1以上の整数です（\"0\"）",
+        ),
+        (
+            vec!["shrink", "tickets.json", "t.json", "--attempts", "0"],
+            "--attempts は1以上の整数です（\"0\"）",
+        ),
+        // 数字だけを整数として読む。
+        (
+            vec!["check", "tickets.json", "--max-states", "+5"],
+            "--max-states は1以上の整数です（\"+5\"）",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-depth", " 5"],
+            "--max-depth は0以上の整数です（\" 5\"）",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-depth", ""],
+            "--max-depth は0以上の整数です（\"\"）",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-depth", "18446744073709551616"],
+            "--max-depth が大きすぎます（\"18446744073709551616\"）",
         ),
         (vec!["check", "tickets.json", "--bogus"], "未知のオプション --bogus"),
     ] {
@@ -589,7 +707,28 @@ fn only_accepted_evidence_is_written() {
         "c3.json",
     ]);
     assert_eq!(code, 3);
-    assert!(!f.has("c1.json") && !f.has("c3.json"));
+    // 深さや証明書の検査の費用の上限で打ち切ったときも書き出さない。
+    let (code, body) = f.json(&[
+        "check",
+        "tickets.json",
+        "--max-depth",
+        "1",
+        "--certificate-out",
+        "c4.json",
+    ]);
+    assert_eq!((code, &body["reason"]), (3, &json!("max_depth")), "{body}");
+    let (code, body) = f.json(&[
+        "check",
+        "tickets.json",
+        "--max-check-cost",
+        "1",
+        "--certificate-out",
+        "c5.json",
+    ]);
+    assert_eq!((code, &body["reason"]), (3, &json!("max_check_cost")), "{body}");
+    for path in ["c1.json", "c3.json", "c4.json", "c5.json"] {
+        assert!(!f.has(path), "{path}");
+    }
     // 違反なしのシミュレーションは、トレースを書き出さない。
     let (code, _) = f.json(&["simulate", "tickets.json", "--traces", "3", "--trace-out", "t1.json"]);
     assert_eq!(code, 0);
@@ -643,4 +782,127 @@ fn an_option_is_not_taken_as_the_value_of_another() {
         (code, err.as_str()),
         (2, "usage_error: --max-states には値が必要です\n")
     );
+}
+
+#[test]
+fn the_command_is_identified_before_its_options_are_read() {
+    let f = files();
+    // コマンドを先に特定し、そのコマンドが受け付けるかを、値を読む前に確かめる。
+    for (args, message) in [
+        (
+            vec!["validate", "tickets.json", "--seed", "abc"],
+            "validate は --seed を受け付けません",
+        ),
+        (
+            vec!["replay", "tickets.json", "t.json", "--trace-out"],
+            "replay は --trace-out を受け付けません",
+        ),
+        (
+            vec!["chek", "tickets.json", "--max-states", "x"],
+            "未知のコマンド \"chek\"",
+        ),
+        (
+            vec!["check", "tickets.json", "--bogus", "--seed", "1"],
+            "未知のオプション --bogus",
+        ),
+    ] {
+        let (code, body) = f.json(&args);
+        assert_eq!(
+            (code, &body["status"], &body["message"]),
+            (2, &json!("usage_error"), &json!(message)),
+            "{args:?}"
+        );
+    }
+    // 人間向けの表示では、未知のコマンドの後に使い方を示す。
+    let (code, out, err) = f.run(&["chek", "tickets.json"]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    assert!(
+        err.starts_with("usage_error: 未知のコマンド \"chek\"\n使い方:"),
+        "{err}"
+    );
+}
+
+#[test]
+fn help_is_accepted_after_the_command() {
+    let f = files();
+    for args in [
+        vec!["check", "-h"],
+        vec!["check", "tickets.json", "--help"],
+        vec!["replay", "--json", "-h"],
+    ] {
+        let (code, out, err) = f.run(&args);
+        assert_eq!((code, err.as_str()), (0, ""), "{args:?}");
+        assert!(out.starts_with("使い方:"), "{args:?}: {out}");
+    }
+}
+
+#[test]
+fn arguments_after_the_separator_are_files() {
+    let f = files();
+    f.put("--model.json", &tickets());
+    f.put("-h", &tickets());
+    let (code, out, _) = f.run(&["validate", "--json", "--", "--model.json"]);
+    let body: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!((code, &body["status"]), (0, &json!("valid")), "{body}");
+    let (code, out, _) = f.run(&["validate", "--", "-h"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("Valid: "), "{out}");
+    // `--` 以降の `--json` はファイル名なので、出力の形式は変わらない。
+    let (code, out, err) = f.run(&["validate", "tickets.json", "--", "--json"]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    assert_eq!(err, "usage_error: validate にはモデルのファイルを1つ指定します\n");
+}
+
+#[test]
+fn an_option_given_twice_is_an_error() {
+    let f = files();
+    // 後の指定だけを黙って使うと、順序で結果が変わり、前の指定が効いたと誤解させる。
+    for (args, flag) in [
+        (
+            vec!["check", "tickets.json", "--max-states", "100000", "--max-states", "1"],
+            "--max-states",
+        ),
+        (
+            vec!["check", "noguard.json", "--actions", "purchase", "--actions", "cancel"],
+            "--actions",
+        ),
+        (
+            vec![
+                "check",
+                "noguard.json",
+                "--invariants",
+                "capacity_respected",
+                "--invariants",
+                "",
+            ],
+            "--invariants",
+        ),
+        (vec!["check", "noguard.json", "--deadlock", "--deadlock"], "--deadlock"),
+        (
+            vec![
+                "check",
+                "noguard.json",
+                "--trace-out",
+                "a.json",
+                "--trace-out",
+                "b.json",
+            ],
+            "--trace-out",
+        ),
+    ] {
+        let (code, body) = f.json(&args);
+        assert_eq!(
+            (code, &body["status"], &body["message"]),
+            (
+                2,
+                &json!("usage_error"),
+                &json!(format!("{flag} は1回だけ指定できます"))
+            ),
+            "{args:?}"
+        );
+    }
+    assert!(!f.has("a.json") && !f.has("b.json"));
+    // 出力の形式の指定は、重ねても意味が変わらないので受け付ける。
+    let (code, body) = f.json(&["check", "tickets.json", "--json"]);
+    assert_eq!((code, &body["status"]), (0, &json!("verified")));
 }
