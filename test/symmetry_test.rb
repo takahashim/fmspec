@@ -92,6 +92,14 @@ class SymmetryTest < Minitest::Test
     assert_operator reduced.visited_states, :<, full.visited_states
   end
 
+  def test_the_depth_limit_is_inconclusive
+    result = workers(3).check(max_depth: 2)
+    assert_predicate result, :inconclusive?, result.to_s
+    assert_equal :max_depth, result.reason
+    # 上限の深さまでに起きる違反は報告する。
+    assert_predicate workers(3, racy: true).check(max_depth: 20), :violated?
+  end
+
   def test_explicit_blocks
     model = Fmspec.define(:pairs) do
       state :a, int(0..2), initial: 0

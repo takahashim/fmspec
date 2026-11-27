@@ -1,6 +1,6 @@
 //! 詳細化の検査（docs/ir.md の「詳細化」）。
 
-use crate::options::{count, options};
+use crate::options::{count, deadline, max_states, options, size};
 use crate::report::{inconsistency_json, limit_name, reject_json_in, INCONSISTENCY_MESSAGE};
 use crate::Interrupt;
 use fmspec_core::evidence::TraceStep;
@@ -162,21 +162,22 @@ pub(crate) fn refine_report(r: &Refinement, cond: &Conditions, outcome: &RefOutc
 
 /// 具体モデルが写像のもとで抽象モデルを詳細化するかを検査する。
 ///
-/// オプションは、`actions`（具体モデルの対象の操作の名前の配列。省略時はすべて）と `max_states`。
+/// オプションは、`actions`（具体モデルの対象の操作の名前の配列。省略時はすべて）、`max_states`、`max_depth`、`max_time_ms`。
 /// 抽象モデルの操作は、すべてを照合に使う。
 pub fn refine(r: &Refinement, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["max_states"])?;
+    let map = options(opts, &["max_states", "max_depth", "max_time_ms"])?;
     for key in ["invariants", "contracts", "deadlock"] {
         if map.get(key).is_some_and(|v| !v.is_null()) {
             return Err(format!("詳細化の検査では {key} を指定できません"));
         }
     }
     let cond = ref_conditions(&r.concrete, map)?;
-    let max_states = count(map, "max_states", 1)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
     let opts = BfsOptions {
-        max_states,
+        max_states: max_states(map)?,
         interrupt,
         max_check_cost: None,
+        max_depth: count(map, "max_depth", 0)?.map(size),
+        deadline: deadline(map)?,
     };
     let outcome = search_refine(
         r.concrete.checked(),

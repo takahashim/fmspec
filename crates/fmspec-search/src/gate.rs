@@ -2,15 +2,17 @@
 //!
 //! 検査の計算量は、式の評価回数の上限で見積もる。量化の範囲と引数のドメインはモデルの中で固定なので、
 //! 1つの状態の検査にかかる評価回数の上限は、状態によらずモデルと検査条件だけで決まる。
-//! 見積もりが上限を超える証拠は検査しない。証明書の検査は状態の数を区切って進め、区切りごとに中断要求を確かめる。
+//! 見積もりが上限を超える証拠は検査しない。証明書の検査は状態の数を区切って進め、区切りごとに中断要求と時間の上限を確かめる。
 //!
 //! 打ち切った検査は `Inconclusive` になる。打ち切る判断がどう誤っても、`Verified` や `Violated` の意味は変わらない。
 
 use crate::claim::selected;
+use crate::stop::stopped;
 use fmspec_core::evidence::{Evidence, Limit};
 use fmspec_core::gate::{decide, CertCheck, CheckedModel, Verdict};
 use fmspec_core::model::{Expr, RawModel, Type};
 use fmspec_core::semantics::Conditions;
+use std::time::Instant;
 
 /// 中断要求を確かめる間隔の目安。この評価回数ごとに、証明書の検査を区切る。
 const CHUNK_COST: u64 = 1 << 20;
@@ -21,6 +23,8 @@ pub struct GateOptions<'a> {
     pub max_cost: Option<u64>,
     /// 中断要求の問い合わせ。真を返したら、証明書の検査を打ち切る。
     pub interrupt: Option<&'a dyn Fn() -> bool>,
+    /// 時間の上限の時刻。過ぎたら、証明書の検査を打ち切る。
+    pub deadline: Option<Instant>,
 }
 
 /// 整数の範囲 `lo..=hi` の要素の数。空なら0。
@@ -133,11 +137,8 @@ pub fn judge(model: &CheckedModel, cond: &Conditions, evidence: Evidence, opts: 
         if let Some(verdict) = check.advance(chunk) {
             return (verdict, evidence);
         }
-        if opts.interrupt.is_some_and(|requested| requested()) {
-            return (
-                check.stop(Limit::Interrupted),
-                Evidence::Unavailable(Limit::Interrupted),
-            );
+        if let Some(limit) = stopped(opts.interrupt, opts.deadline) {
+            return (check.stop(limit), Evidence::Unavailable(limit));
         }
     }
 }

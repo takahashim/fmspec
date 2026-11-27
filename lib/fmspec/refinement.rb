@@ -92,12 +92,15 @@ module Fmspec
     # 詳細化の検査。具体モデルを幅優先で探索し、判定ゲートが証拠を検査してから結果を返す。
     #
     #   max_states  保持する異なる状態の数の上限。超える場合は :inconclusive
+    #   max_depth、max_time_ms  深さと時間の上限（`Model#check` と同じ）
     #   actions     具体モデルの対象の操作の名前の配列。省略時はすべて
     #
     # 抽象モデルの操作は、すべてを照合に使う。具体モデルの不変条件と遷移契約は検査しない。
-    def check(max_states: nil, actions: nil)
+    def check(max_states: nil, max_depth: nil, max_time_ms: nil, actions: nil)
       options = {}
       options["max_states"] = max_states if max_states
+      options["max_depth"] = max_depth if max_depth
+      options["max_time_ms"] = max_time_ms if max_time_ms
       options["actions"] = actions.map(&:to_s) if actions
       raw = JSON.parse(Native.refine(to_json, JSON.generate(options)))
       raise InvalidModelError, raw.fetch("message") if raw["status"] == "invalid_model"
@@ -158,7 +161,7 @@ module Fmspec
       t && [t["initial_abstract"], *t["steps"].map { |s| s["abstract"] }]
     end
 
-    # :inconclusive の理由。:max_states、:interrupted、:abstract_failed のいずれか。
+    # :inconclusive の理由。:max_states、:max_depth、:max_time_ms、:interrupted、:abstract_failed のいずれか。
     def reason = @raw["reason"]&.to_sym
 
     def search = @raw["search"]

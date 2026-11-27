@@ -148,6 +148,14 @@ class RefinementTest < Minitest::Test
     assert_equal :max_states, result.reason
   end
 
+  def test_the_depth_limit_is_inconclusive
+    result = refinement(counter(locked: true)).check(max_depth: 1)
+    assert_predicate result, :inconclusive?, result.to_s
+    assert_equal :max_depth, result.reason
+    assert_predicate refinement(counter(locked: false)).check(max_depth: 4), :not_refines?
+    assert_predicate refinement(counter(locked: false)).check(max_depth: 3), :inconclusive?
+  end
+
   def test_an_abstract_model_that_fails_at_the_mapped_state_is_inconclusive
     concrete = Fmspec.define(:c) do
       state :n, int(0..1), initial: 0

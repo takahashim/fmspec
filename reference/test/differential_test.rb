@@ -31,10 +31,11 @@ class DifferentialTest < Minitest::Test
     [JSON.parse(out.force_encoding(Encoding::UTF_8)), status.exitstatus]
   end
 
-  def flags(deadlock: false, max_states: nil, actions: nil)
+  def flags(deadlock: false, max_states: nil, max_depth: nil, actions: nil)
     list = []
     list << "--deadlock" if deadlock
     list += ["--max-states", max_states.to_s] if max_states
+    list += ["--max-depth", max_depth.to_s] if max_depth
     list += ["--actions", actions.join(",")] if actions
     list
   end
@@ -79,6 +80,7 @@ class DifferentialTest < Minitest::Test
     models.each do |name, ir|
       [false, true].each do |deadlock|
         [nil, 1, 2].each { |max| compare(ir, name, deadlock: deadlock, max_states: max) }
+        [0, 1, 2].each { |max| compare(ir, name, deadlock: deadlock, max_depth: max) }
       end
     end
   end
@@ -93,10 +95,11 @@ class DifferentialTest < Minitest::Test
       options[:max_states] = rng.rand(1..6) if rng.rand < 0.2
       names = ir["actions"].map { |a| a["name"] }
       options[:actions] = names.select { rng.rand < 0.7 } if rng.rand < 0.2
+      with_depth(options, seed)
       expected, path, cert = compare(ir, "seed #{seed}", **options)
       statuses[expected["status"]] += 1
       compare_certificates(ir, expected, path, cert, rng, options) if expected["status"] == "verified"
-      compare_simulation(ir, path, rng, options.except(:max_states))
+      compare_simulation(ir, path, rng, options.except(:max_states, :max_depth))
     end
     # 生成器が片寄って、どれかの結果をまったく試していない、ということがないようにする。
     %w[verified violated error].each { |s| assert_operator statuses[s], :>, COUNT / 30, "結果の分布: #{statuses}" }
@@ -187,19 +190,26 @@ class DifferentialTest < Minitest::Test
       ir = generator.model
       options = { deadlock: rng.rand < 0.3 }
       options[:max_states] = rng.rand(1..20) if rng.rand < 0.1
+      with_depth(options, seed)
       expected, path, cert = compare(ir, "composite seed #{seed}", **options)
       statuses[expected["status"]] += 1
       errors[expected["property"]["error"]["kind"]] += 1 if expected["status"] == "error"
       if expected["status"] == "verified"
         compare_certificates(ir, expected, path, cert, rng, options) { generator_state(generator, ir) }
       end
-      compare_simulation(ir, path, rng, options.except(:max_states))
+      compare_simulation(ir, path, rng, options.except(:max_states, :max_depth))
     end
     %w[verified violated error].each { |s| assert_operator statuses[s], :>, COUNT / 30, "結果の分布: #{statuses}" }
     # 失敗の種類も、ひととおり試す。
     %w[none missing_key index_out_of_range full empty not_in_domain out_of_range].each do |kind|
       assert_operator errors[kind], :>, 0, "失敗の分布: #{errors}"
     end
+  end
+
+  # 一部のモデルに深さの上限を付ける。モデルと他の検査条件の生成の乱数列を変えないよう、別の乱数を使う。
+  def with_depth(options, seed)
+    rng = Random.new(seed ^ 0x5DEECE66D)
+    options[:max_depth] = rng.rand(0..4) if rng.rand < 0.2
   end
 
   def generator_state(generator, ir)
@@ -227,7 +237,7 @@ class DifferentialTest < Minitest::Test
   # 証明書を崩して、受理・拒否とその理由を比べる。
   def compare_certificates(ir, expected, path, cert, rng, options, &make_state)
     m = reference(ir)
-    cert_options = options.except(:max_states)
+    cert_options = options.except(:max_states, :max_depth)
     variants = [expected["certificate"]]
     variants << expected["certificate"].reject { rng.rand < 0.4 }
     make_state ||= -> { random_state(ir, rng) }

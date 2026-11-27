@@ -17,6 +17,7 @@ pub mod refine;
 pub mod session;
 pub mod shrink;
 pub mod simulate;
+mod stop;
 pub mod sym;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};

@@ -639,7 +639,7 @@ R.check.refines?
 |---|---|
 | `Fmspec.refinement(名前, concrete:, abstract:) { ... }` | 詳細化の検査を定義する。抽象モデルのすべての状態変数に写像が要る |
 | `map(状態変数) { \|s\| 式 }` | 抽象モデルの状態変数の写像。`s` は具体モデルの記号的な状態で、式の型はその状態変数の型である |
-| `#check(max_states:, actions:)` | 検査する。`actions` は具体モデルの対象の操作 |
+| `#check(max_states:, max_depth:, max_time_ms:, actions:)` | 検査する。上限は `Model#check` と同じ。`actions` は具体モデルの対象の操作 |
 | `#to_ir` | 詳細化の文書（[ir.md](ir.md) の「詳細化」） |
 
 検査は、次の3つを確かめる。
@@ -660,7 +660,7 @@ R.check.refines?
 | `:refines` | 判定ゲートが、具体モデルの証明書と、各遷移の照合を受理した |
 | `:not_refines` | 詳細化が破れるトレースを判定ゲートが受理した。`property["violation"]` は `"initial"`（初期状態）か `"step"`（最後の遷移） |
 | `:error` | 写像の評価の失敗（`property["violation"]` が `"mapping"`）か、具体モデルの評価エラーに至るトレースを受理した |
-| `:inconclusive` | 状態数の上限（`:max_states`）、中断、または写した状態で抽象モデルの遷移列挙が評価エラーになった（`:abstract_failed`） |
+| `:inconclusive` | 状態数、深さ、時間の上限（`:max_states`、`:max_depth`、`:max_time_ms`）、中断、または写した状態で抽象モデルの遷移列挙が評価エラーになった（`:abstract_failed`） |
 | `:internal_error` | 探索器の証拠を判定ゲートが拒否した。fmspec の不具合である |
 
 `trace` は具体モデルのトレースで、`abstract_states` は各状態を写した抽象モデルの状態（写像が失敗した状態は `nil`）である。
@@ -711,14 +711,22 @@ Workers.check(symmetry: false)     # 削減しない
 
 | メソッド | 内容 |
 |---|---|
-| `check(max_states: nil, max_check_cost: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
-| `simulate(traces: 100, max_steps: 100, seed: nil, **検査条件)` | ランダムシミュレーション |
-| `verify_certificate(証明書, max_check_cost: nil, allow_other_model: false, **検査条件)` | 証明書の検査 |
+| `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, symmetry: nil, **検査条件)` | 幅優先探索によるモデル検査。`symmetry: false` で、宣言した対称性による削減を使わない |
+| `simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **検査条件)` | ランダムシミュレーション |
+| `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, allow_other_model: false, **検査条件)` | 証明書の検査 |
 | `replay(トレース, allow_other_model: false)` | トレースの再生 |
 | `shrink(トレース, attempts: nil, allow_other_model: false)` | モデル違反のトレースの縮小 |
 
 `max_check_cost:` は、判定ゲートが証拠の検査にかける評価回数の上限である（[ir.md](ir.md) の「証拠の検査の資源上限と中断」）。
 検査の見積もりが上限を超えると、結果は `:inconclusive`（理由は `:max_check_cost`）になる。
+
+`max_depth:` は、幅優先探索の深さ（初期状態からの遷移数）の上限である（[ir.md](ir.md) の「探索順と結果」）。
+上限より深い状態が残れば、結果は `:inconclusive`（理由は `:max_depth`）になり、`:verified` にはならない。
+上限の内側で見つかった違反と評価エラーは、そのまま `:violated` と `:error` になる。
+
+`max_time_ms:` は、検査の時間の上限（ミリ秒）である（[ir.md](ir.md) の「時間の上限」）。
+過ぎると、結果は `:inconclusive`（理由は `:max_time_ms`）になる。
+`Timeout` による割り込みと違い、例外にならず、結果として返る。
 
 証明書とトレースは、それを作ったモデルの digest（`Model#digest`）を持つ。
 digest が違う証拠は、既定では `:rejected`（`rejected["reason"]` は `"unreadable"`）になる。
@@ -749,7 +757,7 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 | `property` | 違反した性質、または評価エラーの箇所。定義のソース位置を含む |
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
-| `reason` | `:inconclusive` の理由。`:max_states`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
+| `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `evidence_model_digest` | `allow_other_model: true` で別のモデルに対する証拠を扱ったときの、証拠の digest |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |

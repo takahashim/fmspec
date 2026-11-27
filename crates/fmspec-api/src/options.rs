@@ -3,6 +3,7 @@
 use fmspec_core::semantics::Conditions;
 use fmspec_ir::{default_conditions, Model};
 use serde_json::{Map, Value};
+use std::time::{Duration, Instant};
 
 /// 検査条件のキー。検査条件を受け取る関数は、これらを常に受け付ける。
 const CONDITION_KEYS: [&str; 4] = ["actions", "invariants", "contracts", "deadlock"];
@@ -83,6 +84,12 @@ pub(crate) fn size(n: u64) -> usize {
 /// 状態数の上限 `max_states`（1以上）。
 pub(crate) fn max_states(map: &Map<String, Value>) -> Result<Option<usize>, String> {
     Ok(count(map, "max_states", 1)?.map(size))
+}
+
+/// 時間の上限 `max_time_ms`（0以上のミリ秒）を、呼び出した時刻からの期限にする。
+/// 時刻として表せないほど大きな値は、上限なしとする。
+pub(crate) fn deadline(map: &Map<String, Value>) -> Result<Option<Instant>, String> {
+    Ok(count(map, "max_time_ms", 0)?.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms))))
 }
 
 /// 真偽値のオプション。省略または `null` なら偽。

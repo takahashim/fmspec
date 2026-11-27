@@ -7,6 +7,7 @@
 use crate::bfs::{BfsOptions, Stats};
 use crate::check::{inconsistent, status_of, Outcome};
 use crate::inconsistency::{successors, Inconsistency};
+use crate::stop::stopped;
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::{decide_symmetric, CheckedModel};
@@ -19,6 +20,8 @@ use std::time::Instant;
 struct Node {
     /// 代表元。
     state: Vec<i64>,
+    /// 初期状態からの遷移数。
+    depth: usize,
     /// 親の添字、親の代表元からの遷移（操作と引数）、遷移先を代表元に移す入れ替えの列。
     /// 根では、初期状態と、初期状態を代表元に移す入れ替えの列。
     from: From,
@@ -183,6 +186,7 @@ pub fn bfs_sym(
         seen.insert(rep.clone(), id);
         nodes.push(Node {
             state: rep,
+            depth: 0,
             from: From::Root(init.clone(), w),
         });
         stats.visited_states = seen.len();
@@ -192,11 +196,15 @@ pub fn bfs_sym(
         queue.push_back(id);
     }
 
+    // 深さの上限で、未訪問の状態への遷移か、上限を超えるトレースの違反を残したか（`bfs` と同じ）。
+    let mut truncated = false;
     while let Some(cur) = queue.pop_front() {
-        if opts.interrupt.is_some_and(|requested| requested()) {
-            return (Ok(Evidence::Unavailable(Limit::Interrupted)), stats);
+        if let Some(limit) = stopped(opts.interrupt, opts.deadline) {
+            return (Ok(Evidence::Unavailable(limit)), stats);
         }
         let state = nodes[cur].state.clone();
+        let depth = nodes[cur].depth;
+        let at_limit = opts.max_depth.is_some_and(|max| depth >= max);
         let mut enabled = false;
         for a in 0..n_actions {
             if !cond.actions.get(a).copied().unwrap_or(false) {
@@ -213,6 +221,10 @@ pub fn bfs_sym(
                 enabled = true;
                 stats.transitions += 1;
                 if model.contracts(cond, a, &state, &t.args, &t.state, &t.output).is_some() {
+                    if at_limit {
+                        truncated = true;
+                        continue;
+                    }
                     return (
                         evidence_for(model, cond, sw, &nodes, cur, Found::Contract(a, t.args)),
                         stats,
@@ -220,6 +232,10 @@ pub fn bfs_sym(
                 }
                 let (rep, w) = canonicalize(sw, &t.state);
                 if seen.contains_key(&rep) {
+                    continue;
+                }
+                if at_limit {
+                    truncated = true;
                     continue;
                 }
                 if opts.max_states.is_some_and(|max| seen.len() >= max) {
@@ -230,6 +246,7 @@ pub fn bfs_sym(
                 seen.insert(rep.clone(), id);
                 nodes.push(Node {
                     state: rep,
+                    depth: depth + 1,
                     from: From::Edge(cur, a, t.args, w),
                 });
                 stats.visited_states = seen.len();
@@ -244,6 +261,9 @@ pub fn bfs_sym(
         }
     }
 
+    if truncated {
+        return (Ok(Evidence::Unavailable(Limit::MaxDepth)), stats);
+    }
     stats.complete = true;
     let mut states: Vec<Vec<i64>> = nodes.into_iter().map(|n| n.state).collect();
     states.sort();

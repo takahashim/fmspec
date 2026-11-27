@@ -43,12 +43,12 @@ impl Run {
 const USAGE: &str = "\
 使い方:
   fmspec validate MODEL.json
-  fmspec check MODEL.json [--strategy bfs] [--max-states N] [--max-check-cost N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
-  fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [検査条件] [--trace-out FILE]
-  fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [検査条件] [--allow-other-model]
+  fmspec check MODEL.json [--strategy bfs] [--max-states N] [--max-depth N] [--max-time-ms N] [--max-check-cost N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
+  fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [--max-time-ms N] [検査条件] [--trace-out FILE]
+  fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [--max-time-ms N] [検査条件] [--allow-other-model]
   fmspec replay MODEL.json TRACE.json [--allow-other-model]
   fmspec shrink MODEL.json TRACE.json [--trace-out FILE] [--allow-other-model]
-  fmspec refine REFINEMENT.json [--max-states N] [--actions A,B,...]
+  fmspec refine REFINEMENT.json [--max-states N] [--max-depth N] [--max-time-ms N] [--actions A,B,...]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
   --actions A,B,...      対象の操作
@@ -64,8 +64,10 @@ const USAGE: &str = "\
 ";
 
 /// fmspec-api に渡す、値を取るオプション。[フラグ, オプションのキー, 種類]。
-const VALUED: [(&str, &str, Kind); 8] = [
+const VALUED: [(&str, &str, Kind); 10] = [
     ("--max-states", "max_states", Kind::Count),
+    ("--max-depth", "max_depth", Kind::Count),
+    ("--max-time-ms", "max_time_ms", Kind::Count),
     ("--max-check-cost", "max_check_cost", Kind::Count),
     ("--traces", "traces", Kind::Count),
     ("--max-steps", "max_steps", Kind::Count),
@@ -217,6 +219,8 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
         &[
             "--strategy",
             "--max-states",
+            "--max-depth",
+            "--max-time-ms",
             "--max-check-cost",
             "--certificate-out",
             "--trace-out",
@@ -226,19 +230,24 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
     ),
     (
         "simulate",
-        &["--traces", "--max-steps", "--seed", "--trace-out"],
+        &["--traces", "--max-steps", "--seed", "--max-time-ms", "--trace-out"],
         true,
         cmd_simulate,
     ),
     (
         "verify-certificate",
-        &["--max-check-cost", "--allow-other-model"],
+        &["--max-check-cost", "--max-time-ms", "--allow-other-model"],
         true,
         cmd_verify_certificate,
     ),
     ("replay", &["--allow-other-model"], false, cmd_replay),
     ("shrink", &["--trace-out", "--allow-other-model"], false, cmd_shrink),
-    ("refine", &["--max-states", "--actions"], false, cmd_refine),
+    (
+        "refine",
+        &["--max-states", "--max-depth", "--max-time-ms", "--actions"],
+        false,
+        cmd_refine,
+    ),
 ];
 
 /// コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。

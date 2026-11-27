@@ -122,6 +122,7 @@ pub fn check(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Outc
     let gate = GateOptions {
         max_cost: opts.max_check_cost,
         interrupt: opts.interrupt,
+        deadline: opts.deadline,
     };
     let mut outcome = judge_search(model, cond, found, &gate);
     outcome.search_time = search_time;

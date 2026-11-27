@@ -7,6 +7,7 @@
 use crate::bfs::{BfsOptions, Stats};
 use crate::check::Internal;
 use crate::inconsistency::{successors, Inconsistency};
+use crate::stop::stopped;
 use fmspec_core::evidence::{Certificate, Claim, Limit, Reject, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::model::Expr;
@@ -45,6 +46,8 @@ pub struct RefOutcome {
 
 struct Node {
     state: Vec<i64>,
+    /// 初期状態からの遷移数。
+    depth: usize,
     parent: Option<(usize, usize, Vec<i64>, Option<i64>)>,
 }
 
@@ -101,6 +104,7 @@ fn search(
         let id = nodes.len();
         nodes.push(Node {
             state: init.clone(),
+            depth: 0,
             parent: None,
         });
         seen.insert(init.clone(), (id, x));
@@ -108,11 +112,15 @@ fn search(
         queue.push_back(id);
     }
 
+    // 深さの上限で、未訪問の状態への遷移か、上限を超えるトレースの食い違いを残したか（`bfs` と同じ扱い）。
+    let mut truncated = false;
     while let Some(cur) = queue.pop_front() {
-        if opts.interrupt.is_some_and(|requested| requested()) {
-            return (Ok(RefEvidence::Unavailable(Limit::Interrupted)), stats);
+        if let Some(limit) = stopped(opts.interrupt, opts.deadline) {
+            return (Ok(RefEvidence::Unavailable(limit)), stats);
         }
         let state = nodes[cur].state.clone();
+        let depth = nodes[cur].depth;
+        let at_limit = opts.max_depth.is_some_and(|max| depth >= max);
         let x = seen[&state].1.clone();
         for ac in 0..bm.actions.len() {
             if !cb.actions.get(ac).copied().unwrap_or(false) {
@@ -143,6 +151,10 @@ fn search(
                     Some((_, y)) => y.clone(),
                     None => match map_state(bm, am, f, &t.state) {
                         Mapped::Ok(y) => y,
+                        Mapped::Fail(_, _) if at_limit => {
+                            truncated = true;
+                            continue;
+                        }
                         Mapped::Fail(slot, kind) => {
                             let (start, steps) = with_step(&nodes, &t);
                             return (Ok(RefEvidence::Trace(start, steps, RefClaim::Map(slot, kind))), stats);
@@ -152,6 +164,10 @@ fn search(
                 };
                 match find_move(am, &x, &y) {
                     Move::Yes => {}
+                    Move::No if at_limit => {
+                        truncated = true;
+                        continue;
+                    }
                     Move::No => {
                         let (start, steps) = with_step(&nodes, &t);
                         return (Ok(RefEvidence::Trace(start, steps, RefClaim::Step)), stats);
@@ -161,6 +177,10 @@ fn search(
                 if seen.contains_key(&t.state) {
                     continue;
                 }
+                if at_limit {
+                    truncated = true;
+                    continue;
+                }
                 if opts.max_states.is_some_and(|max| seen.len() >= max) {
                     return (Ok(RefEvidence::Unavailable(Limit::MaxStates)), stats);
                 }
@@ -168,6 +188,7 @@ fn search(
                 seen.insert(t.state.clone(), (id, y));
                 nodes.push(Node {
                     state: t.state,
+                    depth: depth + 1,
                     parent: Some((cur, ac, t.args, t.output)),
                 });
                 stats.visited_states = seen.len();
@@ -176,6 +197,9 @@ fn search(
         }
     }
 
+    if truncated {
+        return (Ok(RefEvidence::Unavailable(Limit::MaxDepth)), stats);
+    }
     stats.complete = true;
     let mut states: Vec<Vec<i64>> = nodes.into_iter().map(|n| n.state).collect();
     states.sort();

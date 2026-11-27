@@ -34,36 +34,43 @@ module Fmspec
     # モデル検査（仕様書 §8）。到達できるすべての状態と有効な遷移を、幅優先探索で検査する。
     #
     #   max_states      保持する異なる状態の数の上限。超える場合は :inconclusive
+    #   max_depth       深さ（初期状態からの遷移数）の上限。上限より深い状態が残る場合は :inconclusive
+    #   max_time_ms     探索と証拠の検査の時間の上限（ミリ秒）。超える場合は :inconclusive
     #   max_check_cost  判定ゲートが証拠の検査にかける評価回数の上限。見積もりが超える場合は :inconclusive
     #   deadlock        非終端のデッドロックを検査する
     #   actions、invariants、contracts   対象の名前の配列。省略時はすべて
     #   certificate     真なら、受理された証明書を結果に含める
     #   symmetry        偽なら、宣言した対称性による削減を使わない（既定は、宣言があれば使う）
-    def check(max_states: nil, max_check_cost: nil, certificate: false, symmetry: nil, **conditions)
+    def check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, symmetry: nil,
+              **conditions)
       options = condition_options(conditions)
       options["symmetry"] = symmetry unless symmetry.nil?
       options["max_states"] = max_states if max_states
+      options["max_depth"] = max_depth if max_depth
+      options["max_time_ms"] = max_time_ms if max_time_ms
       options["max_check_cost"] = max_check_cost if max_check_cost
       options["certificate"] = true if certificate
       result(native.check(JSON.generate(options)))
     end
 
     # ランダムシミュレーション（仕様書 §9）。成功は :sampled で、網羅性の主張はない。
-    # seed を省略すると無作為に選び、結果に記録する。
-    def simulate(traces: 100, max_steps: 100, seed: nil, **conditions)
+    # seed を省略すると無作為に選び、結果に記録する。`max_time_ms` は check と同じ。
+    def simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **conditions)
       options = condition_options(conditions)
       options.merge!("traces" => traces, "max_steps" => max_steps, "seed" => seed || Random.new_seed % (2**64))
+      options["max_time_ms"] = max_time_ms if max_time_ms
       result(native.simulate(JSON.generate(options)))
     end
 
-    # 証明書（Hash またはJSON文字列）を、指定の検査条件で検査する。`max_check_cost` は check と同じ。
+    # 証明書（Hash またはJSON文字列）を、指定の検査条件で検査する。`max_check_cost` と `max_time_ms` は check と同じ。
     #
     #   allow_other_model  真なら、model_digest が違う（別のモデルに対する）証明書も、このモデルの名前と型で読んで検査する。
     #                      偽（既定）なら、別のモデルに対する証明書は :rejected（読めない証拠）になる
-    def verify_certificate(certificate, max_check_cost: nil, allow_other_model: false, **conditions)
+    def verify_certificate(certificate, max_check_cost: nil, max_time_ms: nil, allow_other_model: false, **conditions)
       certificate = JSON.generate(certificate) unless certificate.is_a?(String)
       options = condition_options(conditions)
       options["max_check_cost"] = max_check_cost if max_check_cost
+      options["max_time_ms"] = max_time_ms if max_time_ms
       options["allow_other_model"] = true if allow_other_model
       result(native.verify_certificate(certificate, JSON.generate(options)))
     end

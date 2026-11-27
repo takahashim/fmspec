@@ -4,7 +4,7 @@
 //! モデルの検査ではないので、判定ゲートを通さず、`Verified` などの判定も返さない。
 
 use crate::inject::{inject_slots, input_json, parse_inject};
-use crate::options::{conditions, count, max_states, options, size};
+use crate::options::{conditions, count, deadline, max_states, options, size};
 use crate::report::inconsistency_report;
 use crate::Interrupt;
 use fmspec_ir::{args_to_json, state_to_json, Model};
@@ -71,9 +71,10 @@ fn parse_seen(v: Option<&Value>) -> Result<(HashSet<Vec<i64>>, Vec<TransitionCod
 
 /// テストで確実に通った状態と遷移（セッションの応答の `covered`）を、到達可能な状態と遷移と比べる。
 ///
-/// オプションは、検査条件、`max_states`、`seen`（`{"states": [状態の符号], "transitions": [[状態の符号, 操作, 引数の符号]]}`）。
+/// オプションは、検査条件、`max_states`、`max_time_ms`、
+/// `seen`（`{"states": [状態の符号], "transitions": [[状態の符号, 操作, 引数の符号]]}`）。
 pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["max_states", "seen"])?;
+    let map = options(opts, &["max_states", "max_time_ms", "seen"])?;
     let cond = conditions(model, map)?;
     let (states, seen_transitions) = parse_seen(map.get("seen"))?;
     let transitions: HashSet<(&[i64], usize, &[i64])> = seen_transitions
@@ -81,7 +82,7 @@ pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
         .map(|(s, a, x)| (s.as_slice(), *a, x.as_slice()))
         .collect();
 
-    let g = explore(model.checked(), &cond, max_states(map)?, interrupt);
+    let g = explore(model.checked(), &cond, max_states(map)?, interrupt, deadline(map)?);
     // 探索器の内部の不整合で集めきれなかったグラフは、分母にしない。
     if let Some(inconsistency) = &g.inconsistency {
         return Ok(inconsistency_report(model, inconsistency));
@@ -133,15 +134,23 @@ pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
 
 /// 到達可能な状態と入力の組を覆うテスト経路を作る。
 ///
-/// オプションは、検査条件、`max_states`、`max_steps`（1経路の最大入力数、既定は20）、
+/// オプションは、検査条件、`max_states`、`max_time_ms`、`max_steps`（1経路の最大入力数、既定は20）、
 /// `inject`（セッションと同じ、注入する内部選択）。
 pub fn test_paths(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["max_states", "max_steps", "inject"])?;
+    let map = options(opts, &["max_states", "max_time_ms", "max_steps", "inject"])?;
     let cond = conditions(model, map)?;
     let max_steps = size(count(map, "max_steps", 1)?.unwrap_or(DEFAULT_MAX_STEPS));
     let injected = parse_inject(model, map.get("inject"))?;
     let slots = inject_slots(model, &injected);
-    let found = search_paths(model.checked(), &cond, &slots, max_states(map)?, max_steps, interrupt);
+    let found = search_paths(
+        model.checked(),
+        &cond,
+        &slots,
+        max_states(map)?,
+        max_steps,
+        interrupt,
+        deadline(map)?,
+    );
     if let Some(inconsistency) = &found.graph.inconsistency {
         return Ok(inconsistency_report(model, inconsistency));
     }

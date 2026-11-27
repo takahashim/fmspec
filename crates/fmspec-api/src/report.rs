@@ -34,6 +34,8 @@ pub(crate) fn limit_name(limit: Limit) -> &'static str {
         Limit::MaxStates => "max_states",
         Limit::Interrupted => "interrupted",
         Limit::CheckBudget => "max_check_cost",
+        Limit::MaxDepth => "max_depth",
+        Limit::MaxTime => "max_time_ms",
         Limit::AbstractFailed => "abstract_failed",
     }
 }
@@ -437,6 +439,7 @@ mod tests {
             traces: 1,
             max_steps: 1,
             interrupt: None,
+            deadline: None,
         };
         let sampled = Sampled {
             found: Some(inconsistent(

@@ -647,9 +647,13 @@ module FmspecReference
 
     # ---- 幅優先探索（仕様書 §8.1）----
 
-    def check(max_states: nil, **options)
+    # `max_depth` は深さ（初期状態からの遷移数）の上限。上限の深さの状態からの遷移が、未訪問の状態に至るか、
+    # 遷移契約を満たさない（トレースが上限を超える）ときは、報告せずに探索を続け、最後に未完了とする。
+    def check(max_states: nil, max_depth: nil, **options)
       cond = conditions(**options)
       parents = {}
+      depth = {}
+      truncated = false
       # 開始状態と、そこからのステップ。
       path = lambda do |state|
         steps = []
@@ -672,6 +676,7 @@ module FmspecReference
         end
 
         parents[init] = nil
+        depth[init] = 0
         if (bad = failing_invariant(init, cond))
           return found.call(property("invariant", *bad), [init, []])
         end
@@ -681,6 +686,7 @@ module FmspecReference
       until queue.empty?
         current = queue.shift
         enabled = false
+        at_limit = max_depth && depth[current] >= max_depth
         @actions.each do |action|
           next unless cond[:actions].include?(action["name"])
 
@@ -693,16 +699,25 @@ module FmspecReference
             enabled = true
             edge = json_step(action, transition)
             if (bad = failing_contract(action, current, transition, cond))
+              if at_limit
+                truncated = true
+                next
+              end
               start, steps = path.call(current)
               return found.call(property("contract", *bad), [start, steps + [edge]])
             end
             nxt = transition["state"]
             next if parents.key?(nxt)
+            if at_limit
+              truncated = true
+              next
+            end
             if max_states && parents.size >= max_states
               return { "status" => "inconclusive", "reason" => "max_states", "visited_states" => parents.size }
             end
 
             parents[nxt] = [current, edge]
+            depth[nxt] = depth[current] + 1
             if (bad = failing_invariant(nxt, cond))
               return found.call(property("invariant", *bad), path.call(nxt))
             end
@@ -717,6 +732,8 @@ module FmspecReference
           return found.call({ "error" => e.detail, "site" => "terminal" }, path.call(current))
         end
       end
+
+      return { "status" => "inconclusive", "reason" => "max_depth", "visited_states" => parents.size } if truncated
 
       states = sort_states(parents.keys)
       { "status" => "verified", "visited_states" => states.length,

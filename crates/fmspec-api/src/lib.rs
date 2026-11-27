@@ -21,7 +21,7 @@ use fmspec_search::{
     check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions,
     Status,
 };
-use options::{conditions, count, flag, keys, max_states, options, size};
+use options::{conditions, count, deadline, flag, keys, max_states, options, size};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -64,10 +64,21 @@ pub fn load_error(e: &LoadError) -> Value {
 /// 幅優先探索でモデルを検査する。
 ///
 /// オプションは、検査条件（`actions`、`invariants`、`contracts`、`deadlock`）、`max_states`、
+/// `max_depth`（深さ、つまり初期状態からの遷移数の上限）、`max_time_ms`（探索と証拠の検査の時間の上限）、
 /// `max_check_cost`（判定ゲートが証拠の検査にかける評価回数の上限）、
 /// `certificate`（真なら、受理された証明書を結果に含める）。
 pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["max_states", "max_check_cost", "certificate", "symmetry"])?;
+    let map = options(
+        opts,
+        &[
+            "max_states",
+            "max_depth",
+            "max_time_ms",
+            "max_check_cost",
+            "certificate",
+            "symmetry",
+        ],
+    )?;
     let cond = conditions(model, map)?;
     if !matches!(map.get("symmetry"), None | Some(Value::Null | Value::Bool(_))) {
         return Err("symmetry は真偽値です".to_string());
@@ -78,6 +89,8 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
         max_states: max_states(map)?,
         interrupt,
         max_check_cost,
+        max_depth: count(map, "max_depth", 0)?.map(size),
+        deadline: deadline(map)?,
     };
     let outcome = if use_symmetry {
         if max_check_cost.is_some() || flag(map, "certificate")? {
@@ -106,9 +119,9 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
 
 /// ランダムシミュレーションでモデルを検査する。
 ///
-/// オプションは、検査条件、`seed`（既定は0）、`traces`（既定は100）、`max_steps`（既定は100）。
+/// オプションは、検査条件、`seed`（既定は0）、`traces`（既定は100）、`max_steps`（既定は100）、`max_time_ms`。
 pub fn simulate(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["seed", "traces", "max_steps"])?;
+    let map = options(opts, &["seed", "traces", "max_steps", "max_time_ms"])?;
     let cond = conditions(model, map)?;
     let seed = count(map, "seed", 0)?.unwrap_or(0);
     let traces = count(map, "traces", 1)?.unwrap_or(100);
@@ -118,6 +131,7 @@ pub fn simulate(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
         traces: size(traces),
         max_steps: size(max_steps),
         interrupt,
+        deadline: deadline(map)?,
     };
     let started = Instant::now();
     let sampled = sample(model.checked(), &cond, &sim);
@@ -152,7 +166,7 @@ fn mark_other_model(mut body: Value, other: Option<String>) -> Value {
 
 /// 提示された証明書を、オプションの検査条件で検査する。
 ///
-/// オプションは、検査条件、`max_check_cost`、`allow_other_model`（真なら、`model_digest` が違う証明書も、
+/// オプションは、検査条件、`max_check_cost`、`max_time_ms`、`allow_other_model`（真なら、`model_digest` が違う証明書も、
 /// このモデルの名前と型で読んで検査する。省略時は偽で、別のモデルに対する証明書は読めない証拠として拒否する）。
 pub fn verify_certificate(
     model: &Model,
@@ -160,11 +174,12 @@ pub fn verify_certificate(
     opts: &Value,
     interrupt: Interrupt,
 ) -> Result<Value, String> {
-    let map = options(opts, &["max_check_cost", ALLOW_OTHER_MODEL])?;
+    let map = options(opts, &["max_check_cost", "max_time_ms", ALLOW_OTHER_MODEL])?;
     let cond = conditions(model, map)?;
     let gate = GateOptions {
         max_cost: count(map, "max_check_cost", 0)?,
         interrupt,
+        deadline: deadline(map)?,
     };
     let loaded = match read_certificate(model, certificate, flag(map, ALLOW_OTHER_MODEL)?) {
         Ok(loaded) => loaded,

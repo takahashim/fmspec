@@ -84,6 +84,23 @@ class CheckTest < Minitest::Test
     assert_equal [:verified, 100], model.check(max_states: 100).then { |r| [r.status, r.visited_states] }
   end
 
+  # 2つのカウンタ（0..9）の最も深い状態 (9, 9) は、初期状態から18回の遷移で到達する。
+  def test_the_depth_limit
+    model = TestModels.counters(2, 9)
+    assert_equal :verified, model.check(max_depth: 18).status
+    result = model.check(max_depth: 17, certificate: true)
+    assert_equal [:inconclusive, :max_depth], [result.status, result.reason]
+    assert_nil result.certificate
+    assert_raises(ArgumentError) { model.check(max_depth: -1) }
+  end
+
+  def test_the_time_limit
+    model = TestModels.tickets
+    assert_equal [:inconclusive, :max_time_ms], model.check(max_time_ms: 0).then { |r| [r.status, r.reason] }
+    assert_equal [:inconclusive, :max_time_ms], model.simulate(max_time_ms: 0, seed: 1).then { |r| [r.status, r.reason] }
+    assert_equal :verified, model.check(max_time_ms: 60_000).status
+  end
+
   def test_expression_boundaries
     overflow = ->(big) { (big + 1) > 0 }
     status = ->(&invariant) { TestModels.big(&invariant).check.status }

@@ -333,18 +333,24 @@ for s0 in initials():  # 正規順
     visited[s0] = store(s0, parent=none)
     queue.push_back(visited[s0])
 while queue is not empty:
-    check_time_and_memory_limits()
+    check_interrupt_and_time_limit()
     current = queue.pop_front()
     for (label, next) in successors(current):
+        if max_depth is set and depth(current) == max_depth:
+            if next is not in visited or transition_property_fails(current, label, next):
+                truncated = true  # 上限を超えるトレースは報告しない
+            continue
         check_transition_properties(current, label, next)
         if next is not in visited:
             if max_states is set and size(visited) == max_states:
                 return Inconclusive(max_states)
-            id = store(next, parent=current, label=label)
+            id = store(next, parent=current, label=label, depth=depth(current) + 1)
             visited[next] = id
             check_invariants(next)
             queue.push_back(id)
     check_deadlock_if_enabled(current)
+if truncated:
+    return Inconclusive(max_depth)
 return certificate(visited)  # 判定ゲートが受理したときだけ Verified
 ```
 
@@ -352,6 +358,10 @@ BFSは未検証の探索器であり、擬似コード中の検査は証拠を�
 違反や評価エラーを見つけた場合はそこに至るトレースを、完走した場合は訪問済み集合を証明書として、判定ゲートに渡す（§3.1）。
 
 `max_states` は初期状態を含む、保持可能な異なる状態の数で、指定値は1以上とする。上限ちょうどでも既訪問状態への辺はすべて検査する。新しい状態を追加する必要が生じた時点で打ち切る。
+
+`max_depth` は状態の深さ（初期状態からの遷移数）の上限で、指定値は0以上とする。上限の深さの状態からも遷移を列挙し、評価エラーとデッドロックは報告する。その遷移が未訪問の状態に至るか遷移契約を満たさない場合は、報告するとトレースが上限を超えるので報告せず、探索の終わりに `Inconclusive(max_depth)` とする。したがって、報告するトレースは上限以下のステップで、深さの上限で打ち切った探索は証明書を出さない。上限の深さの状態からの遷移がすべて既訪問の状態に至り遷移契約を満たすなら、探索は完走している。
+
+時間の上限 `max_time_ms` は、中断要求と同じ箇所（状態を取り出すごと、シミュレーションのステップごと、証明書の検査の区切りごと）で確かめ、過ぎていれば `Inconclusive(max_time_ms)` とする。中断要求（`interrupted`）とは理由で区別する。メモリの上限は設けない。状態の符号化列の長さはモデルで決まるので、訪問済み集合のメモリは保持する状態の数にほぼ比例し、`max_states` で抑えられる（[ir.md](ir.md#時間の上限)）。
 
 初期状態も検査する。訪問済み登録はenqueue時に行い、重複したキュー要素を避ける。親状態IDと具体的な遷移ラベルを保持して反例を復元する。全辺のコストを1とし、状態不変条件のみを対象に完全なBFSを行った場合、発見される反例は遷移回数最小となる（同長の反例の選択順は[ir.md](ir.md#探索順と結果)の探索順で決まる）。
 
@@ -377,7 +387,7 @@ DFSで深さ制限を用いる場合、同じ状態をより短い経路で再�
 | `Verified` | 指定モデル・対象操作・検査条件の下で、全到達状態・全有効遷移が指定の性質を満たし、到達可能な評価エラーがないことを、判定ゲートが証明書の検査で確認 |
 | `Violated` | 状態不変条件違反、遷移契約違反、または検査対象の非終端デッドロック。判定ゲートがトレースを再生して確認 |
 | `Error` | 到達可能な状態で式の評価または状態更新が失敗する。判定ゲートがトレースを再生して確認 |
-| `Inconclusive` | 時間、深さ、状態数、メモリ等の制限で未完了 |
+| `Inconclusive` | 時間（`max_time_ms`）、深さ（`max_depth`）、状態数（`max_states`）、証拠の検査の評価回数（`max_check_cost`）の上限、または中断（`interrupted`）で未完了。メモリは状態数の上限で抑える |
 | `Sampled` | 指定サンプルの検査を完了。網羅性の主張なし |
 | `GoalReached` | 目標predicateを満たす経路を発見 |
 | `InvalidModel` | IR検証でモデルを拒否 |
@@ -715,7 +725,7 @@ native extensionの境界では、Nupur、その下の `nupur_sys` と rb-sys、
 
 ```sh
 fmspec validate model.json
-fmspec check model.json --strategy bfs --max-states 100000
+fmspec check model.json --strategy bfs --max-states 100000 --max-depth 50 --max-time-ms 60000
 fmspec simulate model.json --traces 100 --max-steps 20 --seed 42
 fmspec verify-certificate model.json certificate.json
 fmspec replay model.json trace.json
