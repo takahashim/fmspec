@@ -3,9 +3,13 @@
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, Env, ErrKind};
 use crate::expr_copy::copy_expr;
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::has_ty;
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{pure_below, ranks_pure};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -99,11 +103,17 @@ pub open spec fn mixed_rank_eval(
     }
 }
 
+/// 桁の番号の式が、どれも Int の型を持つ。
+pub open spec fn ranks_int(parts: Seq<(Expr, i64)>, tv: TyEnv, lt: Seq<ETy>) -> bool {
+    forall|k: int| 0 <= k < parts.len() ==> #[trigger] has_ty(parts[k].0, tv, lt, ETy::Int)
+}
+
 /// TupleとRecordの番号の式を作る。要素を左から順に、混合基数の桁として加える。
 pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
     ensures forall|env: Env, locals: Seq<Value>|
         #[trigger] eval_l(out, env, locals) == mixed_rank_eval(parts@, parts@.len() as nat, env, locals),
         forall|n: nat| #[trigger] ranks_pure(parts@, n) ==> pure_below(out, n),
+        forall|tv: TyEnv, lt: Seq<ETy>| #[trigger] ranks_int(parts@, tv, lt) ==> has_ty(out, tv, lt, ETy::Int),
 {
     if parts.len() == 0 {
         return Expr::Const(Value::Int(0));
@@ -114,6 +124,9 @@ pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
         assert forall|n: nat| #[trigger] ranks_pure(parts@, n) implies pure_below(out, n) by {
             assert(pure_below(parts@[0].0, n));
         }
+        assert forall|tv: TyEnv, lt: Seq<ETy>| #[trigger] ranks_int(parts@, tv, lt) implies has_ty(out, tv, lt, ETy::Int) by {
+            assert(has_ty(parts@[0].0, tv, lt, ETy::Int));
+        }
     }
     while used < parts.len()
         invariant
@@ -121,6 +134,7 @@ pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
             forall|env: Env, locals: Seq<Value>|
                 #[trigger] eval_l(out, env, locals) == mixed_rank_eval(parts@, used as nat, env, locals),
             forall|n: nat| #[trigger] ranks_pure(parts@, n) ==> pure_below(out, n),
+            forall|tv: TyEnv, lt: Seq<ETy>| #[trigger] ranks_int(parts@, tv, lt) ==> has_ty(out, tv, lt, ETy::Int),
         decreases parts@.len() - used,
     {
         let _previous = used;
@@ -139,6 +153,21 @@ pub fn mixed_rank_expr(parts: &Vec<(Expr, i64)>) -> (out: Expr)
                         Box::new(Expr::Const(Value::Int(parts@[_previous as int].1))),
                     ),
                     n,
+                ));
+            }
+            assert forall|tv: TyEnv, lt: Seq<ETy>| #[trigger] ranks_int(parts@, tv, lt) implies has_ty(out, tv, lt, ETy::Int) by {
+                assert(has_ty(_prefix, tv, lt, ETy::Int));
+                assert(has_ty(parts@[_previous as int].0, tv, lt, ETy::Int));
+                assert(has_ty(Expr::Const(Value::Int(parts@[_previous as int].1)), tv, lt, ETy::Int));
+                assert(has_ty(
+                    Expr::Bin(
+                        BinOp::Mul,
+                        Box::new(_prefix),
+                        Box::new(Expr::Const(Value::Int(parts@[_previous as int].1))),
+                    ),
+                    tv,
+                    lt,
+                    ETy::Int,
                 ));
             }
             assert forall|env: Env, locals: Seq<Value>|

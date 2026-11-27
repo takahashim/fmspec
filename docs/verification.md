@@ -40,6 +40,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | Transition Soundness / Completeness | `step` の結果は `step_spec` と一致する。`enumerate` は、有効な遷移だけを、ドメイン内のすべての引数について漏れなく返すか、評価エラーになる引数を1つ返す | `step.rs` |
 | Lowering Preservation（§14.1の表の外） | `lemma_safe`：`lower_model` が返した中核のモデルが安全であることと、名前を解決したモデルが値の意味論で安全であることは同値である。式ごとの意味保存は `preserve.rs` と `preserve_*.rs` にある。詳しくは「信頼基盤」の節で述べる | `model_safe.rs` |
 | Lowering Totality（§14.1の表の外） | `lower_model` は、まず `check_model` でモデルの式の型と大きさの条件（`model_typed`）を確かめる。事後条件：失敗するなら、利用者の誤り（値の評価の失敗、初期状態の数、式が大きすぎること）か、`model_typed` が偽のときの型の誤り（状態変数と引数の型の `State`、`Args` と、それ以外の `Type`）である。式ごとには、`lower_prop` と `lower_stored` は、文脈が整形式で（`cx_wf`）、式に型が付き（`type_of`）、部分式の型が大きさの条件を満たす（`lim_ok`）なら、束縛の深さの上限（`Fail::Depth`）でしか失敗せず、置く値は型の幅だけのスロットになる | `model_lower.rs`、`lowering.rs`、`total.rs`、`model_total.rs` |
+| Lowering Well-formedness（§14.1の表の外） | `lower_model` が `Ok(m)` を返し、名前を解決したモデルが `sm_wf`（どの列挙型にもラベルがあり、同じ状態変数に重ねて代入しない）を満たすなら、`m` は整形式（`wf`）である。式の型は、下ろしの各関数の事後条件「各スロットの式は、式の型のスロットの中核の型を持つ」（`ty_post`）から示す。束縛の列の各式の型は `Block` の ghost の型の列で追う | `model_wf.rs`、`lower_types.rs`、`lowering.rs`、`smodel.rs` |
 | State Equality | 状態は符号化列そのもので、等価性は列の一致である。`lemma_decode_injective`：型に属する符号は値と一対一に対応する | `step.rs` |
 | Certificate Soundness | `check_certificate` が受理したなら、証明書は帰納的で、`safe` が成り立つ | `cert.rs` |
 | Trace Validity | `check_trace` が受理したなら、トレースの開始状態は初期状態の1つで、`trace_ok` と `claim_holds` が成り立つ。`lemma_trace_reach`：初期状態から始まる有効なトレースの各状態は到達可能である | `trace.rs` |
@@ -74,8 +75,8 @@ MBTの「応答と矛盾しない」は、観測するスロットの値の一�
 
 `rake verus:mutants` は、さらに次を検査する。
 
-- 検査を1つ壊した変異170件が、すべて証明に失敗する。たとえば、証明書の検査で遷移先の所属を調べない、トレースの状態を照合しない、拒否した証明書で `Verified` を返す、MBTの候補の更新で遷移先の観測を照合しない、初期条件が偽の状態を初期状態に残す、といった変異である。
-- 到達点に置いた `assert(false)` 105件が、すべて証明に失敗する。
+- 検査を1つ壊した変異190件が、すべて証明に失敗する。たとえば、証明書の検査で遷移先の所属を調べない、トレースの状態を照合しない、拒否した証明書で `Verified` を返す、MBTの候補の更新で遷移先の観測を照合しない、初期条件が偽の状態を初期状態に残す、といった変異である。
+- 到達点に置いた `assert(false)` 124件が、すべて証明に失敗する。
 
 変異と `assert(false)` の一覧は `rakelib/verus.rake` にある。
 変種ごとに crate 全体を検証し直すので、すべて回すと数時間かかる。

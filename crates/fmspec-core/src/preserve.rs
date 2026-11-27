@@ -20,11 +20,17 @@ use crate::encoding::{default_val, enc, enc_rows, enc_seq, keys, keys_product, l
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, models, models_seq, sty, width, xty};
 #[cfg(verus_keep_ghost)]
+use crate::encoding::{wf_stype, wf_stypes};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{xwidth, xwidth_sum, STy, SVal, XTy};
+#[cfg(verus_keep_ghost)]
+use crate::equality::{small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{has_ty, typed, xetys, xetys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::{Bound, Layout, LowerCtx};
 use crate::model::Expr;
@@ -36,6 +42,8 @@ use crate::ranking::mixed_rank_eval;
 use crate::slots::{and_s, bool_lit, extends, ite_s, join_s, lits, or_s, tree_s, Block, Join};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, Item, Over, SEnv, TExpr};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -963,6 +971,13 @@ pub open spec fn store_ok(c: Expr, out: Seq<Expr>, env: Env, ls: Seq<Value>, v: 
 /// [`crate::slots::store`] の結果 `(c, out)` の性質。
 pub open spec fn store_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, c: Expr, out: Seq<Expr>) -> bool {
     &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(c, n) && all_pure(out, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        fits_s(t, st) && wf_stype(st, enums) && small(st) && tv.enums == enums && #[trigger] typed(
+            slots,
+            xetys(t, enums),
+            tv,
+            lt,
+        ) ==> has_ty(c, tv, lt, ETy::Bool) && typed(out, xetys(t, enums), tv, lt)
     &&& forall|env: Env, ls: Seq<Value>, v: SVal|
         fits_s(t, st) && #[trigger] denotes(slots, env, ls, v, t, enums) ==> store_ok(c, out, env, ls, v, st, enums)
 }
@@ -970,6 +985,13 @@ pub open spec fn store_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, 
 /// [`crate::slots::store`] の、TupleとRecordの要素の列についての性質。
 pub open spec fn store_parts_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, enums: Seq<i64>, c: Expr, out: Seq<Expr>) -> bool {
     &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(c, n) && all_pure(out, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        fits_all_s(xs, ts) && wf_stypes(ts, enums) && smalls(ts) && tv.enums == enums && #[trigger] typed(
+            slots,
+            xetys_seq(xs, enums),
+            tv,
+            lt,
+        ) ==> has_ty(c, tv, lt, ETy::Bool) && typed(out, xetys_seq(xs, enums), tv, lt)
     &&& forall|env: Env, ls: Seq<Value>, vs: Seq<SVal>|
         fits_all_s(xs, ts) && clean(slots, env, ls) && #[trigger] models_seq(slot_vals(slots, env, ls), vs, xs, enums)
             ==> {
@@ -982,6 +1004,8 @@ pub open spec fn store_parts_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, 
 /// [`crate::slots::rank_expr`] の結果 `r` の性質。値が型に属し、型がキーの型なら、番号を表す。
 pub open spec fn rank_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, r: Expr) -> bool {
     &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(r, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && #[trigger] typed(slots, xetys(t, enums), tv, lt) ==> has_ty(r, tv, lt, ETy::Int)
     &&& forall|env: Env, ls: Seq<Value>, v: SVal|
         fits_s(t, st) && #[trigger] denotes(slots, env, ls, v, t, enums) && member(v, st, enums) && keys(st, enums) is Some
             ==> eval_l(r, env, ls) == Ok::<Value, ErrKind>(Value::Int(rank(v, st, enums) as i64))
@@ -990,6 +1014,8 @@ pub open spec fn rank_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, r
 /// TupleとRecordの要素の列についての、番号の性質。
 pub open spec fn mixed_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, enums: Seq<i64>, r: Expr) -> bool {
     &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(r, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        tv.enums == enums && #[trigger] typed(slots, xetys_seq(xs, enums), tv, lt) ==> has_ty(r, tv, lt, ETy::Int)
     &&& forall|env: Env, ls: Seq<Value>, vs: Seq<SVal>|
         fits_all_s(xs, ts) && clean(slots, env, ls) && #[trigger] models_seq(slot_vals(slots, env, ls), vs, xs, enums)
             && members(vs, ts, enums) && keys_product(ts, enums) is Some ==> eval_l(r, env, ls) == Ok::<Value, ErrKind>(
@@ -1000,6 +1026,13 @@ pub open spec fn mixed_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, enums:
 /// [`crate::slots::rank_or_neg`] の結果 `r` の性質。型に属さなければ -1。
 pub open spec fn rank_neg_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, r: Expr) -> bool {
     &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(r, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        fits_s(t, st) && wf_stype(st, enums) && small(st) && tv.enums == enums && #[trigger] typed(
+            slots,
+            xetys(t, enums),
+            tv,
+            lt,
+        ) ==> has_ty(r, tv, lt, ETy::Int)
     &&& forall|env: Env, ls: Seq<Value>, v: SVal|
         fits_s(t, st) && #[trigger] denotes(slots, env, ls, v, t, enums) && keys(st, enums) is Some ==> eval_l(r, env, ls)
             == Ok::<Value, ErrKind>(Value::Int(if member(v, st, enums) {
