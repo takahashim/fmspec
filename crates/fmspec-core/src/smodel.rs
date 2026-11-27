@@ -1379,8 +1379,8 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
     let ghost enums = cx.enums@;
     let ghost doms = slot_tys_seq(stys(sa.args@), enums);
     let body = match lower_prop(&sa.guard, cx) {
-        Some(g) => g,
-        None => return Err(LowerError::Guard(a)),
+        Ok(g) => g,
+        Err(_) => return Err(LowerError::Guard(a)),
     };
     let ghost b = body;
     let guard = match guard_fold(Ghost(stys(sa.args@)), &cx.args, body, &cx.enums) {
@@ -1420,8 +1420,8 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
         }
         let l = &st[su.var];
         let out = match lower_stored(&su.expr, cx, &l.ty, 0) {
-            Some(o) => o,
-            None => return Err(LowerError::Update(a, u)),
+            Ok(o) => o,
+            Err(_) => return Err(LowerError::Update(a, u)),
         };
         if out.len() == 0 {
             return Err(LowerError::Update(a, u));
@@ -1462,8 +1462,8 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
                 _ => return Err(LowerError::Output(a)),
             };
             let mut out = match lower_stored(&so.expr, cx, &so.ty, 0) {
-                Some(o) => o,
-                None => return Err(LowerError::Output(a)),
+                Ok(o) => o,
+                Err(_) => return Err(LowerError::Output(a)),
             };
             if out.len() != 1 {
                 return Err(LowerError::Output(a));

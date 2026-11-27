@@ -277,8 +277,8 @@ fn eval_stored(e: &crate::source::TExpr, cx: &LowerCtx, t: &SType) -> (r: Result
             },
 {
     let out = match lower_stored(e, cx, t, 0) {
-        Some(o) => o,
-        None => return Err(Fault::Lower),
+        Ok(o) => o,
+        Err(_) => return Err(Fault::Lower),
     };
     if out.len() == 0 {
         return Err(Fault::Lower);
@@ -1023,8 +1023,8 @@ pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
     let cc: Option<Expr> = match &sm.constraint {
         None => None,
         Some(e) => match lower_prop(e, &cx) {
-            Some(c) => Some(c),
-            None => return Err(LowerError::Constraint(Fault::Lower)),
+            Ok(c) => Some(c),
+            Err(_) => return Err(LowerError::Constraint(Fault::Lower)),
         },
     };
     let ghost psg = ps@;
@@ -1047,16 +1047,16 @@ pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
         decreases sm.invariants@.len() - i,
     {
         match lower_prop(&sm.invariants[i], &cx) {
-            Some(e) => invariants.push(e),
-            None => return Err(LowerError::Invariant(i)),
+            Ok(e) => invariants.push(e),
+            Err(_) => return Err(LowerError::Invariant(i)),
         }
         i += 1;
     }
     let terminal: Option<Expr> = match &sm.terminal {
         None => None,
         Some(e) => match lower_prop(e, &cx) {
-            Some(c) => Some(c),
-            None => return Err(LowerError::Terminal),
+            Ok(c) => Some(c),
+            Err(_) => return Err(LowerError::Terminal),
         },
     };
     // 操作
@@ -1130,8 +1130,8 @@ pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
             Some(o) => Some(copy_stype(&o.ty)),
         };
         let e = match lower_prop(&con.expr, &cx) {
-            Some(e) => e,
-            None => return Err(LowerError::Contract(k)),
+            Ok(e) => e,
+            Err(_) => return Err(LowerError::Contract(k)),
         };
         let c = Contract { action: con.action, expr: e };
         proof {

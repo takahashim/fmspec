@@ -41,6 +41,7 @@ pub mod gate;
 mod impls;
 pub mod infer;
 pub mod keys;
+pub mod limits;
 pub mod lists;
 pub mod lowering;
 pub mod map_encoding;

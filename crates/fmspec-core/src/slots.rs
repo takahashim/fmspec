@@ -37,6 +37,8 @@ use crate::quant::pick_slot;
 #[cfg(verus_keep_ghost)]
 use crate::quant::picks;
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
+#[cfg(verus_keep_ghost)]
+use crate::limits::*;
 use vstd::prelude::*;
 
 verus! {
@@ -452,14 +454,15 @@ pub proof fn lemma_extends_refl(a: Block)
 {
 }
 
-pub fn new_block(base: usize) -> (r: Option<Block>)
+pub fn new_block(base: usize) -> (r: Result<Block, Fail>)
     ensures
-        r matches Some(b) ==> b.wf() && b.base == base && b.binds@.len() == 0,
+        r matches Ok(b) ==> b.wf() && b.base == base && b.binds@.len() == 0,
+        r is Err ==> r == Err::<Block, Fail>(Fail::Depth) && base == usize::MAX,
 {
     if base < usize::MAX {
-        Some(Block { base, binds: Vec::new() })
+        Ok(Block { base, binds: Vec::new() })
     } else {
-        None
+        Err(Fail::Depth)
     }
 }
 
@@ -472,35 +475,58 @@ pub(crate) fn depth(blk: &Block) -> (r: usize)
     blk.base + blk.binds.len()
 }
 
+/// 下ろしの失敗。
+pub enum Fail {
+    /// 型や大きさが合わないか、スロットの数などが食い違う。
+    Type,
+    /// 束縛の深さが `usize::MAX` に達した。
+    Depth,
+}
+
+/// 値がなければ `Fail::Type` で失敗する。
+pub fn need<T>(x: Option<T>) -> (r: Result<T, Fail>)
+    ensures
+        match x {
+            Some(v) => r == Ok::<T, Fail>(v),
+            None => r == Err::<T, Fail>(Fail::Type),
+        },
+{
+    match x {
+        Some(v) => Ok(v),
+        None => Err(Fail::Type),
+    }
+}
+
 /// 式を束縛し、それを指す局所変数を返す。
-pub(crate) fn bind(blk: &mut Block, e: Expr) -> (r: Option<Expr>)
+pub(crate) fn bind(blk: &mut Block, e: Expr) -> (r: Result<Expr, Fail>)
     requires
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
-        r matches Some(x) ==> x == Expr::Local(old(blk).depth_s() as usize) && final(blk).binds@ == old(
+        r matches Ok(x) ==> x == Expr::Local(old(blk).depth_s() as usize) && final(blk).binds@ == old(
             blk,
         ).binds@.push(e),
-        r is None ==> *final(blk) == *old(blk),
+        r is Err ==> *final(blk) == *old(blk) && r == Err::<Expr, Fail>(Fail::Depth),
 {
     let i = depth(blk);
     if i + 1 == usize::MAX {
         proof {
             lemma_extends_refl(*blk);
         }
-        return None;
+        return Err(Fail::Depth);
     }
     blk.binds.push(e);
-    Some(Expr::Local(i))
+    Ok(Expr::Local(i))
 }
 
 /// 失敗しうる式と束縛子を含む式は束縛し、それ以外はそのまま返す。
-pub(crate) fn keep(blk: &mut Block, e: Expr) -> (r: Option<Expr>)
+pub(crate) fn keep(blk: &mut Block, e: Expr) -> (r: Result<Expr, Fail>)
     requires
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
-        r matches Some(x) ==> added(*old(blk), *final(blk), e, x),
+        r matches Ok(x) ==> added(*old(blk), *final(blk), e, x),
+        r is Err ==> r == Err::<Expr, Fail>(Fail::Depth),
 {
     if may_fail(&e) || binds(&e) {
         bind(blk, e)
@@ -508,35 +534,37 @@ pub(crate) fn keep(blk: &mut Block, e: Expr) -> (r: Option<Expr>)
         proof {
             lemma_extends_refl(*blk);
         }
-        Some(e)
+        Ok(e)
     }
 }
 
 /// 何度も参照する式を束縛する。
-pub(crate) fn atom(blk: &mut Block, e: Expr) -> (r: Option<Expr>)
+pub(crate) fn atom(blk: &mut Block, e: Expr) -> (r: Result<Expr, Fail>)
     requires
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
-        r matches Some(x) ==> added(*old(blk), *final(blk), e, x) && (atomic_s(e) ==> x == e),
+        r matches Ok(x) ==> added(*old(blk), *final(blk), e, x) && (atomic_s(e) ==> x == e),
+        r is Err ==> r == Err::<Expr, Fail>(Fail::Depth),
 {
     if atomic(&e) {
         proof {
             lemma_extends_refl(*blk);
         }
-        Some(e)
+        Ok(e)
     } else {
         bind(blk, e)
     }
 }
 
 /// `cond` が偽なら、番号 `code` で失敗する。
-pub(crate) fn check(blk: &mut Block, cond: Expr, code: i64) -> (r: Option<()>)
+pub(crate) fn check(blk: &mut Block, cond: Expr, code: i64) -> (r: Result<(), Fail>)
     requires
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
-        r is Some ==> (cond == bool_lit(true) && final(blk).binds@ == old(blk).binds@) || final(blk).binds@ == old(
+        r is Err ==> r == Err::<(), Fail>(Fail::Depth),
+        r is Ok ==> (cond == bool_lit(true) && final(blk).binds@ == old(blk).binds@) || final(blk).binds@ == old(
             blk,
         ).binds@.push(ite_s(cond, bool_lit(true), Expr::Fail(Type::Bool, code))),
 {
@@ -544,10 +572,10 @@ pub(crate) fn check(blk: &mut Block, cond: Expr, code: i64) -> (r: Option<()>)
         proof {
             lemma_extends_refl(*blk);
         }
-        Some(())
+        Ok(())
     } else {
         let _ = bind(blk, ite(cond, cb(true), Expr::Fail(Type::Bool, code)))?;
-        Some(())
+        Ok(())
     }
 }
 
@@ -584,6 +612,7 @@ pub fn keys_or_zero_exec(t: &SType, enums: &Vec<i64>) -> (r: usize)
 pub fn stype_width(t: &SType, enums: &Vec<i64>) -> (r: Option<usize>)
     ensures
         r matches Some(w) ==> w == width(sty(*t), enums@),
+        lim_s(sty(*t), enums@) ==> r is Some,
     decreases t, 1nat,
 {
     match t {
@@ -608,10 +637,29 @@ pub fn stype_width(t: &SType, enums: &Vec<i64>) -> (r: Option<usize>)
         SType::Map(k, v) => {
             let n = keys_or_zero_exec(k, enums);
             let w = stype_width(v, enums)?;
-            n.checked_mul(w.checked_add(1)?)
+            proof {
+                assert(usize::MAX >= 0xffff_ffff);
+                if lim_s(sty(*t), enums@) {
+                    assert(lim_s(sty(**v), enums@));
+                    assert(width(sty(**v), enums@) <= lim());
+                }
+            }
+            let w1 = w.checked_add(1)?;
+            proof {
+                if lim_s(sty(*t), enums@) {
+                    assert(n as nat * w1 as nat == width(sty(*t), enums@));
+                }
+            }
+            n.checked_mul(w1)
         },
         SType::List(e, n) => {
             let w = stype_width(e, enums)?;
+            proof {
+                assert(usize::MAX >= 0xffff_ffff);
+                if lim_s(sty(*t), enums@) {
+                    assert(*n as nat * w as nat + 1 == width(sty(*t), enums@));
+                }
+            }
             n.checked_mul(w)?.checked_add(1)
         },
     }
@@ -622,8 +670,10 @@ fn stype_width_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Op
         decreases_to!(*_parent => *ts),
     ensures
         r matches Some(w) ==> w == width_sum(stys(ts@), enums@),
+        lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim() ==> r is Some,
     decreases _parent, 0nat,
 {
+    let ghost pre = lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim();
     let mut acc: usize = 0;
     let mut i = 0;
     proof {
@@ -637,10 +687,18 @@ fn stype_width_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Op
             stys(ts@).len() == ts@.len(),
             forall|j: int| 0 <= j < ts@.len() ==> #[trigger] stys(ts@)[j] == sty(ts@[j]),
             acc == width_sum(stys(ts@).take(i as int), enums@),
+            pre == (lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim()),
         decreases ts.len() - i,
     {
         proof {
             vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+            let xs = stys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+            if pre {
+                lemma_lim_ss_at(xs, enums@, i as int);
+                lemma_width_sum_prefix(xs, enums@, i + 1);
+            }
         }
         let w = stype_width(&ts[i], enums)?;
         acc = acc.checked_add(w)?;
@@ -661,6 +719,7 @@ fn stype_width_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Op
 pub fn xtype_width(t: &XType, enums: &Vec<i64>) -> (r: Option<usize>)
     ensures
         r matches Some(w) ==> w == xwidth(xty(*t), enums@),
+        lim_x(xty(*t), enums@) ==> r is Some,
     decreases t, 1nat,
 {
     match t {
@@ -699,8 +758,10 @@ fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Op
         decreases_to!(*_parent => *ts),
     ensures
         r matches Some(w) ==> w == xwidth_sum(xtys(ts@), enums@),
+        lim_xs(xtys(ts@), enums@) && xwidth_sum(xtys(ts@), enums@) <= lim() ==> r is Some,
     decreases _parent, 0nat,
 {
+    let ghost pre = lim_xs(xtys(ts@), enums@) && xwidth_sum(xtys(ts@), enums@) <= lim();
     let mut acc: usize = 0;
     let mut i = 0;
     proof {
@@ -714,10 +775,18 @@ fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Op
             xtys(ts@).len() == ts@.len(),
             forall|j: int| 0 <= j < ts@.len() ==> #[trigger] xtys(ts@)[j] == xty(ts@[j]),
             acc == xwidth_sum(xtys(ts@).take(i as int), enums@),
+            pre == (lim_xs(xtys(ts@), enums@) && xwidth_sum(xtys(ts@), enums@) <= lim()),
         decreases ts.len() - i,
     {
         proof {
             vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+            let xs = xtys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+            if pre {
+                lemma_lim_xs_at(xs, enums@, i as int);
+                lemma_xwidth_sum_prefix(xs, enums@, i + 1);
+            }
         }
         let w = xtype_width(&ts[i], enums)?;
         acc = acc.checked_add(w)?;
