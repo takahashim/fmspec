@@ -907,10 +907,10 @@ pub proof fn lemma_type_sound_l(e: Expr, t: TyEnv, env: Env, ls: Seq<Value>, lt:
             }
         },
         Expr::Forall(ty, lo, hi, body) => {
-            lemma_quant_sound(true, ty, lo, hi, *body, t, env, ls, lt, lo as int);
+            lemma_quant_sound(true, ty, lo, hi, *body, t, env, ls, lt, lo as int, None);
         },
         Expr::Exists(ty, lo, hi, body) => {
-            lemma_quant_sound(false, ty, lo, hi, *body, t, env, ls, lt, lo as int);
+            lemma_quant_sound(false, ty, lo, hi, *body, t, env, ls, lt, lo as int, None);
         },
         Expr::Code(a) => {
             lemma_type_sound_l(*a, t, env, ls, lt);
@@ -931,6 +931,7 @@ proof fn lemma_quant_sound(
     ls: Seq<Value>,
     lt: Seq<ETy>,
     x: int,
+    pend: Option<ErrKind>,
 )
     requires
         env_ok(env, t),
@@ -938,8 +939,9 @@ proof fn lemma_quant_sound(
         quant_dom_ok(t.enums, ty, lo, hi),
         type_l(body, t, lt.push(ety_of(ty))) == Some(ETy::Bool),
         lo <= x,
+        pend matches Some(k) ==> eval_failure(k),
     ensures
-        typed_result(t.enums, quant_l(all, ty, body, env, ls, x, hi as int), ETy::Bool),
+        typed_result(t.enums, quant_l(all, ty, body, env, ls, x, hi as int, pend), ETy::Bool),
     decreases body, hi - x + 1,
 {
     if x <= hi {
@@ -948,7 +950,9 @@ proof fn lemma_quant_sound(
         lemma_decode_typed(t.enums, ty, x as i64);
         lemma_locals_push(t.enums, ls, lt, d, ety_of(ty));
         lemma_type_sound_l(body, t, env, ls.push(d), lt.push(ety_of(ty)));
-        lemma_quant_sound(all, ty, lo, hi, body, t, env, ls, lt, x + 1);
+        let r = as_bool(eval_l(body, env, ls.push(d)));
+        let next = if r is Err && !(pend is Some) { Some(r->Err_0) } else { pend };
+        lemma_quant_sound(all, ty, lo, hi, body, t, env, ls, lt, x + 1, next);
     }
 }
 

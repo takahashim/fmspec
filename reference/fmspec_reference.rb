@@ -358,10 +358,20 @@ module FmspecReference
                else
                  domain(body["type"])
                end
+      # 値を決める要素（forall では偽、exists では真）があればその値を返す。
+      # 本体の評価の失敗は最初のものを保留して残りをたどり、値を決める要素がなければその失敗を伝える。
+      pending = nil
       values.each do |x|
-        holds = bool(ev(body["body"], env.with_local(body["name"], x)))
+        begin
+          holds = bool(ev(body["body"], env.with_local(body["name"], x)))
+        rescue EvalError => e
+          pending ||= e
+          next
+        end
         return holds if holds != all
       end
+      raise pending if pending
+
       all
     end
 

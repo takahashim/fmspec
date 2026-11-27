@@ -448,6 +448,7 @@ module FmspecTla
     end
 
     # 量化。値を正規順に展開する。forall は最初の偽で、exists は最初の真で打ち切る。
+    # 本体の評価の失敗は保留する。後ろの要素で値が決まればその値、決まらなければ最初の失敗になる。
     # `in` が Set なら要素の型の値のうち含まれるもの、Map ならキー型の値のうちキーであるもの、
     # List なら位置の順に要素をたどる。
     def quantifier(op, arg, c)
@@ -456,7 +457,11 @@ module FmspecTla
       q = fresh("Q")
       step = lambda do |value, rest|
         r = fresh
-        "(LET #{r} == #{q}(#{value}) IN IF ~IsOk(#{r}) THEN #{r} ELSE IF #{stop}#{r}[2] THEN Ok(#{early}) ELSE #{rest})"
+        t = fresh
+        # 残りの値 `t` は1度だけ書く。式の大きさが、展開する値の数に比例するようにする。
+        "(LET #{r} == #{q}(#{value}) #{t} == #{rest} IN IF ~IsOk(#{r}) THEN " \
+          "(IF IsOk(#{t}) /\\ #{t}[2] = #{early} THEN #{t} ELSE #{r}) " \
+          "ELSE IF #{stop}#{r}[2] THEN Ok(#{early}) ELSE #{t})"
       end
       unroll = lambda do |values|
         raise Unsupported, "量化で展開する値が多すぎる" if values.length > MAX_UNROLL
