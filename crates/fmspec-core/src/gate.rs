@@ -64,15 +64,11 @@ impl CheckedModel {
     }
 
     /// 状態 `s` での操作 `a` の有効な遷移を、引数の辞書順に、漏れなく列挙する。
-    /// 操作が未定義か、状態が状態型に従わなければ `None`。
+    /// 操作が未定義か、状態が状態型に従わなければ `None`。それ以外は `Some`。
     pub fn successors(&self, a: usize, s: &Vec<i64>) -> (r: Option<Enumerated>)
         ensures
-            r matches Some(e) ==> a < self@.actions@.len() && state_ok(self@, s@) && enumerated_ok(
-                self@,
-                a as int,
-                s@,
-                e,
-            ),
+            r is Some <==> a < self@.actions@.len() && state_ok(self@, s@),
+            r matches Some(e) ==> enumerated_ok(self@, a as int, s@, e),
     {
         if a < self.raw.actions.len() && self.state_ok(s) {
             Some(enumerate(&self.raw, a, s))
@@ -83,11 +79,11 @@ impl CheckedModel {
 
     /// 状態 `s` で操作 `a` を引数 `args`（公開引数と内部選択）で適用した結果を計算する。
     /// 他の引数の評価に関係しないので、列挙が評価エラーになる状態でも、この引数の遷移を計算できる。
-    /// 操作が未定義か、状態が状態型に、引数が操作のドメインに従わなければ `None`。
+    /// 操作が未定義か、状態が状態型に、引数が操作のドメインに従わなければ `None`。それ以外は `Some`。
     pub fn apply(&self, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r: Option<StepR>)
         ensures
-            r matches Some(x) ==> a < self@.actions@.len() && state_ok(self@, s@) && args_ok(self@, a as int, args@)
-                && x@ == step_spec(self@, a as int, args@, s@),
+            r is Some <==> a < self@.actions@.len() && state_ok(self@, s@) && args_ok(self@, a as int, args@),
+            r matches Some(x) ==> x@ == step_spec(self@, a as int, args@, s@),
     {
         if a < self.raw.actions.len() && self.state_ok(s) && vals_ok_exec(
             &self.raw.enums,
@@ -101,14 +97,21 @@ impl CheckedModel {
     }
 
     /// 対象の不変条件を定義順に評価し、真でない最初のものと、その評価結果を返す。
+    /// `None` なら対象の不変条件はすべて真で、`Some((i, v))` なら `i` は対象の不変条件で、`v` はその評価結果
+    /// （真でない）である。
     pub fn invariants(&self, c: &Conditions, s: &Vec<i64>) -> (r: Option<(usize, Result<bool, ErrKind>)>)
         ensures
-            r is None ==> invs_hold(self@, *c, s@),
+            match r {
+                None => invs_hold(self@, *c, s@),
+                Some((i, v)) => inv_on(self@, *c, i as int) && inv_spec(self@, i as int, s@) == v && not_true(v),
+            },
     {
         check_invariants(&self.raw, c, s)
     }
 
     /// 操作 `a` の遷移に適用する対象の契約を定義順に評価し、真でない最初のものと、その評価結果を返す。
+    /// `None` なら適用する対象の契約はすべて真で、`Some((k, v))` なら `k` は操作 `a` の対象の契約で、`v` は
+    /// その評価結果（真でない）である。
     pub fn contracts(
         &self,
         c: &Conditions,
@@ -119,7 +122,17 @@ impl CheckedModel {
         o: &Option<i64>,
     ) -> (r: Option<(usize, Result<bool, ErrKind>)>)
         ensures
-            r is None ==> cons_hold(self@, *c, a as int, pre@, args@, post@, *o),
+            match r {
+                None => cons_hold(self@, *c, a as int, pre@, args@, post@, *o),
+                Some((k, v)) => con_on(self@, *c, k as int) && self@.contracts@[k as int].action == a && con_spec(
+                    self@,
+                    k as int,
+                    pre@,
+                    args@,
+                    post@,
+                    *o,
+                ) == v && not_true(v),
+            },
     {
         check_contracts(&self.raw, c, a, pre, args, post, o)
     }

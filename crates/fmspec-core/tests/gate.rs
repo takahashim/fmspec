@@ -3,10 +3,10 @@
 
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
-use fmspec_core::gate::{decide, decide_raw, validate, CheckedModel, VerdictKind};
+use fmspec_core::gate::{decide, decide_raw, validate, CertCheck, CheckedModel, VerdictKind};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, Output, RawModel, Type, Update, Value};
 use fmspec_core::semantics::Conditions;
-use fmspec_core::step::{Enumerated, Site};
+use fmspec_core::step::{Enumerated, Site, StepR};
 use fmspec_core::typing::InvalidModel;
 
 fn int(x: i64) -> Expr {
@@ -550,6 +550,123 @@ fn every_verdict_carries_its_reason() {
         (VerdictKind::InvalidModel, None, None)
     );
     assert!(v.invalid().is_some());
+}
+
+#[test]
+fn cert_check_advances_in_chunks_and_records_why_it_stopped() {
+    let m = checked();
+    let c = all(true);
+    let cert = Certificate {
+        conditions: c.clone(),
+        states: vec![vec![0], vec![1], vec![2], vec![3]],
+    };
+    let mut chk = CertCheck::start(&m, &c, &cert).ok().expect("初期状態を含む証明書");
+    assert_eq!(chk.remaining(), 4);
+    // 0個なら何も検査しない。区切りの途中では判定を返さない。
+    assert!(chk.advance(0).is_none());
+    assert_eq!(chk.remaining(), 4);
+    assert!(chk.advance(3).is_none());
+    assert_eq!(chk.remaining(), 1);
+    let v = chk.advance(10).expect("検査し終えた");
+    assert_eq!((v.kind(), v.reject(), v.limit()), (VerdictKind::Verified, None, None));
+
+    // 打ち切った検査は Inconclusive で、渡した理由を記録する。
+    for limit in [Limit::MaxTime, Limit::Interrupted, Limit::CheckBudget] {
+        let mut chk = CertCheck::start(&m, &c, &cert).ok().unwrap();
+        assert!(chk.advance(2).is_none());
+        assert_eq!(chk.remaining(), 2);
+        let v = chk.stop(limit);
+        assert_eq!(
+            (v.kind(), v.limit(), v.reject()),
+            (VerdictKind::Inconclusive, Some(limit), None)
+        );
+    }
+
+    // 区切って進めても、decide と同じ理由で拒否する。
+    let short = Certificate {
+        conditions: c.clone(),
+        states: vec![vec![0], vec![1], vec![2]],
+    };
+    let mut chk = CertCheck::start(&m, &c, &short).ok().unwrap();
+    assert!(chk.advance(1).is_none());
+    let v = chk.advance(1).expect("状態1で拒否する");
+    assert_eq!(
+        (v.kind(), v.reject(), v.limit()),
+        (VerdictKind::Rejected, Some(Reject::MissingSuccessor(1, 0)), None)
+    );
+    assert_eq!(
+        decide(&m, &c, &Evidence::Certificate(short)).reject(),
+        Some(Reject::MissingSuccessor(1, 0))
+    );
+
+    // 初期状態を含まない証明書は、始める時点で拒否する。
+    let missing = Certificate {
+        conditions: c.clone(),
+        states: vec![vec![1]],
+    };
+    let v = CertCheck::start(&m, &c, &missing).err().expect("初期状態がない");
+    assert_eq!(
+        (v.kind(), v.reject()),
+        (VerdictKind::Rejected, Some(Reject::MissingInitial(0)))
+    );
+}
+
+#[test]
+fn apply_returns_none_exactly_for_bad_input() {
+    let m = checked();
+    // 操作の添字が範囲外。
+    assert!(m.apply(1, &vec![1], &vec![0]).is_none());
+    assert!(m.apply(usize::MAX, &vec![1], &vec![0]).is_none());
+    // 引数の長さが違う。
+    assert!(m.apply(0, &vec![], &vec![0]).is_none());
+    assert!(m.apply(0, &vec![1, 1], &vec![0]).is_none());
+    // 引数がドメイン（1..=2）の外。
+    assert!(m.apply(0, &vec![0], &vec![0]).is_none());
+    assert!(m.apply(0, &vec![3], &vec![0]).is_none());
+    // 状態が状態型に従わない。
+    assert!(m.apply(0, &vec![1], &vec![4]).is_none());
+    assert!(m.apply(0, &vec![1], &vec![]).is_none());
+    assert!(m.apply(0, &vec![1], &vec![0, 0]).is_none());
+    // それ以外は、guard が偽でも Some。
+    assert!(matches!(m.apply(0, &vec![2], &vec![1]), Some(StepR::To(t, Some(3))) if t == vec![3]));
+    assert!(matches!(m.apply(0, &vec![2], &vec![2]), Some(StepR::Disabled)));
+    assert!(matches!(m.apply(0, &vec![1], &vec![3]), Some(StepR::Disabled)));
+}
+
+#[test]
+fn apply_computes_one_transition_where_enumeration_fails() {
+    // 引数 d（0..=2）で 3 / d >= 1 を guard にし、x を d にする。d = 0 で評価エラーになる。
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, 3)],
+        inits: vec![vec![0]],
+        actions: vec![Action {
+            n_params: 1,
+            domains: vec![Type::Int(0, 2)],
+            guard: bin(BinOp::Ge, bin(BinOp::Div, int(3), Expr::Arg(0)), int(1)),
+            updates: vec![Update {
+                target: 0,
+                expr: Expr::Arg(0),
+            }],
+            output: None,
+        }],
+        invariants: vec![],
+        contracts: vec![],
+        terminal: None,
+    };
+    let m = validate(raw).expect("整形式のモデル");
+    // 列挙は最初の引数 d = 0 で評価エラーになる。
+    assert!(matches!(
+        m.successors(0, &vec![0]),
+        Some(Enumerated::Fail(args, Site::Guard, ErrKind::DivByZero)) if args == vec![0]
+    ));
+    // 引数を1つ選んで適用すれば、他の引数の評価エラーに関係なく遷移を計算できる。
+    assert!(matches!(
+        m.apply(0, &vec![0], &vec![0]),
+        Some(StepR::Fail(Site::Guard, ErrKind::DivByZero))
+    ));
+    assert!(matches!(m.apply(0, &vec![1], &vec![0]), Some(StepR::To(t, None)) if t == vec![1]));
+    assert!(matches!(m.apply(0, &vec![2], &vec![0]), Some(StepR::To(t, None)) if t == vec![2]));
 }
 
 #[test]
