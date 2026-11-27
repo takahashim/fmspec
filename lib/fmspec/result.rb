@@ -66,6 +66,9 @@ module Fmspec
     def visited_states = search&.fetch("visited_states")
     def seed = simulation&.fetch("seed")
 
+    # 別のモデルに対する証拠を `allow_other_model: true` で扱ったときの、証拠の model_digest。それ以外は nil。
+    def evidence_model_digest = @raw["evidence_model_digest"]
+
     # 判定ゲートが証拠を拒否した理由。:rejected のときと、探索器の証拠を拒否した :internal_error のとき。
     def rejected = @raw["rejected"]
 
