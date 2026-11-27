@@ -119,7 +119,7 @@ module Fmspec
       raise BuildError, "操作 #{name} にはブロックが必要です" unless block
 
       claim(name, "操作", :action)
-      Lint.check!(block, "操作 #{name}")
+      Lint.check!(block, "操作 #{name}", statements: :effect)
       builder = ActionBuilder.new(self, name.to_sym, params, source_of(caller_locations(1, 1)))
       action, contracts = builder.build(&block)
       @actions << action
@@ -558,7 +558,7 @@ module Fmspec
       raise BuildError, "操作 #{@name}: #{what} は1つだけ書けます" if existing
       raise BuildError, "操作 #{@name}: #{what} の前に accept_if を書きます" unless @condition
 
-      Lint.check!(block, "操作 #{@name} の #{what}")
+      Lint.check!(block, "操作 #{@name} の #{what}", statements: :effect)
       @branch = Branch.new({}, nil)
       block.call
       @branch
