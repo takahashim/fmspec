@@ -9,8 +9,9 @@ use crate::types::SType;
 use crate::IR_VERSION;
 use fmspec_core::expr_copy::copy_expr;
 use fmspec_core::gate::{validate, CheckedModel};
+use fmspec_core::ir_check::lower_checked;
 use fmspec_core::model::{Expr, RawModel, Value as CoreValue};
-use fmspec_core::model_lower::{lower_model_map, SMap};
+use fmspec_core::model_lower::SMap;
 use fmspec_core::smodel::{LowerError, SAction, SConst, SContract, SModel, SOutput, SUpdate};
 use fmspec_core::source::TExpr;
 use fmspec_core::sym::renamed_eq;
@@ -449,8 +450,18 @@ pub(crate) struct MapSource<'a> {
     pub ty: &'a Value,
 }
 
-/// 値になったIRを読み込む。`maps` の式を、このモデルの状態の上の式として下ろし、スロットごとの式の列を返す。
-pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel, Names, Vec<Expr>), LoadError> {
+/// 名前を解決したモデルと、その組み立てに使った表。
+pub(crate) struct Built {
+    pub sm: SModel,
+    pub smaps: Vec<SMap>,
+    pub names: Names,
+    pub ir_names: fmspec_core::ir::IrNames,
+    constants: Vec<Constant>,
+    init_paths: Vec<Vec<String>>,
+}
+
+/// IRのJSONを読み、名前を解決したモデルと名前の表を組み立てる。中核の検査はまだ通していない。
+pub(crate) fn build(root: &Value, maps: &[MapSource]) -> Result<Built, LoadError> {
     let path = "$";
     let map = object(
         root,
@@ -567,12 +578,47 @@ pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel,
     if let Some(groups) = map.get("symmetry").filter(|v| !v.is_null()) {
         parse_symmetry(groups, &mut names)?;
     }
-    let (mut raw, slots) = lower_model_map(&sm, &smaps).map_err(|e| match e {
+    let ir_names = crate::ir_json::ir_names(&crate::ir_json::NameParts {
+        enums: &names.enums,
+        consts: constants.iter().map(|c| c.name.clone()).collect(),
+        states: &names.states,
+        actions: &names.actions,
+        invariants: &names.invariants,
+        contracts: &names.contracts,
+        fields: fields.names(),
+    });
+    Ok(Built {
+        sm,
+        smaps,
+        names,
+        ir_names,
+        constants,
+        init_paths: states.init_paths,
+    })
+}
+
+/// 値になったIRを読み込む。`maps` の式を、このモデルの状態の上の式として下ろし、スロットごとの式の列を返す。
+pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel, Names, Vec<Expr>), LoadError> {
+    let Built {
+        sm,
+        smaps,
+        mut names,
+        ir_names,
+        constants,
+        init_paths,
+    } = build(root, maps)?;
+    // 組み立てたモデルと名前の表が入力のIRと対応することを、中核の検証済みの検査で確かめてから下ろす。
+    let lowered =
+        lower_checked(&crate::ir_json::to_json(root), &ir_names, &sm, &smaps).ok_or_else(|| LoadError::Schema {
+            path: "$".to_string(),
+            message: "内部エラー: 名前を解決したモデルがIRと対応しません".to_string(),
+        })?;
+    let (mut raw, slots) = lowered.map_err(|e| match e {
         LowerError::Mapping(i) => LoadError::Schema {
             path: maps.get(i).map_or("$".to_string(), |m| m.path.clone()),
             message: "内部エラー: 中核の下ろしが写像の式を受理しません".to_string(),
         },
-        e => lower_error(e, &names, &constants, &states.init_paths),
+        e => lower_error(e, &names, &constants, &init_paths),
     })?;
     names.invariant_family = (0..raw.invariants.len()).collect();
     if !names.symmetry.is_empty() {

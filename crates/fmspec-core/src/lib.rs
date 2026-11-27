@@ -51,6 +51,8 @@ pub mod expr_copy;
 pub mod gate;
 mod impls;
 pub mod infer;
+pub mod ir;
+pub mod ir_check;
 pub mod keys;
 pub mod limits;
 pub mod lists;

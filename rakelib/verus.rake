@@ -341,7 +341,17 @@ VERUS_MUTANTS = [
   ["sym.rs", "if f[i] >= n || f[f[i]] != i {", "if f[i] >= n {", "置換が対合かを確かめない"],
   ["smodel.rs", "            Some(w) => if w != out.len() {", "            Some(w) => if false {", "代入のスロットの数を型の幅と照合しない"],
   ["model_wf.rs", "                    lemma_layouts_disjoint(st, ts, enums, v1, v2);", "", "別の状態変数の範囲が重ならないことを使わない"],
-  ["lowering.rs", "                let pk = if max == 0 {", "                let pk = if false {", "上限0のListをたどる量化で、要素のスロットを既定値にしない"]
+  ["lowering.rs", "                let pk = if max == 0 {", "                let pk = if false {", "上限0のListをたどる量化で、要素のスロットを既定値にしない"],
+  ["ir_check.rs", "TExpr::Var(x) => eqk(k, \"var\") && is_nat(b, *x),", "TExpr::Var(x) => eqk(k, \"next\") && is_nat(b, *x),", "状態変数の参照を遷移後の参照として受け入れる"],
+  ["ir_check.rs", "            Some(n) => match last_of_exec(sc, n) {\n                Some(q) => q == *i,", "            Some(n) => match last_of_exec(sc, n) {\n                Some(_) => true,", "局所変数の番号を確かめない"],
+  ["ir_check.rs", "TExpr::Eq(pos, x, y) => Some((if *pos { \"eq\" } else { \"ne\" }, r2(x, y))),", "TExpr::Eq(pos, x, y) => Some((if *pos { \"ne\" } else { \"eq\" }, r2(x, y))),", "eq と ne を取り違える"],
+  ["ir_check.rs", "*x >= np && *x - np < nc && is_nat(b, *x - np)", "*x >= np && *x - np < nc && is_nat(b, *x)", "内部選択の番号に公開引数の数を足さない"],
+  ["ir_check.rs", "            if !check_user_guard(j, &es[idx.len()], ns, np, nc) {", "            if false {", "動的ドメインのあとの guard を確かめない"],
+  ["ir_check.rs", "            if a != con.action {", "            if false {", "遷移契約の操作を確かめない"],
+  ["ir_check.rs", "        || !distinct_exec(&ns.actions) || !distinct_exec(&ns.fields) {", "        || !distinct_exec(&ns.fields) {", "操作の名前の重複を確かめない"],
+  ["ir_check.rs", "            return Some(i);\n        }\n        i += 1;\n    }\n    proof {\n        lemma_index_of(s, x@, i as int);", "            return Some(0);\n        }\n        i += 1;\n    }\n    proof {\n        lemma_index_of(s, x@, i as int);", "名前の位置を常に0にする"],
+  ["ir_check.rs", "(Some(x), None) => inits.len() == 1 && check_top(x, &inits[0], ns, 0, 0),", "(Some(x), None) => inits.len() >= 1 && check_top(x, &inits[0], ns, 0, 0),", "initial の候補を1つに限らない"],
+  ["ir_check.rs", "Json::Int(n) => *n >= 0 && (*n as u128) == (x as u128),", "Json::Int(n) => (*n as u128) == (x as u128),", "負の数を添字として受け入れる"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -470,7 +480,12 @@ VERUS_CANARIES = [
   ["smodel.rs", "                lemma_ups_typed(before, ups@, out@, cx.states->Some_0@, su.var as int, tv, enums);", "lower_action の代入の型"],
   ["model_lower.rs", "    crate::model_wf::lemma_model_wf(m);", "lemma_model_types"],
   ["model_wf.rs", "        crate::canon::lemma_member_in(cv[i], t, enums);", "lemma_cx_tok の定数"],
-  ["lower_types.rs", "    lemma_mrows_typed(ms, rows, row, n, t, lt);", "lemma_map_rows_typed"]
+  ["lower_types.rs", "    lemma_mrows_typed(ms, rows, row, n, t, lt);", "lemma_map_rows_typed"],
+  ["ir_check.rs", "            lemma_doms_step(xs, i as int);", "domains のループ"],
+  ["ir_check.rs", "                lemma_index_of_bound(strs(ns.actions@), an@);", "check_contract の操作"],
+  ["ir_check.rs", "    Some(lower_model_map(sm, maps))", "lower_checked"],
+  ["ir_check.rs", "        assert(a@.subrange(0, a@.len() as int) =~= a@);", "copy_chars"],
+  ["ir.rs", "                vstd::std_specs::vec::axiom_vec_index_decreases(ms, i);", "lemma_get_dec"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)
