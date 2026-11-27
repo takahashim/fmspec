@@ -395,7 +395,7 @@ class TlcTest < Minitest::Test
       "exists_error_then_true" => { "exists" => { "name" => "x", "type" => { "bool" => {} },
                                                   "body" => { "ite" => [x, { "bool" => true }, zero_div] } } },
       "forall_first_error" => { "forall" => { "name" => "x", "type" => small,
-                                              "body" => { "ite" => [{ "eq" => [x, int(0)] }, zero_div, { "is_some" => [boom] }] } } },
+                                              "body" => { "ite" => [{ "eq" => [x, int(0)] }, zero_div, { "eq" => [boom, int(0)] }] } } },
       "forall_set_error_then_false" => { "forall" => { "name" => "x", "in" => set.(1, 0), "body" => picky.(x, int(0), int(1)) } },
       "eq_evaluates_both" => { "eq" => [{ "tuple" => [int(1), boom] }, { "tuple" => [int(0), int(0)] }] },
       "eq_options" => { "eq" => [{ "none" => small }, { "none" => small }] },

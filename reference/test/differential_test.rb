@@ -131,7 +131,7 @@ class DifferentialTest < Minitest::Test
       "exists_error_then_true" => { "exists" => { "name" => "x", "type" => { "bool" => {} },
                                                   "body" => { "ite" => [{ "local" => "x" }, { "bool" => true }, zero_div] } } },
       "forall_first_error" => { "forall" => { "name" => "x", "type" => small,
-                                              "body" => { "ite" => [{ "eq" => [{ "local" => "x" }, int.(0)] }, zero_div, { "is_some" => [boom] }] } } },
+                                              "body" => { "ite" => [{ "eq" => [{ "local" => "x" }, int.(0)] }, zero_div, { "eq" => [boom, int.(0)] }] } } },
       "forall_set_error_then_false" => { "forall" => { "name" => "x", "in" => set.(1, 0), "body" => picky.({ "local" => "x" }, int.(0), int.(1)) } },
       "eq_evaluates_both" => { "eq" => [{ "tuple" => [int.(1), boom] }, { "tuple" => [int.(0), int.(0)] }] },
       "let_is_eager" => { "let" => { "name" => "y", "value" => boom, "body" => { "bool" => true } } },
