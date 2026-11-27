@@ -2,6 +2,7 @@
 #
 #   rust   rake lint、nupur:check、test:rust、test:reference、test:differential
 #   ruby   rake compile、test:ruby（対応する Ruby の下限と開発版）
+#   tlc    rake test:tlc（TLA+ に変換したモデルを TLC で検査した結果との比較）
 #   rails  rake test:rails。PostgreSQL を立てて、分離レベル別のテストも skip させない
 #   verus  rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件）
 #   nupur  rake nupur:upstream、nupur:lint（Makiri の固定コミットと nupur_lints）
@@ -78,6 +79,27 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
       - run: gem install --no-document rake minitest json_schemer
       - run: rake test:ruby
+
+  tlc:
+    name: TLC (differential)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: gem install --no-document rake minitest
+      # tla2tools.jar は rakelib/tlc.rake の TLA2TOOLS_VERSION のリリースを取得し、SHA-256 を確かめる。
+      - run: rake test:tlc
 
   rails:
     name: fmspec-rails
