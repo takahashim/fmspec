@@ -59,6 +59,7 @@
 ## 結果
 
 - 手順1〜3：`crates/fmspec-core/src/ir.rs` に `Json`、`IrNames` と、関係 `ty_rel`、`ex_rel`、`ir_rel` を置いた。`crates/fmspec-core/src/ir_check.rs` に検査 `check_ty`、`check_ex`、`check_ir` と、確かめてから下ろす `lower_checked` を置き、真を返すなら関係が成り立つことを証明した。
+  - 式の関係は、演算子のキーとオペランドの並びの表 `op_form` と、それ以外の構文の規則 `form_rel` に分けた。型の関係は、型の種類ごとの1行の規則にした。どちらも `docs/ir.md` の表と1行ずつ突き合わせられる。
   - 再帰の関係の量化子は、関係の適用でなく要素（`xs@[i]`）を引き金にする。関係の適用を引き金にすると、燃料を減らした定義の中の項と一致せず、展開できない。
 - 手順5：`fmspec-ir` の `parse_value` は、組み立て（`build`）のあと `lower_checked` で下ろす。対応しなければ内部エラー「名前を解決したモデルがIRと対応しません」にする。`serde_json::Value` から `Json` への変換と名前の表の組み立ては `fmspec-ir/src/ir_json.rs` にある。
 - 手順6：例のモデル、ランダムに生成したIR（`tests/random_ir.rs`）、既存のテストがすべて通る。`ir_json.rs` の単体テストは、状態変数、演算子、リテラル、引数と内部選択、局所変数、動的ドメイン、名前の表、定義の有無を取り違えたモデルを拒否することを確かめる。

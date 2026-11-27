@@ -375,24 +375,6 @@ fn is_empty_obj(j: &Json) -> (r: bool)
     }
 }
 
-/// 長さ `n` の配列。
-fn ops_exec(j: &Json, n: usize) -> (r: Option<&Vec<Json>>)
-    ensures
-        match r {
-            Some(xs) => ops(*j, n as nat) == Some(xs@) && *j == Json::Arr(*xs),
-            None => ops(*j, n as nat) is None,
-        },
-{
-    match j {
-        Json::Arr(xs) => if xs.len() == n {
-            Some(xs)
-        } else {
-            None
-        },
-        _ => None,
-    }
-}
-
 // ---- 型 ----
 
 /// 型のJSON `j` が型 `t` を表すかを確かめる。
@@ -407,7 +389,6 @@ fn check_ty(j: &Json, ns: &IrNames, t: &SType) -> (r: bool)
     };
     proof {
         lemma_one_dec(*j);
-        lemma_get_dec(*b);
         lemma_arr_dec(*b);
         reveal_strlit("bool");
         reveal_strlit("int");
@@ -425,70 +406,19 @@ fn check_ty(j: &Json, ns: &IrNames, t: &SType) -> (r: bool)
         reveal_strlit("of");
     }
     match t {
-        SType::Bool => {
-            let r = eqk(k, "bool") && is_empty_obj(b);
-            proof { if r { assert(ty_rel(*j, *ns, *t)); } }
-            r
+        SType::Bool => eqk(k, "bool") && is_empty_obj(b),
+        SType::Int(lo, hi) => eqk(k, "int") && match (get_exec(b, "min"), get_exec(b, "max")) {
+            (Some(Json::Int(x)), Some(Json::Int(y))) => *x == *lo && *y == *hi,
+            _ => false,
         },
-        SType::Int(lo, hi) => {
-            if !eqk(k, "int") {
-                return false;
-            }
-            match (get_exec(b, "min"), get_exec(b, "max")) {
-                (Some(Json::Int(x)), Some(Json::Int(y))) => {
-                    let r = *x == *lo && *y == *hi;
-                    proof { if r { assert(ty_rel(*j, *ns, *t)); } }
-                    r
-                },
-                _ => false,
-            }
-        },
-        SType::Enum(id) => {
-            if !eqk(k, "enum") {
-                return false;
-            }
-            match str_exec(b) {
-                Some(n) => match index_of_exec(&ns.enums, n) {
-                    Some(i) => {
-                        proof { if i == *id { assert(ty_rel(*j, *ns, *t)); } }
-                        i == *id
-                    },
-                    None => false,
-                },
+        SType::Enum(id) => eqk(k, "enum") && match str_exec(b) {
+            Some(n) => match index_of_exec(&ns.enums, n) {
+                Some(i) => i == *id,
                 None => false,
-            }
+            },
+            None => false,
         },
-        SType::Tuple(ts) => {
-            if !eqk(k, "tuple") {
-                return false;
-            }
-            let xs = match arr_exec(b) {
-                Some(xs) => xs,
-                None => return false,
-            };
-            if xs.len() != ts.len() {
-                return false;
-            }
-            let mut i = 0;
-            while i < xs.len()
-                invariant
-                    i <= xs@.len(),
-                    xs@.len() == ts@.len(),
-                    arr(*b) == Some(xs@),
-                    one(*j) == Some((k@, *b)),
-                    k@ == "tuple"@,
-                    *t == SType::Tuple(*ts),
-                    forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*j => #[trigger] xs@[q]),
-                    forall|q: int| 0 <= q < i ==> ty_rel(#[trigger] xs@[q], *ns, ts@[q]),
-                decreases xs.len() - i,
-            {
-                if !check_ty(&xs[i], ns, &ts[i]) {
-                    return false;
-                }
-                i += 1;
-            }
-            true
-        },
+        SType::Tuple(ts) => eqk(k, "tuple") && check_tys(b, ts, ns),
         SType::Record(ids, ts) => {
             if !eqk(k, "record") {
                 return false;
@@ -523,66 +453,85 @@ fn check_ty(j: &Json, ns: &IrNames, t: &SType) -> (r: bool)
         },
         SType::Option(x) => eqk(k, "option") && check_ty(b, ns, x),
         SType::Set(x) => eqk(k, "set") && check_ty(b, ns, x),
-        SType::Map(x, y) => {
-            if !eqk(k, "map") {
-                return false;
-            }
-            match (present(b, "key"), present(b, "value")) {
-                (Some(kj), Some(vj)) => check_ty(kj, ns, x) && check_ty(vj, ns, y),
-                _ => false,
-            }
-        },
-        SType::List(x, max) => {
-            if !eqk(k, "list") {
-                return false;
-            }
-            match (present(b, "of"), get_exec(b, "max")) {
-                (Some(oj), Some(mj)) => check_ty(oj, ns, x) && is_nat(mj, *max),
-                _ => false,
-            }
-        },
-    }
-}
-
-fn check_field_ty(j: &Json, ns: &IrNames, id: usize, t: &SType) -> (r: bool)
-    ensures
-        r ==> field_ty_rel(*j, *ns, id, *t),
-    decreases j, 0nat,
-{
-    proof {
-        lemma_get_dec(*j);
-        reveal_strlit("name");
-        reveal_strlit("type");
-    }
-    if id >= ns.fields.len() {
-        return false;
-    }
-    match (get_exec(j, "name"), get_exec(j, "type")) {
-        (Some(nj), Some(tj)) => match str_exec(nj) {
-            Some(n) => chars_eq(n, &ns.fields[id]) && check_ty(tj, ns, t),
+        SType::Map(x, y) => eqk(k, "map") && check_ty_at(b, "key", ns, x) && check_ty_at(b, "value", ns, y),
+        SType::List(x, max) => eqk(k, "list") && check_ty_at(b, "of", ns, x) && match get_exec(b, "max") {
+            Some(m) => is_nat(m, *max),
             None => false,
         },
-        _ => false,
     }
 }
 
-fn check_ty_at(j: &Json, k: &str, ns: &IrNames, t: &SType) -> (r: bool)
+/// オブジェクト `b` のキー `k` の値が型 `t` を表すかを確かめる。
+fn check_ty_at(b: &Json, k: &str, ns: &IrNames, t: &SType) -> (r: bool)
     requires
         k.is_ascii(),
     ensures
-        r ==> ty_rel_at(*j, k@, *ns, *t),
+        r ==> ty_at(*b, k@, *ns, *t),
+    decreases b, 0nat,
 {
-    match get_exec(j, k) {
+    proof {
+        lemma_get_dec(*b);
+    }
+    match get_exec(b, k) {
         Some(x) => check_ty(x, ns, t),
         None => false,
     }
 }
 
+/// 配列 `b` の各要素が型の列 `ts` を表すかを確かめる。
+fn check_tys(b: &Json, ts: &Vec<SType>, ns: &IrNames) -> (r: bool)
+    ensures
+        r ==> tys_rel(*b, ts@, *ns),
+    decreases b, 0nat,
+{
+    let xs = match arr_exec(b) {
+        Some(xs) => xs,
+        None => return false,
+    };
+    if xs.len() != ts.len() {
+        return false;
+    }
+    proof {
+        lemma_arr_dec(*b);
+    }
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ts@.len(),
+            arr(*b) == Some(xs@),
+            forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
+            forall|q: int| 0 <= q < i ==> ty_rel(#[trigger] xs@[q], *ns, ts@[q]),
+        decreases xs.len() - i,
+    {
+        if !check_ty(&xs[i], ns, &ts[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn check_field_ty(j: &Json, ns: &IrNames, id: usize, t: &SType) -> (r: bool)
+    ensures
+        r ==> field_ty_rel(*j, *ns, id, *t),
+    decreases j, 1nat,
+{
+    proof {
+        reveal_strlit("name");
+        reveal_strlit("type");
+    }
+    id < ns.fields.len() && check_name(j, "name", &ns.fields[id]) && check_ty_at(j, "type", ns, t)
+}
 
 // ---- 式 ----
 
 pub open spec fn ectx(np: usize, nc: usize) -> ECtx {
     ECtx { np: np as nat, nc: nc as nat }
+}
+
+pub open spec fn derefs(s: Seq<&TExpr>) -> Seq<TExpr> {
+    s.map_values(|x: &TExpr| *x)
 }
 
 proof fn lemma_strs_push(v: Seq<Vec<char>>, x: Vec<char>)
@@ -592,12 +541,78 @@ proof fn lemma_strs_push(v: Seq<Vec<char>>, x: Vec<char>)
     assert(strs(v.push(x)) =~= strs(v).push(x@));
 }
 
-/// 二項演算子のキー。`Eq` と `Ne` は `TExpr::Bin` に現れないので、どのキーとも一致しない空の文字列にする。
-fn bin_key(op: BinOp) -> (r: &'static str)
+fn r1(x: &TExpr) -> (r: Vec<&TExpr>)
     ensures
-        r.is_ascii(),
-        !(op is Eq || op is Ne) ==> bin_op(r@) == Some(op),
-        r@.len() > 0 ==> !(op is Eq || op is Ne),
+        derefs(r@) == seq![*x],
+{
+    let mut v = Vec::new();
+    v.push(x);
+    proof {
+        assert(derefs(v@) =~= seq![*x]);
+    }
+    v
+}
+
+fn r2<'a>(x: &'a TExpr, y: &'a TExpr) -> (r: Vec<&'a TExpr>)
+    ensures
+        derefs(r@) == seq![*x, *y],
+{
+    let mut v = Vec::new();
+    v.push(x);
+    v.push(y);
+    proof {
+        assert(derefs(v@) =~= seq![*x, *y]);
+    }
+    v
+}
+
+fn r3<'a>(x: &'a TExpr, y: &'a TExpr, z: &'a TExpr) -> (r: Vec<&'a TExpr>)
+    ensures
+        derefs(r@) == seq![*x, *y, *z],
+{
+    let mut v = Vec::new();
+    v.push(x);
+    v.push(y);
+    v.push(z);
+    proof {
+        assert(derefs(v@) =~= seq![*x, *y, *z]);
+    }
+    v
+}
+
+fn rs(es: &Vec<TExpr>) -> (r: Vec<&TExpr>)
+    ensures
+        derefs(r@) == es@,
+{
+    let mut v = Vec::new();
+    let mut i = 0;
+    while i < es.len()
+        invariant
+            i <= es@.len(),
+            derefs(v@) == es@.subrange(0, i as int),
+        decreases es.len() - i,
+    {
+        let ghost v0 = v@;
+        v.push(&es[i]);
+        proof {
+            assert(derefs(v@) =~= derefs(v0).push(es@[i as int]));
+            assert(es@.subrange(0, i + 1) =~= es@.subrange(0, i as int).push(es@[i as int]));
+        }
+        i += 1;
+    }
+    proof {
+        assert(es@.subrange(0, es@.len() as int) =~= es@);
+    }
+    v
+}
+
+/// 演算子の表 [`op_form`] の実装。
+fn op_form_exec(e: &TExpr) -> (r: Option<(&'static str, Vec<&TExpr>)>)
+    ensures
+        match r {
+            Some((k, es)) => k.is_ascii() && op_form(*e) == Some((k@, derefs(es@))),
+            None => op_form(*e) is None,
+        },
 {
     proof {
         reveal_strlit("add");
@@ -609,38 +624,86 @@ fn bin_key(op: BinOp) -> (r: &'static str)
         reveal_strlit("le");
         reveal_strlit("gt");
         reveal_strlit("ge");
-        reveal_strlit("");
-    }
-    match op {
-        BinOp::Add => "add",
-        BinOp::Sub => "sub",
-        BinOp::Mul => "mul",
-        BinOp::Div => "div",
-        BinOp::Mod => "mod",
-        BinOp::Lt => "lt",
-        BinOp::Le => "le",
-        BinOp::Gt => "gt",
-        BinOp::Ge => "ge",
-        _ => "",
-    }
-}
-
-fn set_key(op: &SetOp) -> (r: &'static str)
-    ensures
-        r.is_ascii(),
-        set_op(r@) == Some(*op),
-{
-    proof {
+        reveal_strlit("eq");
+        reveal_strlit("ne");
+        reveal_strlit("not");
+        reveal_strlit("all");
+        reveal_strlit("any");
+        reveal_strlit("implies");
+        reveal_strlit("ite");
+        reveal_strlit("tuple");
+        reveal_strlit("some");
+        reveal_strlit("is_some");
+        reveal_strlit("is_none");
+        reveal_strlit("unwrap");
+        reveal_strlit("contains");
+        reveal_strlit("insert");
+        reveal_strlit("remove");
         reveal_strlit("union");
         reveal_strlit("intersection");
         reveal_strlit("difference");
         reveal_strlit("subset");
+        reveal_strlit("size");
+        reveal_strlit("is_empty");
+        reveal_strlit("has_key");
+        reveal_strlit("get");
+        reveal_strlit("put");
+        reveal_strlit("delete");
+        reveal_strlit("keys");
+        reveal_strlit("at");
+        reveal_strlit("first");
+        reveal_strlit("last");
+        reveal_strlit("push");
+        reveal_strlit("pop");
+        reveal_strlit("shift");
     }
-    match op {
-        SetOp::Union => "union",
-        SetOp::Intersection => "intersection",
-        SetOp::Difference => "difference",
-        SetOp::Subset => "subset",
+    match e {
+        TExpr::Bin(op, x, y) => match op {
+            BinOp::Add => Some(("add", r2(x, y))),
+            BinOp::Sub => Some(("sub", r2(x, y))),
+            BinOp::Mul => Some(("mul", r2(x, y))),
+            BinOp::Div => Some(("div", r2(x, y))),
+            BinOp::Mod => Some(("mod", r2(x, y))),
+            BinOp::Lt => Some(("lt", r2(x, y))),
+            BinOp::Le => Some(("le", r2(x, y))),
+            BinOp::Gt => Some(("gt", r2(x, y))),
+            BinOp::Ge => Some(("ge", r2(x, y))),
+            _ => None,
+        },
+        TExpr::Eq(pos, x, y) => Some((if *pos { "eq" } else { "ne" }, r2(x, y))),
+        TExpr::Not(x) => Some(("not", r1(x))),
+        TExpr::Fold(all, es) => Some((if *all { "all" } else { "any" }, rs(es))),
+        TExpr::Implies(x, y) => Some(("implies", r2(x, y))),
+        TExpr::Ite(p, x, y) => Some(("ite", r3(p, x, y))),
+        TExpr::Tuple(es) => Some(("tuple", rs(es))),
+        TExpr::Some(x) => Some(("some", r1(x))),
+        TExpr::IsSome(x) => Some(("is_some", r1(x))),
+        TExpr::IsNone(x) => Some(("is_none", r1(x))),
+        TExpr::Unwrap(x) => Some(("unwrap", r1(x))),
+        TExpr::SetContains(_, x, y) => Some(("contains", r2(x, y))),
+        TExpr::ListContains(x, y) => Some(("contains", r2(x, y))),
+        TExpr::Insert(_, x, y) => Some(("insert", r2(x, y))),
+        TExpr::Remove(_, x, y) => Some(("remove", r2(x, y))),
+        TExpr::SetBin(op, x, y) => match op {
+            SetOp::Union => Some(("union", r2(x, y))),
+            SetOp::Intersection => Some(("intersection", r2(x, y))),
+            SetOp::Difference => Some(("difference", r2(x, y))),
+            SetOp::Subset => Some(("subset", r2(x, y))),
+        },
+        TExpr::Size(x) => Some(("size", r1(x))),
+        TExpr::IsEmpty(x) => Some(("is_empty", r1(x))),
+        TExpr::HasKey(_, x, y) => Some(("has_key", r2(x, y))),
+        TExpr::Get(_, x, y) => Some(("get", r2(x, y))),
+        TExpr::Put(_, _, x, y, z) => Some(("put", r3(x, y, z))),
+        TExpr::Delete(_, x, y) => Some(("delete", r2(x, y))),
+        TExpr::Keys(x) => Some(("keys", r1(x))),
+        TExpr::At(x, y) => Some(("at", r2(x, y))),
+        TExpr::First(x) => Some(("first", r1(x))),
+        TExpr::Last(x) => Some(("last", r1(x))),
+        TExpr::Push(_, _, x, y) => Some(("push", r2(x, y))),
+        TExpr::Pop(x) => Some(("pop", r1(x))),
+        TExpr::Shift(x) => Some(("shift", r1(x))),
+        _ => None,
     }
 }
 
@@ -649,7 +712,7 @@ pub fn check_ex(j: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mu
     ensures
         final(sc)@ == old(sc)@,
         r ==> ex_rel(*j, *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases j, 2nat,
+    decreases j, 4nat,
 {
     let (k, b) = match one_exec(j) {
         Some(x) => x,
@@ -658,9 +721,87 @@ pub fn check_ex(j: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mu
     proof {
         lemma_one_dec(*j);
     }
+    match op_form_exec(e) {
+        Some((key, es)) => eqk(k, key) && check_args(b, &es, ns, np, nc, sc),
+        None => check_form(k, b, e, ns, np, nc, sc),
+    }
+}
+
+/// 配列 `b` の各要素が、式の列 `es` を表すかを確かめる。
+fn check_args(b: &Json, es: &Vec<&TExpr>, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
+    ensures
+        final(sc)@ == old(sc)@,
+        r ==> exs_rel(*b, derefs(es@), *ns, ectx(np, nc), strs(old(sc)@)),
+    decreases b, 0nat,
+{
+    let xs = match arr_exec(b) {
+        Some(xs) => xs,
+        None => return false,
+    };
+    if xs.len() != es.len() {
+        return false;
+    }
+    proof {
+        lemma_arr_dec(*b);
+    }
+    let ghost s0 = sc@;
+    let mut i = 0;
+    while i < es.len()
+        invariant
+            i <= es@.len(),
+            xs@.len() == es@.len(),
+            arr(*b) == Some(xs@),
+            sc@ == s0,
+            s0 == old(sc)@,
+            forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
+            forall|q: int| 0 <= q < i ==> ex_rel(#[trigger] xs@[q], derefs(es@)[q], *ns, ectx(np, nc), strs(s0)),
+        decreases es.len() - i,
+    {
+        if !check_ex(&xs[i], es[i], ns, np, nc, sc) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// 配列 `b` の各要素が、式の列 `es` を表すかを確かめる。
+fn check_exs(b: &Json, es: &Vec<TExpr>, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
+    ensures
+        final(sc)@ == old(sc)@,
+        r ==> exs_rel(*b, es@, *ns, ectx(np, nc), strs(old(sc)@)),
+    decreases b, 1nat,
+{
+    check_args(b, &rs(es), ns, np, nc, sc)
+}
+
+/// オブジェクト `b` のキー `k` の値が、式 `e` を表すかを確かめる。
+fn check_ex_at(b: &Json, k: &str, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
+    requires
+        k.is_ascii(),
+    ensures
+        final(sc)@ == old(sc)@,
+        r ==> ex_at(*b, k@, *e, *ns, ectx(np, nc), strs(old(sc)@)),
+    decreases b, 0nat,
+{
+    proof {
+        lemma_get_dec(*b);
+    }
+    match get_exec(b, k) {
+        Some(x) => check_ex(x, e, ns, np, nc, sc),
+        None => false,
+    }
+}
+
+/// オペランドの配列でない式を確かめる（[`form_rel`]）。
+fn check_form(k: &Vec<char>, b: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
+    ensures
+        final(sc)@ == old(sc)@,
+        r ==> form_rel(k@, *b, *e, *ns, ectx(np, nc), strs(old(sc)@)),
+    decreases b, 3nat,
+{
     match e {
-        TExpr::Lit(_) | TExpr::Var(_) | TExpr::Next(_) | TExpr::Arg(_) | TExpr::Out | TExpr::Local(_) | TExpr::Const(_) => check_leaf(
-            j,
+        TExpr::Lit(_) | TExpr::Var(_) | TExpr::Next(_) | TExpr::Arg(_) | TExpr::Out | TExpr::Local(_) | TExpr::Const(_) => check_ref(
             k,
             b,
             e,
@@ -669,34 +810,15 @@ pub fn check_ex(j: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mu
             nc,
             sc,
         ),
-        TExpr::Bin(..) | TExpr::Eq(..) | TExpr::Not(..) | TExpr::Fold(..) | TExpr::Implies(..) | TExpr::Ite(..) | TExpr::Let(
-            ..,
-        ) | TExpr::Quant(..) => check_core(j, k, b, e, ns, np, nc, sc),
-        TExpr::Tuple(..) | TExpr::Record(..) | TExpr::Nth(..) | TExpr::Field(..) | TExpr::None(..) | TExpr::Some(..)
-        | TExpr::IsSome(..) | TExpr::IsNone(..) | TExpr::Unwrap(..) => check_struct(j, k, b, e, ns, np, nc, sc),
-        TExpr::SetLit(..) | TExpr::MapLit(..) | TExpr::ListLit(..) => check_lit(j, k, b, e, ns, np, nc, sc),
-        _ => check_coll(j, k, b, e, ns, np, nc, sc),
+        TExpr::Let(..) | TExpr::Quant(..) => check_bind(k, b, e, ns, np, nc, sc),
+        _ => check_shape(k, b, e, ns, np, nc, sc),
     }
 }
 
 /// リテラルと参照。
-#[allow(unused_variables)]
-fn check_leaf(
-    j: &Json,
-    k: &Vec<char>,
-    b: &Json,
-    e: &TExpr,
-    ns: &IrNames,
-    np: usize,
-    nc: usize,
-    sc: &mut Vec<Vec<char>>,
-) -> (r: bool)
-    requires
-        one(*j) == Some((k@, *b)),
+fn check_ref(k: &Vec<char>, b: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &Vec<Vec<char>>) -> (r: bool)
     ensures
-        final(sc)@ == old(sc)@,
-        r ==> ex_rel(*j, *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 1nat,
+        r ==> form_rel(k@, *b, *e, *ns, ectx(np, nc), strs(sc@)),
 {
     proof {
         reveal_strlit("int");
@@ -725,16 +847,14 @@ fn check_leaf(
             if !eqk(k, "enum") || *id >= ns.variants.len() {
                 return false;
             }
-            let (tj, vj) = match (get_exec(b, "type"), get_exec(b, "variant")) {
-                (Some(x), Some(y)) => (x, y),
-                _ => return false,
-            };
-            let (tn, vn) = match (str_exec(tj), str_exec(vj)) {
-                (Some(x), Some(y)) => (x, y),
-                _ => return false,
-            };
-            match (index_of_exec(&ns.enums, tn), index_of_exec(&ns.variants[*id], vn)) {
-                (Some(a), Some(q)) => a == *id && *v >= 0 && (*v as u128) == (q as u128),
+            match (get_exec(b, "type"), get_exec(b, "variant")) {
+                (Some(Json::Str(tn)), Some(Json::Str(vn))) => match (
+                    index_of_exec(&ns.enums, tn),
+                    index_of_exec(&ns.variants[*id], vn),
+                ) {
+                    (Some(a), Some(q)) => a == *id && *v >= 0 && (*v as u128) == (q as u128),
+                    _ => false,
+                },
                 _ => false,
             }
         },
@@ -750,255 +870,71 @@ fn check_leaf(
             }
         },
         TExpr::Out => eqk(k, "output") && is_empty_obj(b),
-        TExpr::Local(i) => {
-            if !eqk(k, "local") {
-                return false;
-            }
-            match str_exec(b) {
-                Some(n) => match last_of_exec(sc, n) {
-                    Some(q) => q == *i,
-                    None => false,
-                },
+        TExpr::Local(i) => eqk(k, "local") && match str_exec(b) {
+            Some(n) => match last_of_exec(sc, n) {
+                Some(q) => q == *i,
                 None => false,
-            }
+            },
+            None => false,
         },
-        TExpr::Const(i) => {
-            if !eqk(k, "const") {
-                return false;
-            }
-            match str_exec(b) {
-                Some(n) => match index_of_exec(&ns.consts, n) {
-                    Some(q) => q == *i,
-                    None => false,
-                },
+        TExpr::Const(i) => eqk(k, "const") && match str_exec(b) {
+            Some(n) => match index_of_exec(&ns.consts, n) {
+                Some(q) => q == *i,
                 None => false,
-            }
+            },
+            None => false,
         },
         _ => false,
     }
 }
 
-/// 長さ `n` の配列 `b` の各要素が、式の列 `es` を表す（オペランド）。
-fn check_args(b: &Json, es: &[&TExpr], ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
-    ensures
-        final(sc)@ == old(sc)@,
-        r ==> (ops(*b, es@.len()) matches Some(xs) && forall|i: int|
-            0 <= i < es@.len() ==> ex_rel(#[trigger] xs[i], *es@[i], *ns, ectx(np, nc), strs(old(sc)@))),
-    decreases b, 0nat,
-{
-    let xs = match ops_exec(b, es.len()) {
-        Some(xs) => xs,
-        None => return false,
-    };
-    proof {
-        lemma_arr_dec(*b);
-    }
-    let ghost s0 = sc@;
-    let mut i = 0;
-    while i < es.len()
-        invariant
-            i <= es@.len(),
-            xs@.len() == es@.len(),
-            *b == Json::Arr(*xs),
-            ops(*b, es@.len()) == Some(xs@),
-            sc@ == s0,
-            s0 == old(sc)@,
-            forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
-            forall|q: int| 0 <= q < i ==> ex_rel(#[trigger] xs@[q], *es@[q], *ns, ectx(np, nc), strs(s0)),
-        decreases es.len() - i,
-    {
-        if !check_ex(&xs[i], es[i], ns, np, nc, sc) {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// 配列 `b` の各要素が、式の列 `es` を表す。
-fn check_exs(b: &Json, es: &Vec<TExpr>, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
-    ensures
-        final(sc)@ == old(sc)@,
-        r ==> exs_rel(*b, es@, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 0nat,
-{
-    let xs = match arr_exec(b) {
-        Some(xs) => xs,
-        None => return false,
-    };
-    if xs.len() != es.len() {
-        return false;
-    }
-    proof {
-        lemma_arr_dec(*b);
-    }
-    let ghost s0 = sc@;
-    let mut i = 0;
-    while i < es.len()
-        invariant
-            i <= es@.len(),
-            xs@.len() == es@.len(),
-            *b == Json::Arr(*xs),
-            sc@ == s0,
-            s0 == old(sc)@,
-            forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
-            forall|q: int| 0 <= q < i ==> ex_rel(#[trigger] xs@[q], es@[q], *ns, ectx(np, nc), strs(s0)),
-        decreases es.len() - i,
-    {
-        if !check_ex(&xs[i], &es[i], ns, np, nc, sc) {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// オブジェクト `b` のキー `key` の値が、式 `e` を表す。
-fn check_key(b: &Json, key: &str, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
-    requires
-        key.is_ascii(),
-    ensures
-        final(sc)@ == old(sc)@,
-        r ==> get(*b, key@) is Some && ex_rel(at(*b, key@), *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 0nat,
-{
-    proof {
-        lemma_get_dec(*b);
-    }
-    match get_exec(b, key) {
-        Some(x) => check_ex(x, e, ns, np, nc, sc),
-        None => false,
-    }
-}
-
-/// 演算子、`let`、量化。
+/// `let` と量化。本体は名前を束縛して確かめる。
 #[allow(unused_variables)]
-fn check_core(
-    j: &Json,
-    k: &Vec<char>,
-    b: &Json,
-    e: &TExpr,
-    ns: &IrNames,
-    np: usize,
-    nc: usize,
-    sc: &mut Vec<Vec<char>>,
-) -> (r: bool)
-    requires
-        one(*j) == Some((k@, *b)),
+fn check_bind(k: &Vec<char>, b: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
     ensures
         final(sc)@ == old(sc)@,
-        r ==> ex_rel(*j, *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 1nat,
+        r ==> form_rel(k@, *b, *e, *ns, ectx(np, nc), strs(old(sc)@)),
+    decreases b, 2nat,
 {
     proof {
-        lemma_get_dec(*b);
-        reveal_strlit("eq");
-        reveal_strlit("ne");
-        reveal_strlit("not");
-        reveal_strlit("all");
-        reveal_strlit("any");
-        reveal_strlit("implies");
-        reveal_strlit("ite");
         reveal_strlit("let");
         reveal_strlit("forall");
         reveal_strlit("exists");
         reveal_strlit("name");
         reveal_strlit("value");
         reveal_strlit("body");
-        reveal_strlit("int");
-        reveal_strlit("bool");
-        reveal_strlit("enum");
-        reveal_strlit("var");
-        reveal_strlit("next");
-        reveal_strlit("param");
-        reveal_strlit("choice");
-        reveal_strlit("output");
-        reveal_strlit("local");
-        reveal_strlit("const");
     }
-    let ghost s0 = strs(sc@);
-    match e {
-        TExpr::Bin(op, x, y) => {
-            let key = bin_key(*op);
-            if key.unicode_len() == 0 || !eqk(k, key) {
-                return false;
-            }
-            check_args(b, &[&**x, &**y], ns, np, nc, sc)
-        },
-        TExpr::Eq(pos, x, y) => {
-            if !eqk(k, if *pos { "eq" } else { "ne" }) {
-                return false;
-            }
-            check_args(b, &[&**x, &**y], ns, np, nc, sc)
-        },
-        TExpr::Not(x) => eqk(k, "not") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::Fold(all, es) => eqk(k, if *all { "all" } else { "any" }) && check_exs(b, es, ns, np, nc, sc),
-        TExpr::Implies(x, y) => eqk(k, "implies") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Ite(p, x, y) => eqk(k, "ite") && check_args(b, &[&**p, &**x, &**y], ns, np, nc, sc),
+    let n = match get_exec(b, "name") {
+        Some(Json::Str(n)) => n,
+        _ => return false,
+    };
+    let body = match e {
         TExpr::Let(x, y) => {
-            if !eqk(k, "let") {
+            if !eqk(k, "let") || !check_ex_at(b, "value", x, ns, np, nc, sc) {
                 return false;
             }
-            let n = match get_exec(b, "name") {
-                Some(nj) => match str_exec(nj) {
-                    Some(n) => n,
-                    None => return false,
-                },
-                None => return false,
-            };
-            if !check_key(b, "value", x, ns, np, nc, sc) {
-                return false;
-            }
-            let bj = match get_exec(b, "body") {
-                Some(bj) => bj,
-                None => return false,
-            };
-            let ghost v0 = sc@;
-            sc.push(copy_chars(n));
-            proof {
-                lemma_strs_push(v0, sc@.last());
-                assert(sc@ == v0.push(sc@.last()));
-            }
-            let ok = check_ex(bj, y, ns, np, nc, sc);
-            sc.pop();
-            proof {
-                assert(sc@ =~= v0);
-            }
-            ok
+            y
         },
         TExpr::Quant(all, over, y) => {
-            if !eqk(k, if *all { "forall" } else { "exists" }) {
+            if !eqk(k, if *all { "forall" } else { "exists" }) || !check_over(b, over, ns, np, nc, sc) {
                 return false;
             }
-            let n = match get_exec(b, "name") {
-                Some(nj) => match str_exec(nj) {
-                    Some(n) => n,
-                    None => return false,
-                },
-                None => return false,
-            };
-            if !check_over(b, over, ns, np, nc, sc) {
-                return false;
-            }
-            let bj = match get_exec(b, "body") {
-                Some(bj) => bj,
-                None => return false,
-            };
-            let ghost v0 = sc@;
-            sc.push(copy_chars(n));
-            proof {
-                lemma_strs_push(v0, sc@.last());
-                assert(sc@ == v0.push(sc@.last()));
-            }
-            let ok = check_ex(bj, y, ns, np, nc, sc);
-            sc.pop();
-            proof {
-                assert(sc@ =~= v0);
-            }
-            ok
+            y
         },
-        _ => false,
+        _ => return false,
+    };
+    let ghost v0 = sc@;
+    sc.push(copy_chars(n));
+    proof {
+        lemma_strs_push(v0, sc@.last());
+        assert(sc@ == v0.push(sc@.last()));
     }
+    let ok = check_ex_at(b, "body", body, ns, np, nc, sc);
+    sc.pop();
+    proof {
+        assert(sc@ =~= v0);
+    }
+    ok
 }
 
 /// 量化のたどる値。
@@ -1006,66 +942,46 @@ fn check_over(b: &Json, over: &Over, ns: &IrNames, np: usize, nc: usize, sc: &mu
     ensures
         final(sc)@ == old(sc)@,
         r ==> over_rel(*b, *over, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 0nat,
+    decreases b, 1nat,
 {
     proof {
-        lemma_get_dec(*b);
         reveal_strlit("in");
         reveal_strlit("type");
     }
-    match (get_exec(b, "in"), get_exec(b, "type")) {
-        (Some(x), None) => match over {
-            Over::Set(_, y) => check_ex(x, y, ns, np, nc, sc),
-            Over::Map(_, y) => check_ex(x, y, ns, np, nc, sc),
-            Over::List(y) => check_ex(x, y, ns, np, nc, sc),
-            Over::Type(_) => false,
-        },
-        (None, Some(t)) => match over {
-            Over::Type(st) => check_ty(t, ns, st),
-            _ => false,
-        },
-        _ => false,
+    match over {
+        Over::Set(_, x) => get_exec(b, "type").is_none() && check_ex_at(b, "in", x, ns, np, nc, sc),
+        Over::Map(_, x) => get_exec(b, "type").is_none() && check_ex_at(b, "in", x, ns, np, nc, sc),
+        Over::List(x) => get_exec(b, "type").is_none() && check_ex_at(b, "in", x, ns, np, nc, sc),
+        Over::Type(t) => get_exec(b, "in").is_none() && check_ty_at(b, "type", ns, t),
     }
 }
 
-/// Tuple、Record、Option。
-#[allow(unused_variables)]
-fn check_struct(
-    j: &Json,
-    k: &Vec<char>,
-    b: &Json,
-    e: &TExpr,
-    ns: &IrNames,
-    np: usize,
-    nc: usize,
-    sc: &mut Vec<Vec<char>>,
-) -> (r: bool)
-    requires
-        one(*j) == Some((k@, *b)),
+/// Record、`nth`、`field`、`none`、Set・Map・List のリテラル。
+fn check_shape(k: &Vec<char>, b: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mut Vec<Vec<char>>) -> (r: bool)
     ensures
         final(sc)@ == old(sc)@,
-        r ==> ex_rel(*j, *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 1nat,
+        r ==> form_rel(k@, *b, *e, *ns, ectx(np, nc), strs(old(sc)@)),
+    decreases b, 2nat,
 {
     proof {
         lemma_get_dec(*b);
         lemma_arr_dec(*b);
-        reveal_strlit("tuple");
         reveal_strlit("record");
         reveal_strlit("nth");
         reveal_strlit("field");
         reveal_strlit("none");
-        reveal_strlit("some");
-        reveal_strlit("is_some");
-        reveal_strlit("is_none");
-        reveal_strlit("unwrap");
+        reveal_strlit("set");
+        reveal_strlit("map");
+        reveal_strlit("list");
         reveal_strlit("of");
         reveal_strlit("index");
         reveal_strlit("name");
-        reveal_strlit("expr");
+        reveal_strlit("key");
+        reveal_strlit("value");
+        reveal_strlit("items");
+        reveal_strlit("max");
     }
     match e {
-        TExpr::Tuple(es) => eqk(k, "tuple") && check_exs(b, es, ns, np, nc, sc),
         TExpr::Record(ids, es) => {
             if !eqk(k, "record") {
                 return false;
@@ -1087,7 +1003,6 @@ fn check_struct(
                     arr(*b) == Some(xs@),
                     sc@ == s0,
                     s0 == old(sc)@,
-            s0 == old(sc)@,
                     forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
                     forall|q: int| 0 <= q < i ==> field_rel(#[trigger] xs@[q], ids@[q], es@[q], *ns, ectx(np, nc), strs(s0)),
                 decreases xs.len() - i,
@@ -1099,32 +1014,68 @@ fn check_struct(
             }
             true
         },
-        TExpr::Nth(x, idx) => {
-            if !eqk(k, "nth") {
-                return false;
-            }
-            match get_exec(b, "index") {
-                Some(ij) => is_nat(ij, *idx) && check_key(b, "of", x, ns, np, nc, sc),
-                None => false,
-            }
+        TExpr::Nth(x, idx) => eqk(k, "nth") && match get_exec(b, "index") {
+            Some(ij) => is_nat(ij, *idx) && check_ex_at(b, "of", x, ns, np, nc, sc),
+            None => false,
         },
-        TExpr::Field(x, id, _) => {
-            if !eqk(k, "field") || *id >= ns.fields.len() {
-                return false;
-            }
-            match get_exec(b, "name") {
-                Some(nj) => match str_exec(nj) {
-                    Some(n) => chars_eq(&ns.fields[*id], n) && check_key(b, "of", x, ns, np, nc, sc),
-                    None => false,
-                },
-                None => false,
-            }
-        },
+        TExpr::Field(x, id, _) => eqk(k, "field") && *id < ns.fields.len() && check_name(b, "name", &ns.fields[*id])
+            && check_ex_at(b, "of", x, ns, np, nc, sc),
         TExpr::None(t) => eqk(k, "none") && check_ty(b, ns, t),
-        TExpr::Some(x) => eqk(k, "some") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::IsSome(x) => eqk(k, "is_some") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::IsNone(x) => eqk(k, "is_none") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::Unwrap(x) => eqk(k, "unwrap") && check_args(b, &[&**x], ns, np, nc, sc),
+        TExpr::SetLit(t, es) => eqk(k, "set") && check_ty_at(b, "of", ns, t) && match get_exec(b, "items") {
+            Some(itj) => check_exs(itj, es, ns, np, nc, sc),
+            None => false,
+        },
+        TExpr::ListLit(t, max, es) => eqk(k, "list") && check_ty_at(b, "of", ns, t) && match (
+            get_exec(b, "max"),
+            get_exec(b, "items"),
+        ) {
+            (Some(mj), Some(itj)) => is_nat(mj, *max) && check_exs(itj, es, ns, np, nc, sc),
+            _ => false,
+        },
+        TExpr::MapLit(kt, vt, items) => {
+            if !eqk(k, "map") || !check_ty_at(b, "key", ns, kt) || !check_ty_at(b, "value", ns, vt) {
+                return false;
+            }
+            let itj = match get_exec(b, "items") {
+                Some(x) => x,
+                None => return false,
+            };
+            let xs = match arr_exec(itj) {
+                Some(xs) => xs,
+                None => return false,
+            };
+            if xs.len() != items.len() {
+                return false;
+            }
+            proof {
+                lemma_arr_dec(*itj);
+                assert forall|q: int| 0 <= q < xs@.len() implies decreases_to!(*b => #[trigger] xs@[q]) by {
+                    assert(decreases_to!(*itj => xs@[q]));
+                }
+            }
+            let ghost s0 = sc@;
+            let mut i = 0;
+            while i < xs.len()
+                invariant
+                    i <= xs@.len(),
+                    xs@.len() == items@.len(),
+                    arr(*itj) == Some(xs@),
+                    sc@ == s0,
+                    s0 == old(sc)@,
+                    forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
+                    forall|q: int|
+                        0 <= q < i ==> exs_rel(#[trigger] xs@[q], seq![items@[q].key, items@[q].value], *ns, ectx(np, nc), strs(s0)),
+                decreases xs.len() - i,
+            {
+                let it = &items[i];
+                let pair = r2(&it.key, &it.value);
+                if !check_args(&xs[i], &pair, ns, np, nc, sc) {
+                    return false;
+                }
+                i += 1;
+            }
+            true
+        },
         _ => false,
     }
 }
@@ -1140,167 +1091,8 @@ fn check_field(j: &Json, id: usize, e: &TExpr, ns: &IrNames, np: usize, nc: usiz
         reveal_strlit("name");
         reveal_strlit("expr");
     }
-    if id >= ns.fields.len() {
-        return false;
-    }
-    match get_exec(j, "name") {
-        Some(nj) => match str_exec(nj) {
-            Some(n) => chars_eq(n, &ns.fields[id]) && check_key(j, "expr", e, ns, np, nc, sc),
-            None => false,
-        },
-        None => false,
-    }
+    id < ns.fields.len() && check_name(j, "name", &ns.fields[id]) && check_ex_at(j, "expr", e, ns, np, nc, sc)
 }
-
-/// Set、Map、Listのリテラル。
-#[allow(unused_variables)]
-fn check_lit(
-    j: &Json,
-    k: &Vec<char>,
-    b: &Json,
-    e: &TExpr,
-    ns: &IrNames,
-    np: usize,
-    nc: usize,
-    sc: &mut Vec<Vec<char>>,
-) -> (r: bool)
-    requires
-        one(*j) == Some((k@, *b)),
-    ensures
-        final(sc)@ == old(sc)@,
-        r ==> ex_rel(*j, *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 1nat,
-{
-    proof {
-        lemma_get_dec(*b);
-        reveal_strlit("set");
-        reveal_strlit("map");
-        reveal_strlit("list");
-        reveal_strlit("of");
-        reveal_strlit("key");
-        reveal_strlit("value");
-        reveal_strlit("items");
-        reveal_strlit("max");
-    }
-    let itj = match get_exec(b, "items") {
-        Some(x) => x,
-        None => return false,
-    };
-    proof {
-        lemma_arr_dec(*itj);
-    }
-    match e {
-        TExpr::SetLit(t, es) => eqk(k, "set") && check_ty_at(b, "of", ns, t) && check_exs(itj, es, ns, np, nc, sc),
-        TExpr::ListLit(t, max, es) => {
-            if !eqk(k, "list") || !check_ty_at(b, "of", ns, t) {
-                return false;
-            }
-            match get_exec(b, "max") {
-                Some(mj) => is_nat(mj, *max) && check_exs(itj, es, ns, np, nc, sc),
-                None => false,
-            }
-        },
-        TExpr::MapLit(kt, vt, items) => {
-            if !eqk(k, "map") || !check_ty_at(b, "key", ns, kt) || !check_ty_at(b, "value", ns, vt) {
-                return false;
-            }
-            let xs = match arr_exec(itj) {
-                Some(xs) => xs,
-                None => return false,
-            };
-            if xs.len() != items.len() {
-                return false;
-            }
-            proof {
-                assert forall|q: int| 0 <= q < xs@.len() implies decreases_to!(*b => #[trigger] xs@[q]) by {
-                    assert(decreases_to!(*itj => xs@[q]));
-                }
-            }
-            let ghost s0 = sc@;
-            let mut i = 0;
-            while i < xs.len()
-                invariant
-                    i <= xs@.len(),
-                    xs@.len() == items@.len(),
-                    arr(*itj) == Some(xs@),
-                    sc@ == s0,
-                    s0 == old(sc)@,
-            s0 == old(sc)@,
-                    forall|q: int| 0 <= q < xs@.len() ==> decreases_to!(*b => #[trigger] xs@[q]),
-                    forall|q: int| 0 <= q < i ==> item_rel(#[trigger] xs@[q], items@[q], *ns, ectx(np, nc), strs(s0)),
-                decreases xs.len() - i,
-            {
-                if !check_args(&xs[i], &[&items[i].key, &items[i].value], ns, np, nc, sc) {
-                    return false;
-                }
-                i += 1;
-            }
-            true
-        },
-        _ => false,
-    }
-}
-
-/// Set、Map、Listの演算。
-#[allow(unused_variables)]
-fn check_coll(
-    j: &Json,
-    k: &Vec<char>,
-    b: &Json,
-    e: &TExpr,
-    ns: &IrNames,
-    np: usize,
-    nc: usize,
-    sc: &mut Vec<Vec<char>>,
-) -> (r: bool)
-    requires
-        one(*j) == Some((k@, *b)),
-    ensures
-        final(sc)@ == old(sc)@,
-        r ==> ex_rel(*j, *e, *ns, ectx(np, nc), strs(old(sc)@)),
-    decreases b, 1nat,
-{
-    proof {
-        reveal_strlit("contains");
-        reveal_strlit("insert");
-        reveal_strlit("remove");
-        reveal_strlit("size");
-        reveal_strlit("is_empty");
-        reveal_strlit("has_key");
-        reveal_strlit("get");
-        reveal_strlit("delete");
-        reveal_strlit("put");
-        reveal_strlit("keys");
-        reveal_strlit("at");
-        reveal_strlit("first");
-        reveal_strlit("last");
-        reveal_strlit("push");
-        reveal_strlit("pop");
-        reveal_strlit("shift");
-    }
-    match e {
-        TExpr::SetContains(_, x, y) => eqk(k, "contains") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::ListContains(x, y) => eqk(k, "contains") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Insert(_, x, y) => eqk(k, "insert") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Remove(_, x, y) => eqk(k, "remove") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::SetBin(op, x, y) => eqk(k, set_key(op)) && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Size(x) => eqk(k, "size") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::IsEmpty(x) => eqk(k, "is_empty") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::HasKey(_, x, y) => eqk(k, "has_key") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Get(_, x, y) => eqk(k, "get") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Delete(_, x, y) => eqk(k, "delete") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Put(_, _, x, y, z) => eqk(k, "put") && check_args(b, &[&**x, &**y, &**z], ns, np, nc, sc),
-        TExpr::Keys(x) => eqk(k, "keys") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::At(x, y) => eqk(k, "at") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::First(x) => eqk(k, "first") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::Last(x) => eqk(k, "last") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::Push(_, _, x, y) => eqk(k, "push") && check_args(b, &[&**x, &**y], ns, np, nc, sc),
-        TExpr::Pop(x) => eqk(k, "pop") && check_args(b, &[&**x], ns, np, nc, sc),
-        TExpr::Shift(x) => eqk(k, "shift") && check_args(b, &[&**x], ns, np, nc, sc),
-        _ => false,
-    }
-}
-
 
 // ---- モデル ----
 
@@ -1692,8 +1484,7 @@ fn check_binds(xs: &[Json], names: &Vec<Vec<char>>, tys: &Vec<SType>, off: usize
             off + xs@.len() <= tys@.len(),
             ts == tys@.subrange(off as int, off + xs@.len()),
             forall|q: int|
-                0 <= q < i ==> get(#[trigger] xs@[q], "name"@) is Some && str_of(at(xs@[q], "name"@)) == Some(names@[q]@)
-                    && ty_rel_at(xs@[q], "type"@, *ns, ts[q]),
+                0 <= q < i ==> name_is(#[trigger] xs@[q], "name"@, names@[q]@) && ty_at(xs@[q], "type"@, *ns, ts[q]),
         decreases xs.len() - i,
     {
         proof {

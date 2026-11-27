@@ -5,6 +5,16 @@
 //! 直接書いて定める（`docs/ir.md` の「モデル」「型と値」「式」）。これがIRの意味の定義である。
 //! 対応を確かめる検査は [`crate::ir_check`] にある。
 //!
+//! 読み方：
+//!
+//! - 型は [`ty_rel`] の、型の種類ごとの1行の規則（`docs/ir.md` の「型と値」の表）。
+//! - 式のうち、オペランドの配列を持つ演算子は、キーとオペランドの並びの表 [`op_form`]（「基本の式」「複合型の値を作る式」
+//!   「複合型の値を調べる式」の表）。それ以外の構文（リテラル、参照、`let`、量化、Record、`nth`、`field`、`none`、
+//!   Set・Map・List のリテラル）は [`form_rel`] の、構文ごとの規則。[`ex_rel`] はこの2つを選ぶだけである。
+//! - モデルは [`ir_rel`] と、定義の種類ごとの `*_rel`（「モデル」の節）。
+//! - 「JSONの読み方」「名前」の節の関数と、`*_dec`、`lemma_*` は、JSONの値の取り出しと停止性のための部品で、
+//!   意味の規則は含まない。
+//!
 //! 受理の条件（未知のキー、空でない配列など）は定めない。拒否すべきIRを拒否するのは `fmspec-ir` の仕事で、
 //! ここでは受理したIRの意味を定める。式の型から決まる注釈（`contains` の Set と List の区別、要素の型など）は
 //! JSONに書かれないので制約しない。注釈は中核の型付け（[`crate::infer::type_of`]）が検査する。
@@ -118,18 +128,6 @@ pub open spec fn arr(j: Json) -> Option<Seq<Json>> {
     }
 }
 
-/// 長さ `n` の配列の要素の列（演算子のオペランド）。
-pub open spec fn ops(j: Json, n: nat) -> Option<Seq<Json>> {
-    match j {
-        Json::Arr(xs) => if xs@.len() == n {
-            Some(xs@)
-        } else {
-            None
-        },
-        _ => None,
-    }
-}
-
 /// 省略できる配列のキー。省略か `null` なら空の列。
 pub open spec fn opt_arr(j: Json, k: Seq<char>) -> Option<Seq<Json>> {
     if absent(j, k) {
@@ -216,6 +214,8 @@ pub open spec fn names_ok(ns: IrNames) -> bool {
 }
 
 // ---- 型 ----
+//
+// `docs/ir.md` の「型と値」の表。型のJSONは、型の種類を表すキーを1つだけ持つオブジェクトである。
 
 /// 型のJSON `j` は型 `t` を表す。
 pub open spec fn ty_rel(j: Json, ns: IrNames, t: SType) -> bool
@@ -224,93 +224,84 @@ pub open spec fn ty_rel(j: Json, ns: IrNames, t: SType) -> bool
 {
     match one(j) {
         None => false,
-        Some((k, b)) => if k == "bool"@ {
-            empty_obj(b) && t == SType::Bool
-        } else if k == "int"@ {
-            match t {
-                SType::Int(lo, hi) => get(b, "min"@) == Some(Json::Int(lo)) && get(b, "max"@) == Some(Json::Int(hi)),
-                _ => false,
-            }
-        } else if k == "enum"@ {
-            match (str_of(b), t) {
-                (Some(n), SType::Enum(id)) => index_of(strs(ns.enums@), n) == Some(id as int),
-                _ => false,
-            }
-        } else if k == "tuple"@ {
-            match (arr(b), t) {
-                (Some(xs), SType::Tuple(ts)) => xs.len() == ts@.len() && forall|i: int|
-                    0 <= i < xs.len() ==> ty_rel(#[trigger] xs[i], ns, ts@[i]),
-                _ => false,
-            }
-        } else if k == "record"@ {
-            match (arr(b), t) {
-                (Some(xs), SType::Record(ids, ts)) => xs.len() == ts@.len() && xs.len() == ids@.len() && forall|i: int|
-                    0 <= i < xs.len() ==> field_ty_rel(#[trigger] xs[i], ns, ids@[i], ts@[i]),
-                _ => false,
-            }
-        } else if k == "option"@ {
-            match t {
-                SType::Option(x) => ty_rel(b, ns, *x),
-                _ => false,
-            }
-        } else if k == "set"@ {
-            match t {
-                SType::Set(x) => ty_rel(b, ns, *x),
-                _ => false,
-            }
-        } else if k == "map"@ {
-            match t {
-                SType::Map(x, y) => !absent(b, "key"@) && !absent(b, "value"@) && ty_rel(at(b, "key"@), ns, *x) && ty_rel(
-                    at(b, "value"@),
-                    ns,
-                    *y,
-                ),
-                _ => false,
-            }
-        } else if k == "list"@ {
-            match t {
-                SType::List(x, max) => !absent(b, "of"@) && ty_rel(at(b, "of"@), ns, *x) && get(b, "max"@) is Some
-                    && nat_of(at(b, "max"@)) == Some(max as nat),
-                _ => false,
-            }
-        } else {
-            false
+        Some((k, b)) => match t {
+            // {"bool": {}}
+            SType::Bool => k == "bool"@ && empty_obj(b),
+            // {"int": {"min": 下限, "max": 上限}}
+            SType::Int(lo, hi) => k == "int"@ && get(b, "min"@) == Some(Json::Int(lo)) && get(b, "max"@) == Some(
+                Json::Int(hi),
+            ),
+            // {"enum": 列挙型の名前}
+            SType::Enum(id) => k == "enum"@ && (str_of(b) matches Some(n) && index_of(strs(ns.enums@), n) == Some(id as int)),
+            // {"tuple": [型, ...]}
+            SType::Tuple(ts) => k == "tuple"@ && tys_rel(b, ts@, ns),
+            // {"record": [{"name", "type"}, ...]}
+            SType::Record(ids, ts) => k == "record"@ && (arr(b) matches Some(xs) && xs.len() == ts@.len() && xs.len()
+                == ids@.len() && forall|i: int| 0 <= i < xs.len() ==> field_ty_rel(#[trigger] xs[i], ns, ids@[i], ts@[i])),
+            // {"option": 型}
+            SType::Option(x) => k == "option"@ && ty_rel(b, ns, *x),
+            // {"set": 要素の型}
+            SType::Set(x) => k == "set"@ && ty_rel(b, ns, *x),
+            // {"map": {"key": 型, "value": 型}}
+            SType::Map(x, y) => k == "map"@ && ty_at(b, "key"@, ns, *x) && ty_at(b, "value"@, ns, *y),
+            // {"list": {"of": 型, "max": 上限}}
+            SType::List(x, max) => k == "list"@ && ty_at(b, "of"@, ns, *x) && get(b, "max"@) is Some && nat_of(
+                at(b, "max"@),
+            ) == Some(max as nat),
         },
     }
 }
 
-/// Recordの型のフィールド `{"name", "type"}` は、名前の番号 `id` と型 `t` を表す。
-pub open spec fn field_ty_rel(j: Json, ns: IrNames, id: usize, t: SType) -> bool
-    decreases j, 0nat,
-    via field_ty_rel_dec
+/// オブジェクト `b` のキー `k` の値が、型 `t` を表す。
+pub open spec fn ty_at(b: Json, k: Seq<char>, ns: IrNames, t: SType) -> bool
+    decreases b, 0nat,
+    via ty_at_dec
 {
-    &&& get(j, "name"@) is Some
-    &&& id < ns.fields@.len()
-    &&& str_of(at(j, "name"@)) == Some(ns.fields@[id as int]@)
-    &&& get(j, "type"@) is Some
-    &&& ty_rel(at(j, "type"@), ns, t)
+    get(b, k) is Some && ty_rel(at(b, k), ns, t)
 }
 
-/// キー `k` の値が型 `t` を表す。
-pub open spec fn ty_rel_at(j: Json, k: Seq<char>, ns: IrNames, t: SType) -> bool {
-    get(j, k) is Some && ty_rel(at(j, k), ns, t)
+/// 配列 `b` の各要素が、型の列 `ts` を表す。
+pub open spec fn tys_rel(b: Json, ts: Seq<SType>, ns: IrNames) -> bool
+    decreases b, 0nat,
+    via tys_rel_dec
+{
+    arr(b) matches Some(xs) && xs.len() == ts.len() && forall|i: int| 0 <= i < xs.len() ==> ty_rel(#[trigger] xs[i], ns, ts[i])
+}
+
+/// Recordの型のフィールド `{"name", "type"}` は、名前の表の `id` 番目のフィールドと型 `t` を表す。
+pub open spec fn field_ty_rel(j: Json, ns: IrNames, id: usize, t: SType) -> bool
+    decreases j, 1nat,
+{
+    &&& id < ns.fields@.len()
+    &&& get(j, "name"@) is Some
+    &&& str_of(at(j, "name"@)) == Some(ns.fields@[id as int]@)
+    &&& ty_at(j, "type"@, ns, t)
 }
 
 #[via_fn]
 proof fn ty_rel_dec(j: Json, ns: IrNames, t: SType) {
     lemma_one_dec(j);
     if let Some((_, b)) = one(j) {
-        lemma_get_dec(b);
         lemma_arr_dec(b);
     }
 }
 
 #[via_fn]
-proof fn field_ty_rel_dec(j: Json, ns: IrNames, id: usize, t: SType) {
-    lemma_get_dec(j);
+proof fn ty_at_dec(b: Json, k: Seq<char>, ns: IrNames, t: SType) {
+    lemma_get_dec(b);
+}
+
+#[via_fn]
+proof fn tys_rel_dec(b: Json, ts: Seq<SType>, ns: IrNames) {
+    lemma_arr_dec(b);
 }
 
 // ---- 式 ----
+//
+// `docs/ir.md` の「式」の節。式のJSONは、演算子を表すキーを1つだけ持つオブジェクトである。
+// オペランドの配列を持つ演算子は、キーとオペランドの並びの表 `op_form` で定める。
+// それ以外（リテラル、参照、`let`、量化、Record、`nth`、`field`、`none`、Set・Map・List のリテラル）は
+// `form_rel` で1つずつ定める。
 
 /// 式を読む文脈。操作の公開引数と内部選択の数（操作の外では0）。
 pub struct ECtx {
@@ -318,61 +309,57 @@ pub struct ECtx {
     pub nc: nat,
 }
 
-/// 二項演算子のキー。
-pub open spec fn bin_op(k: Seq<char>) -> Option<BinOp> {
-    if k == "add"@ {
-        Some(BinOp::Add)
-    } else if k == "sub"@ {
-        Some(BinOp::Sub)
-    } else if k == "mul"@ {
-        Some(BinOp::Mul)
-    } else if k == "div"@ {
-        Some(BinOp::Div)
-    } else if k == "mod"@ {
-        Some(BinOp::Mod)
-    } else if k == "lt"@ {
-        Some(BinOp::Lt)
-    } else if k == "le"@ {
-        Some(BinOp::Le)
-    } else if k == "gt"@ {
-        Some(BinOp::Gt)
-    } else if k == "ge"@ {
-        Some(BinOp::Ge)
-    } else {
-        None
+/// オペランドの配列を持つ演算子の、キーとオペランドの列。`{キー: [オペランド, ...]}` と書く。
+/// 式の型から決まる注釈（要素の型など）は、JSONに書かれないので現れない。
+pub open spec fn op_form(e: TExpr) -> Option<(Seq<char>, Seq<TExpr>)> {
+    match e {
+        // 基本の式
+        TExpr::Bin(BinOp::Add, x, y) => Some(("add"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Sub, x, y) => Some(("sub"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Mul, x, y) => Some(("mul"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Div, x, y) => Some(("div"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Mod, x, y) => Some(("mod"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Lt, x, y) => Some(("lt"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Le, x, y) => Some(("le"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Gt, x, y) => Some(("gt"@, seq![*x, *y])),
+        TExpr::Bin(BinOp::Ge, x, y) => Some(("ge"@, seq![*x, *y])),
+        TExpr::Eq(true, x, y) => Some(("eq"@, seq![*x, *y])),
+        TExpr::Eq(false, x, y) => Some(("ne"@, seq![*x, *y])),
+        TExpr::Not(x) => Some(("not"@, seq![*x])),
+        TExpr::Fold(true, es) => Some(("all"@, es@)),
+        TExpr::Fold(false, es) => Some(("any"@, es@)),
+        TExpr::Implies(x, y) => Some(("implies"@, seq![*x, *y])),
+        TExpr::Ite(p, x, y) => Some(("ite"@, seq![*p, *x, *y])),
+        // 複合型の値を作る式
+        TExpr::Tuple(es) => Some(("tuple"@, es@)),
+        TExpr::Some(x) => Some(("some"@, seq![*x])),
+        // 複合型の値を調べる式
+        TExpr::IsSome(x) => Some(("is_some"@, seq![*x])),
+        TExpr::IsNone(x) => Some(("is_none"@, seq![*x])),
+        TExpr::Unwrap(x) => Some(("unwrap"@, seq![*x])),
+        TExpr::SetContains(_, x, y) => Some(("contains"@, seq![*x, *y])),
+        TExpr::ListContains(x, y) => Some(("contains"@, seq![*x, *y])),
+        TExpr::Insert(_, x, y) => Some(("insert"@, seq![*x, *y])),
+        TExpr::Remove(_, x, y) => Some(("remove"@, seq![*x, *y])),
+        TExpr::SetBin(SetOp::Union, x, y) => Some(("union"@, seq![*x, *y])),
+        TExpr::SetBin(SetOp::Intersection, x, y) => Some(("intersection"@, seq![*x, *y])),
+        TExpr::SetBin(SetOp::Difference, x, y) => Some(("difference"@, seq![*x, *y])),
+        TExpr::SetBin(SetOp::Subset, x, y) => Some(("subset"@, seq![*x, *y])),
+        TExpr::Size(x) => Some(("size"@, seq![*x])),
+        TExpr::IsEmpty(x) => Some(("is_empty"@, seq![*x])),
+        TExpr::HasKey(_, x, y) => Some(("has_key"@, seq![*x, *y])),
+        TExpr::Get(_, x, y) => Some(("get"@, seq![*x, *y])),
+        TExpr::Put(_, _, x, y, z) => Some(("put"@, seq![*x, *y, *z])),
+        TExpr::Delete(_, x, y) => Some(("delete"@, seq![*x, *y])),
+        TExpr::Keys(x) => Some(("keys"@, seq![*x])),
+        TExpr::At(x, y) => Some(("at"@, seq![*x, *y])),
+        TExpr::First(x) => Some(("first"@, seq![*x])),
+        TExpr::Last(x) => Some(("last"@, seq![*x])),
+        TExpr::Push(_, _, x, y) => Some(("push"@, seq![*x, *y])),
+        TExpr::Pop(x) => Some(("pop"@, seq![*x])),
+        TExpr::Shift(x) => Some(("shift"@, seq![*x])),
+        _ => None,
     }
-}
-
-/// 集合の演算子のキー。
-pub open spec fn set_op(k: Seq<char>) -> Option<SetOp> {
-    if k == "union"@ {
-        Some(SetOp::Union)
-    } else if k == "intersection"@ {
-        Some(SetOp::Intersection)
-    } else if k == "difference"@ {
-        Some(SetOp::Difference)
-    } else if k == "subset"@ {
-        Some(SetOp::Subset)
-    } else {
-        None
-    }
-}
-
-/// 配列 `b` の各要素の式が、式の列 `es` に対応する。
-pub open spec fn exs_rel(b: Json, es: Seq<TExpr>, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
-    decreases b, 0nat,
-    via exs_rel_dec
-{
-    match b {
-        Json::Arr(xs) => xs@.len() == es.len() && forall|i: int|
-            0 <= i < xs@.len() ==> ex_rel(#[trigger] xs@[i], es[i], ns, c, sc),
-        _ => false,
-    }
-}
-
-#[via_fn]
-proof fn exs_rel_dec(b: Json, es: Seq<TExpr>, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
-    lemma_arr_dec(b);
 }
 
 /// 式のJSON `j` は、局所変数の名前の列 `sc`（外側から順に並べる）のもとで、式 `e` を表す。
@@ -382,356 +369,167 @@ pub open spec fn ex_rel(j: Json, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<cha
 {
     match one(j) {
         None => false,
-        Some((k, b)) => if k == "int"@ {
-            b matches Json::Int(n) && e == TExpr::Lit(Value::Int(n))
-        } else if k == "bool"@ {
-            b matches Json::Bool(x) && e == TExpr::Lit(Value::Bool(x))
-        } else if k == "enum"@ {
-            match (e, str_of(at(b, "type"@)), str_of(at(b, "variant"@))) {
-                (TExpr::Lit(Value::Enum(id, v)), Some(tn), Some(vn)) => get(b, "type"@) is Some && get(b, "variant"@) is Some
-                    && index_of(strs(ns.enums@), tn) == Some(id as int) && id < ns.variants@.len() && index_of(
-                    strs(ns.variants@[id as int]@),
-                    vn,
-                ) == Some(v as int),
-                _ => false,
-            }
-        } else if k == "var"@ {
-            match (nat_of(b), e) {
-                (Some(i), TExpr::Var(x)) => x as nat == i,
-                _ => false,
-            }
-        } else if k == "next"@ {
-            match (nat_of(b), e) {
-                (Some(i), TExpr::Next(x)) => x as nat == i,
-                _ => false,
-            }
-        } else if k == "param"@ {
-            match (nat_of(b), e) {
-                (Some(i), TExpr::Arg(x)) => i < c.np && x as nat == i,
-                _ => false,
-            }
-        } else if k == "choice"@ {
-            match (nat_of(b), e) {
-                (Some(i), TExpr::Arg(x)) => i < c.nc && x as nat == c.np + i,
-                _ => false,
-            }
-        } else if k == "output"@ {
-            empty_obj(b) && e == TExpr::Out
-        } else if k == "local"@ {
-            match (str_of(b), e) {
-                (Some(n), TExpr::Local(i)) => last_of(sc, n) == Some(i as int),
-                _ => false,
-            }
-        } else if k == "const"@ {
-            match (str_of(b), e) {
-                (Some(n), TExpr::Const(i)) => index_of(strs(ns.consts@), n) == Some(i as int),
-                _ => false,
-            }
-        } else if bin_op(k) is Some {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Bin(op, x, y)) => Some(op) == bin_op(k) && ex_rel(xs[0], *x, ns, c, sc) && ex_rel(
-                    xs[1],
-                    *y,
-                    ns,
-                    c,
-                    sc,
-                ),
-                _ => false,
-            }
-        } else if k == "eq"@ || k == "ne"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Eq(pos, x, y)) => pos == (k == "eq"@) && ex_rel(xs[0], *x, ns, c, sc) && ex_rel(
-                    xs[1],
-                    *y,
-                    ns,
-                    c,
-                    sc,
-                ),
-                _ => false,
-            }
-        } else if k == "not"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Not(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "all"@ || k == "any"@ {
-            match (arr(b), e) {
-                (Some(_), TExpr::Fold(all, es)) => all == (k == "all"@) && exs_rel(b, es@, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "implies"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Implies(x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "ite"@ {
-            match (ops(b, 3), e) {
-                (Some(xs), TExpr::Ite(p, x, y)) => ex_rel(xs[0], *p, ns, c, sc) && ex_rel(xs[1], *x, ns, c, sc)
-                    && ex_rel(xs[2], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "let"@ {
-            match (str_of(at(b, "name"@)), e) {
-                (Some(n), TExpr::Let(x, y)) => get(b, "name"@) is Some && get(b, "value"@) is Some && get(b, "body"@) is Some
-                    && ex_rel(at(b, "value"@), *x, ns, c, sc) && ex_rel(at(b, "body"@), *y, ns, c, sc.push(n)),
-                _ => false,
-            }
-        } else if k == "forall"@ || k == "exists"@ {
-            match (str_of(at(b, "name"@)), e) {
-                (Some(n), TExpr::Quant(all, over, y)) => all == (k == "forall"@) && get(b, "name"@) is Some && get(
-                    b,
-                    "body"@,
-                ) is Some && over_rel(b, over, ns, c, sc) && ex_rel(at(b, "body"@), *y, ns, c, sc.push(n)),
-                _ => false,
-            }
-        } else if k == "tuple"@ {
-            match (arr(b), e) {
-                (Some(_), TExpr::Tuple(es)) => exs_rel(b, es@, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "record"@ {
-            match (arr(b), e) {
-                (Some(xs), TExpr::Record(ids, es)) => xs.len() == ids@.len() && xs.len() == es@.len() && forall|i: int|
-                    0 <= i < xs.len() ==> field_rel(#[trigger] xs[i], ids@[i], es@[i], ns, c, sc),
-                _ => false,
-            }
-        } else if k == "nth"@ {
-            match (nat_of(at(b, "index"@)), e) {
-                (Some(i), TExpr::Nth(x, y)) => get(b, "of"@) is Some && get(b, "index"@) is Some && y as nat == i && ex_rel(
-                    at(b, "of"@),
-                    *x,
-                    ns,
-                    c,
-                    sc,
-                ),
-                _ => false,
-            }
-        } else if k == "field"@ {
-            match (str_of(at(b, "name"@)), e) {
-                (Some(n), TExpr::Field(x, id, _)) => get(b, "of"@) is Some && get(b, "name"@) is Some && id < ns.fields@.len()
-                    && ns.fields@[id as int]@ == n && ex_rel(at(b, "of"@), *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "none"@ {
-            match e {
-                TExpr::None(t) => ty_rel(b, ns, t),
-                _ => false,
-            }
-        } else if k == "some"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Some(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "is_some"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::IsSome(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "is_none"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::IsNone(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "unwrap"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Unwrap(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "set"@ {
-            match (arr(at(b, "items"@)), e) {
-                (Some(_), TExpr::SetLit(t, es)) => get(b, "items"@) is Some && ty_rel_at(b, "of"@, ns, t) && exs_rel(
-                    at(b, "items"@),
-                    es@,
-                    ns,
-                    c,
-                    sc,
-                ),
-                _ => false,
-            }
-        } else if k == "map"@ {
-            match (arr(at(b, "items"@)), e) {
-                (Some(xs), TExpr::MapLit(kt, vt, items)) => get(b, "items"@) is Some && ty_rel_at(b, "key"@, ns, kt)
-                    && ty_rel_at(b, "value"@, ns, vt) && xs.len() == items@.len() && forall|i: int|
-                    0 <= i < xs.len() ==> item_rel(#[trigger] xs[i], items@[i], ns, c, sc),
-                _ => false,
-            }
-        } else if k == "list"@ {
-            match (arr(at(b, "items"@)), e) {
-                (Some(xs), TExpr::ListLit(t, max, es)) => get(b, "items"@) is Some && ty_rel_at(b, "of"@, ns, t) && get(
-                    b,
-                    "max"@,
-                ) is Some && nat_of(at(b, "max"@)) == Some(max as nat) && exs_rel(at(b, "items"@), es@, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "contains"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::SetContains(_, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                (Some(xs), TExpr::ListContains(x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "insert"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Insert(_, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "remove"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Remove(_, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if set_op(k) is Some {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::SetBin(op, x, y)) => Some(op) == set_op(k) && ex_rel(xs[0], *x, ns, c, sc) && ex_rel(
-                    xs[1],
-                    *y,
-                    ns,
-                    c,
-                    sc,
-                ),
-                _ => false,
-            }
-        } else if k == "size"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Size(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "is_empty"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::IsEmpty(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "has_key"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::HasKey(_, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "get"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Get(_, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "delete"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Delete(_, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "put"@ {
-            match (ops(b, 3), e) {
-                (Some(xs), TExpr::Put(_, _, x, y, z)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc)
-                    && ex_rel(xs[2], *z, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "keys"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Keys(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "at"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::At(x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "first"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::First(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "last"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Last(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "push"@ {
-            match (ops(b, 2), e) {
-                (Some(xs), TExpr::Push(_, _, x, y)) => ex_rel(xs[0], *x, ns, c, sc) && ex_rel(xs[1], *y, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "pop"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Pop(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else if k == "shift"@ {
-            match (ops(b, 1), e) {
-                (Some(xs), TExpr::Shift(x)) => ex_rel(xs[0], *x, ns, c, sc),
-                _ => false,
-            }
-        } else {
-            false
+        Some((k, b)) => match op_form(e) {
+            Some((key, es)) => k == key && exs_rel(b, es, ns, c, sc),
+            None => form_rel(k, b, e, ns, c, sc),
         },
     }
 }
 
+/// オペランドの配列でない式。キー `k` と値 `b` が式 `e` を表す。
+pub open spec fn form_rel(k: Seq<char>, b: Json, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
+    decreases b, 2nat,
+    via form_rel_dec
+{
+    match e {
+        // {"int": 整数}、{"bool": 真偽値}
+        TExpr::Lit(Value::Int(n)) => k == "int"@ && b == Json::Int(n),
+        TExpr::Lit(Value::Bool(x)) => k == "bool"@ && b == Json::Bool(x),
+        // {"enum": {"type": 列挙型の名前, "variant": ラベル}}
+        TExpr::Lit(Value::Enum(id, v)) => k == "enum"@ && id < ns.variants@.len() && name_at(b, "type"@, strs(ns.enums@))
+            == Some(id as int) && name_at(b, "variant"@, strs(ns.variants@[id as int]@)) == Some(v as int),
+        // {"var": i}、{"next": i}
+        TExpr::Var(x) => k == "var"@ && nat_of(b) == Some(x as nat),
+        TExpr::Next(x) => k == "next"@ && nat_of(b) == Some(x as nat),
+        // {"param": i} は i 番目の公開引数、{"choice": i} は i 番目の内部選択（公開引数に続けて並べる）
+        TExpr::Arg(x) => (k == "param"@ && x < c.np && nat_of(b) == Some(x as nat)) || (k == "choice"@ && c.np <= x
+            < c.np + c.nc && nat_of(b) == Some((x - c.np) as nat)),
+        // {"output": {}}
+        TExpr::Out => k == "output"@ && empty_obj(b),
+        // {"local": 名前} は、内側から探して最初に見つかった束縛
+        TExpr::Local(i) => k == "local"@ && (str_of(b) matches Some(n) && last_of(sc, n) == Some(i as int)),
+        // {"const": 名前}
+        TExpr::Const(i) => k == "const"@ && (str_of(b) matches Some(n) && index_of(strs(ns.consts@), n) == Some(i as int)),
+        // {"let": {"name", "value", "body"}}。body では name を束縛する
+        TExpr::Let(x, y) => k == "let"@ && (str_of(at(b, "name"@)) matches Some(n) && get(b, "name"@) is Some && ex_at(
+            b,
+            "value"@,
+            *x,
+            ns,
+            c,
+            sc,
+        ) && ex_at(b, "body"@, *y, ns, c, sc.push(n))),
+        // {"forall": {"name", "in" または "type", "body"}}、{"exists": ...}。body では name を束縛する
+        TExpr::Quant(all, over, y) => k == (if all {
+            "forall"@
+        } else {
+            "exists"@
+        }) && (str_of(at(b, "name"@)) matches Some(n) && get(b, "name"@) is Some && over_rel(b, over, ns, c, sc) && ex_at(
+            b,
+            "body"@,
+            *y,
+            ns,
+            c,
+            sc.push(n),
+        )),
+        // {"record": [{"name", "expr"}, ...]}
+        TExpr::Record(ids, es) => k == "record"@ && (arr(b) matches Some(xs) && xs.len() == ids@.len() && xs.len()
+            == es@.len() && forall|i: int| 0 <= i < xs.len() ==> field_rel(#[trigger] xs[i], ids@[i], es@[i], ns, c, sc)),
+        // {"nth": {"of", "index"}}
+        TExpr::Nth(x, i) => k == "nth"@ && get(b, "index"@) is Some && nat_of(at(b, "index"@)) == Some(i as nat) && ex_at(
+            b,
+            "of"@,
+            *x,
+            ns,
+            c,
+            sc,
+        ),
+        // {"field": {"of", "name"}}
+        TExpr::Field(x, id, _) => k == "field"@ && id < ns.fields@.len() && get(b, "name"@) is Some && str_of(
+            at(b, "name"@),
+        ) == Some(ns.fields@[id as int]@) && ex_at(b, "of"@, *x, ns, c, sc),
+        // {"none": 型}
+        TExpr::None(t) => k == "none"@ && ty_rel(b, ns, t),
+        // {"set": {"of", "items"}}
+        TExpr::SetLit(t, es) => k == "set"@ && ty_at(b, "of"@, ns, t) && get(b, "items"@) is Some && exs_rel(
+            at(b, "items"@),
+            es@,
+            ns,
+            c,
+            sc,
+        ),
+        // {"map": {"key", "value", "items": [[キー, 値], ...]}}
+        TExpr::MapLit(kt, vt, items) => k == "map"@ && ty_at(b, "key"@, ns, kt) && ty_at(b, "value"@, ns, vt) && get(
+            b,
+            "items"@,
+        ) is Some && (arr(at(b, "items"@)) matches Some(xs) && xs.len() == items@.len() && forall|i: int|
+            0 <= i < xs.len() ==> exs_rel(#[trigger] xs[i], seq![items@[i].key, items@[i].value], ns, c, sc)),
+        // {"list": {"of", "max", "items"}}
+        TExpr::ListLit(t, max, es) => k == "list"@ && ty_at(b, "of"@, ns, t) && get(b, "max"@) is Some && nat_of(
+            at(b, "max"@),
+        ) == Some(max as nat) && get(b, "items"@) is Some && exs_rel(at(b, "items"@), es@, ns, c, sc),
+        _ => false,
+    }
+}
+
+/// オブジェクト `b` のキー `k` の値（名前）の、名前の列 `names` での位置。
+pub open spec fn name_at(b: Json, k: Seq<char>, names: Seq<Seq<char>>) -> Option<int> {
+    match get(b, k) {
+        Some(Json::Str(s)) => index_of(names, s@),
+        _ => None,
+    }
+}
+
+/// 配列 `b` の各要素が、式の列 `es` を表す。
+pub open spec fn exs_rel(b: Json, es: Seq<TExpr>, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
+    decreases b, 0nat,
+    via exs_rel_dec
+{
+    arr(b) matches Some(xs) && xs.len() == es.len() && forall|i: int| 0 <= i < xs.len() ==> ex_rel(#[trigger] xs[i], es[i], ns, c, sc)
+}
+
+/// オブジェクト `b` のキー `k` の値が、式 `e` を表す。
+pub open spec fn ex_at(b: Json, k: Seq<char>, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
+    decreases b, 0nat,
+    via ex_at_dec
+{
+    get(b, k) is Some && ex_rel(at(b, k), e, ns, c, sc)
+}
+
 /// Recordの式のフィールド `{"name", "expr"}`。
 pub open spec fn field_rel(j: Json, id: usize, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
-    decreases j, 0nat,
-    via field_rel_dec
+    decreases j, 1nat,
 {
-    &&& get(j, "name"@) is Some
     &&& id < ns.fields@.len()
+    &&& get(j, "name"@) is Some
     &&& str_of(at(j, "name"@)) == Some(ns.fields@[id as int]@)
-    &&& get(j, "expr"@) is Some
-    &&& ex_rel(at(j, "expr"@), e, ns, c, sc)
+    &&& ex_at(j, "expr"@, e, ns, c, sc)
 }
 
-/// Mapの式の項目 `[キー, 値]`。
-pub open spec fn item_rel(j: Json, it: crate::source::Item, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
-    decreases j, 0nat,
-    via item_rel_dec
-{
-    match ops(j, 2) {
-        Some(xs) => ex_rel(xs[0], it.key, ns, c, sc) && ex_rel(xs[1], it.value, ns, c, sc),
-        None => false,
-    }
-}
-
-/// 量化のたどる値。`in` の式か、`type` の型。
+/// 量化のたどる値。`in` の式（Set の要素、Map のキー、List の要素）か、`type` の型の値。
 pub open spec fn over_rel(b: Json, over: Over, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) -> bool
-    decreases b, 0nat,
-    via over_rel_dec
+    decreases b, 1nat,
 {
-    if get(b, "in"@) is Some && get(b, "type"@) is None {
-        match over {
-            Over::Set(_, x) => ex_rel(at(b, "in"@), *x, ns, c, sc),
-            Over::Map(_, x) => ex_rel(at(b, "in"@), *x, ns, c, sc),
-            Over::List(x) => ex_rel(at(b, "in"@), *x, ns, c, sc),
-            _ => false,
-        }
-    } else if get(b, "type"@) is Some && get(b, "in"@) is None {
-        match over {
-            Over::Type(t) => ty_rel(at(b, "type"@), ns, t),
-            _ => false,
-        }
-    } else {
-        false
+    match over {
+        Over::Set(_, x) => get(b, "type"@) is None && ex_at(b, "in"@, *x, ns, c, sc),
+        Over::Map(_, x) => get(b, "type"@) is None && ex_at(b, "in"@, *x, ns, c, sc),
+        Over::List(x) => get(b, "type"@) is None && ex_at(b, "in"@, *x, ns, c, sc),
+        Over::Type(t) => get(b, "in"@) is None && ty_at(b, "type"@, ns, t),
     }
-}
-
-#[via_fn]
-proof fn field_rel_dec(j: Json, id: usize, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
-    lemma_get_dec(j);
-}
-
-#[via_fn]
-proof fn item_rel_dec(j: Json, it: crate::source::Item, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
-    lemma_arr_dec(j);
-}
-
-#[via_fn]
-proof fn over_rel_dec(b: Json, over: Over, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
-    lemma_get_dec(b);
 }
 
 #[via_fn]
 proof fn ex_rel_dec(j: Json, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
     lemma_one_dec(j);
-    if let Some((_, b)) = one(j) {
-        lemma_get_dec(b);
-        lemma_arr_dec(b);
-        if let Some(x) = get(b, "items"@) {
-            lemma_arr_dec(x);
-        }
+}
+
+#[via_fn]
+proof fn form_rel_dec(k: Seq<char>, b: Json, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
+    lemma_get_dec(b);
+    lemma_arr_dec(b);
+    if let Some(x) = get(b, "items"@) {
+        lemma_arr_dec(x);
     }
+}
+
+#[via_fn]
+proof fn exs_rel_dec(b: Json, es: Seq<TExpr>, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
+    lemma_arr_dec(b);
+}
+
+#[via_fn]
+proof fn ex_at_dec(b: Json, k: Seq<char>, e: TExpr, ns: IrNames, c: ECtx, sc: Seq<Seq<char>>) {
+    lemma_get_dec(b);
 }
 
 // ---- 減少の補題 ----
@@ -783,14 +581,17 @@ pub proof fn lemma_arr_dec(j: Json)
 }
 
 // ---- モデル ----
+//
+// `docs/ir.md` の「モデル」の節。定義の式は局所変数のない文脈で読む。
 
-/// 列挙型の定義 `{"name", "variants"}`。
-pub open spec fn enum_rel(j: Json, ns: IrNames, i: int, n: i64) -> bool {
-    &&& str_of(at(j, "name"@)) == Some(ns.enums@[i]@)
-    &&& get(j, "name"@) is Some
-    &&& get(j, "variants"@) is Some
-    &&& arr(at(j, "variants"@)) matches Some(vs) && vs.len() == ns.variants@[i]@.len() && n == vs.len() && forall|q: int|
-        0 <= q < vs.len() ==> #[trigger] str_of(vs[q]) == Some(ns.variants@[i]@[q]@)
+/// キー `k` の値が文字列 `n` である。
+pub open spec fn name_is(j: Json, k: Seq<char>, n: Seq<char>) -> bool {
+    get(j, k) is Some && str_of(at(j, k)) == Some(n)
+}
+
+/// キー `k` の値が、局所変数のない文脈 `c` で式 `e` を表す。
+pub open spec fn top_at(j: Json, k: Seq<char>, e: TExpr, ns: IrNames, c: ECtx) -> bool {
+    ex_at(j, k, e, ns, c, Seq::empty())
 }
 
 /// 状態も引数も参照しない文脈（定数、初期値、初期条件、不変条件、終端条件）。
@@ -803,24 +604,30 @@ pub open spec fn act_ctx(ns: IrNames, a: int) -> ECtx {
     ECtx { np: ns.params@[a]@.len(), nc: ns.choices@[a]@.len() }
 }
 
-/// 定数の定義 `{"name", "type", "value"}`。
-pub open spec fn const_rel(j: Json, ns: IrNames, i: int, sm: SModel) -> bool {
-    &&& get(j, "name"@) is Some
-    &&& str_of(at(j, "name"@)) == Some(ns.consts@[i]@)
-    &&& ty_rel_at(j, "type"@, ns, sm.consts@[i].ty)
-    &&& get(j, "value"@) is Some
-    &&& ex_rel(at(j, "value"@), sm.consts@[i].expr, ns, no_args(), Seq::empty())
+/// 列挙型 `{"name", "variants"}`。`n` はラベルの数。
+pub open spec fn enum_rel(j: Json, ns: IrNames, i: int, n: i64) -> bool {
+    &&& name_is(j, "name"@, ns.enums@[i]@)
+    &&& get(j, "variants"@) is Some
+    &&& arr(at(j, "variants"@)) matches Some(vs) && vs.len() == ns.variants@[i]@.len() && n == vs.len() && forall|q: int|
+        0 <= q < vs.len() ==> #[trigger] str_of(vs[q]) == Some(ns.variants@[i]@[q]@)
 }
 
-/// 状態変数の定義 `{"id", "name", "type", "initial"}` または `{"id", "name", "type", "initial_in"}`。
+/// 定数 `{"name", "type", "value"}`。
+pub open spec fn const_rel(j: Json, ns: IrNames, i: int, sm: SModel) -> bool {
+    &&& name_is(j, "name"@, ns.consts@[i]@)
+    &&& ty_at(j, "type"@, ns, sm.consts@[i].ty)
+    &&& top_at(j, "value"@, sm.consts@[i].expr, ns, no_args())
+}
+
+/// 状態変数 `{"id", "name", "type", "initial"}` または `{"id", "name", "type", "initial_in"}`。
+/// `initial` は候補が1つ、`initial_in` は配列の各要素が候補。`id` は書くなら添字と一致する。
 pub open spec fn state_rel(j: Json, ns: IrNames, i: int, sm: SModel) -> bool {
     let inits = sm.inits@[i]@;
     &&& get(j, "id"@) matches Some(x) ==> nat_of(x) == Some(i as nat)
-    &&& get(j, "name"@) is Some
-    &&& str_of(at(j, "name"@)) == Some(ns.states@[i]@)
-    &&& ty_rel_at(j, "type"@, ns, sm.states@[i])
+    &&& name_is(j, "name"@, ns.states@[i]@)
+    &&& ty_at(j, "type"@, ns, sm.states@[i])
     &&& if get(j, "initial"@) is Some {
-        get(j, "initial_in"@) is None && inits.len() == 1 && ex_rel(at(j, "initial"@), inits[0], ns, no_args(), Seq::empty())
+        get(j, "initial_in"@) is None && inits.len() == 1 && top_at(j, "initial"@, inits[0], ns, no_args())
     } else {
         get(j, "initial_in"@) is Some && exs_rel(at(j, "initial_in"@), inits, ns, no_args(), Seq::empty())
     }
@@ -830,9 +637,7 @@ pub open spec fn state_rel(j: Json, ns: IrNames, i: int, sm: SModel) -> bool {
 pub open spec fn binds_rel(xs: Seq<Json>, names: Seq<Vec<char>>, tys: Seq<SType>, ns: IrNames) -> bool {
     &&& xs.len() == names.len()
     &&& xs.len() == tys.len()
-    &&& forall|i: int|
-        0 <= i < xs.len() ==> get(#[trigger] xs[i], "name"@) is Some && str_of(at(xs[i], "name"@)) == Some(names[i]@)
-            && ty_rel_at(xs[i], "type"@, ns, tys[i])
+    &&& forall|i: int| 0 <= i < xs.len() ==> name_is(#[trigger] xs[i], "name"@, names[i]@) && ty_at(xs[i], "type"@, ns, tys[i])
 }
 
 /// 引数の宣言の列から、動的ドメイン（`in`）を持つ引数の、引数の番号とドメインの式の列。
@@ -851,7 +656,7 @@ pub open spec fn doms(xs: Seq<Json>, base: nat) -> Seq<(nat, Json)>
     }
 }
 
-/// 動的ドメインの検査 `contains(ドメイン, 引数)`。
+/// 引数 `d.0` の動的ドメインの検査 `contains(ドメイン, 引数)`。ドメインは Set か List。
 pub open spec fn member_rel(d: (nat, Json), e: TExpr, ns: IrNames, c: ECtx) -> bool {
     match e {
         TExpr::SetContains(_, x, y) => ex_rel(d.1, *x, ns, c, Seq::empty()) && y == Box::new(TExpr::Arg(d.0 as usize)),
@@ -882,21 +687,20 @@ pub open spec fn guard_rel(j: Json, ds: Seq<(nat, Json)>, g: TExpr, ns: IrNames,
     }
 }
 
-/// 更新 `{"target", "expr"}`。
+/// 更新 `{"target", "expr"}`。`target` は状態変数の添字。
 pub open spec fn update_rel(j: Json, u: crate::smodel::SUpdate, ns: IrNames, c: ECtx) -> bool {
     &&& get(j, "target"@) is Some
     &&& nat_of(at(j, "target"@)) == Some(u.var as nat)
-    &&& get(j, "expr"@) is Some
-    &&& ex_rel(at(j, "expr"@), u.expr, ns, c, Seq::empty())
+    &&& top_at(j, "expr"@, u.expr, ns, c)
 }
 
 /// 操作 `{"name", "params", "choices", "guard", "updates", "output"}`。
+/// 引数の型の列は公開引数に続けて内部選択で、`n_params` は公開引数のスロットの数。
 pub open spec fn action_rel(j: Json, ns: IrNames, a: int, sa: SAction, enums: Seq<i64>) -> bool {
     let c = act_ctx(ns, a);
     let ps = ns.params@[a]@;
     let cs = ns.choices@[a]@;
-    &&& get(j, "name"@) is Some
-    &&& str_of(at(j, "name"@)) == Some(ns.actions@[a]@)
+    &&& name_is(j, "name"@, ns.actions@[a]@)
     &&& match (opt_arr(j, "params"@), opt_arr(j, "choices"@)) {
         (Some(px), Some(cx)) => {
             &&& binds_rel(px, ps, sa.args@.take(ps.len() as int), ns)
@@ -912,28 +716,23 @@ pub open spec fn action_rel(j: Json, ns: IrNames, a: int, sa: SAction, enums: Se
     &&& if absent(j, "output"@) {
         sa.output is None
     } else {
-        sa.output matches Some(o) && ty_rel_at(at(j, "output"@), "type"@, ns, o.ty) && get(at(j, "output"@), "expr"@) is Some
-            && ex_rel(at(at(j, "output"@), "expr"@), o.expr, ns, c, Seq::empty())
+        sa.output matches Some(o) && ty_at(at(j, "output"@), "type"@, ns, o.ty) && top_at(at(j, "output"@), "expr"@, o.expr, ns, c)
     }
 }
 
-/// 遷移契約 `{"name", "action", "expr"}`。
+/// 遷移契約 `{"name", "action", "expr"}`。式は、名前の操作の文脈で読む。
 pub open spec fn contract_rel(j: Json, ns: IrNames, k: int, sm: SModel) -> bool {
     let a = sm.contracts@[k].action as int;
-    &&& get(j, "name"@) is Some
-    &&& str_of(at(j, "name"@)) == Some(ns.contracts@[k]@)
+    &&& name_is(j, "name"@, ns.contracts@[k]@)
     &&& get(j, "action"@) is Some
     &&& str_of(at(j, "action"@)) matches Some(an) && index_of(strs(ns.actions@), an) == Some(a)
-    &&& get(j, "expr"@) is Some
-    &&& ex_rel(at(j, "expr"@), sm.contracts@[k].expr, ns, act_ctx(ns, a), Seq::empty())
+    &&& top_at(j, "expr"@, sm.contracts@[k].expr, ns, act_ctx(ns, a))
 }
 
 /// 不変条件 `{"name", "expr"}`。
 pub open spec fn invariant_rel(j: Json, ns: IrNames, i: int, sm: SModel) -> bool {
-    &&& get(j, "name"@) is Some
-    &&& str_of(at(j, "name"@)) == Some(ns.invariants@[i]@)
-    &&& get(j, "expr"@) is Some
-    &&& ex_rel(at(j, "expr"@), sm.invariants@[i], ns, no_args(), Seq::empty())
+    &&& name_is(j, "name"@, ns.invariants@[i]@)
+    &&& top_at(j, "expr"@, sm.invariants@[i], ns, no_args())
 }
 
 /// 省略できる式のキー。省略か `null` なら `None`。
@@ -946,6 +745,7 @@ pub open spec fn opt_ex_rel(j: Json, k: Seq<char>, e: Option<TExpr>, ns: IrNames
 }
 
 /// IRのJSON `j` は、名前の表 `ns` のもとで、名前を解決したモデル `sm` を表す。
+/// 各定義の列は、JSONの配列の順に、名前の表とモデルの列に対応する。
 pub open spec fn ir_rel(j: Json, ns: IrNames, sm: SModel) -> bool {
     &&& names_ok(ns)
     &&& opt_arr(j, "enums"@) matches Some(es) && es.len() == ns.enums@.len() && es.len() == sm.enums@.len() && forall|i: int|
