@@ -1,7 +1,7 @@
 # fmspec-rails のActive Job補助（設計案）
 
 Active Jobのジョブを、仕様の `process` のインスタンスとして実行し、ステップの境界で止め、そこで落とす補助の設計案である。
-実装した。使い方は [rails.md](rails.md) の「ジョブのステップとクラッシュ」、テストは `fmspec-rails/test/job_test.rb` にある。
+実装した。使い方は [rails.md](rails.md) の「ジョブのステップとクラッシュ」、テストは `fmspec-rails/test/job_test.rb` と `fmspec-rails/test/job_lock_test.rb`（§6.2 のロックの解放。PostgreSQLのadvisory lock）にある。
 §10 に、実装で設計から変えたことを書く。
 クラッシュの仕様の側は [crash_design.md](crash_design.md) と [dsl.md](dsl.md) の「クラッシュ」にある。
 
