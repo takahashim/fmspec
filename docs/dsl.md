@@ -608,7 +608,7 @@ end
 | `property` | 違反した性質、または評価エラーの箇所。定義のソース位置を含む |
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
-| `reason` | `:inconclusive` の理由 |
+| `reason` | `:inconclusive` の理由。`:max_states`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
 | `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
