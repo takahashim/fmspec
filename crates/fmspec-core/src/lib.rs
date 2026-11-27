@@ -92,6 +92,7 @@ pub mod semantics;
 pub mod slots;
 pub mod smodel;
 pub mod source;
+pub mod state_set;
 pub mod step;
 pub mod stype_exec;
 pub mod sym;

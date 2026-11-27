@@ -9,7 +9,10 @@ use crate::eval::*;
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_set::in_cert;
 use crate::step::*;
+use crate::sym::SwapMaps;
 use crate::trace::*;
 use crate::typing::*;
 use vstd::prelude::*;
@@ -514,9 +517,18 @@ impl<'a> CertCheck<'a> {
         if !conditions_eq(m, &cert.conditions, c) {
             return Err(Verdict::rejected(Reject::ConditionMismatch));
         }
-        match check_initials(m, &cert.states) {
+        let none: Vec<SwapMaps> = Vec::new();
+        match check_initials(m, &none, &cert.states) {
             Some(r) => Err(Verdict::rejected(r)),
-            None => Ok(CertCheck { model, cond: c, cert, next: 0 }),
+            None => {
+                proof {
+                    assert(none@ =~= Seq::<SwapMaps>::empty());
+                    assert forall|i: int| 0 <= i < m.inits@.len() implies in_cert(cert.states@, (#[trigger] m.inits@[i])@) by {
+                        lemma_reps_empty(cert.states@, m.inits@[i]@);
+                    }
+                }
+                Ok(CertCheck { model, cond: c, cert, next: 0 })
+            },
         }
     }
 
@@ -547,19 +559,27 @@ impl<'a> CertCheck<'a> {
         }
         let m = self.model.raw();
         let states = &self.cert.states;
+        let none: Vec<SwapMaps> = Vec::new();
+        proof {
+            assert(none@ =~= Seq::<SwapMaps>::empty());
+        }
         let mut k = self.next;
         let mut left = n;
         while k < states.len() && left > 0
             invariant
                 self.next <= k <= states@.len(),
+                none@ == Seq::<SwapMaps>::empty(),
                 forall|j: int| 0 <= j < k ==> state_closed(*m, *self.cond, states@, (#[trigger] states@[j])@),
             decreases states@.len() - k,
         {
-            match check_state(m, self.cond, states, k) {
+            match check_state(m, self.cond, &none, states, k) {
                 Some(r) => {
                     return Some(Verdict::rejected(r));
                 },
                 None => {},
+            }
+            proof {
+                lemma_closed_without_swaps(*m, *self.cond, states@, states@[k as int]@);
             }
             k = k + 1;
             left = left - 1;
@@ -611,7 +631,7 @@ pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<us
             }
             match crate::sym::symmetry(m, c, swaps) {
                 Err(i) => Verdict::rejected(Reject::NotSymmetric(i)),
-                Ok(sw) => match crate::sym::check_sym_certificate(m, c, &sw, &cert.states) {
+                Ok(sw) => match check_sym_certificate(m, c, &sw, &cert.states) {
                     None => Verdict::of(VerdictKind::Verified),
                     Some(r) => Verdict::rejected(r),
                 },

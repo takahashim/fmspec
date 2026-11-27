@@ -20,11 +20,13 @@
 //! 候補の列は辞書順に整列し、重複を持たない。整列と重複の排除は候補数の上限の判定にだけ効き、
 //! 集合としての正しさは整列に依存しない。
 
-use crate::cert::*;
 use crate::eval::*;
 use crate::gate::CheckedModel;
 use crate::model::*;
 use crate::semantics::*;
+use crate::state_set::cmp_state;
+#[cfg(verus_keep_ghost)]
+use crate::state_set::in_cert;
 use crate::step::*;
 use std::sync::Arc;
 use vstd::prelude::*;
