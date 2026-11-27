@@ -8,9 +8,9 @@
 use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, sty, stys, STy, SVal};
 use crate::encoding::{keys_exec, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
+use crate::encoding::{lemma_default_len, lemma_keys_pos, lemma_stys, wf_stype, wf_stypes, width_sum, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_stys, MAX_KEYS};
+use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, decode, quant_l};
 #[cfg(verus_keep_ghost)]
@@ -151,6 +151,10 @@ fn unrank_enum(id: usize, n: i64, r: &Expr) -> (x: Expr)
 pub fn unrank(t: &SType, r: &Expr, enums: &Vec<i64>) -> (out: Option<Vec<Expr>>)
     ensures
         out matches Some(xs) ==> unrank_ok(sty(*t), *r, xs@, enums@),
+        wf_stype(sty(*t), enums@) && keys(sty(*t), enums@) is Some ==> (out is Some && out->Some_0@.len() == width(
+            sty(*t),
+            enums@,
+        )),
     decreases t, 1nat, 0nat,
 {
     let mut out: Vec<Expr> = Vec::new();
@@ -232,6 +236,9 @@ pub fn unrank(t: &SType, r: &Expr, enums: &Vec<i64>) -> (out: Option<Vec<Expr>>)
             Some(xs)
         },
         SType::Option(x) => {
+            proof {
+                lemma_default_len(sty(**x), enums@);
+            }
             let ds = defaults(x, enums);
             let us = unrank(x, &bin(BinOp::Sub, copy_expr(r), ci(1)), enums)?;
             if ds.len() != us.len() {
@@ -378,6 +385,8 @@ fn unrank_seq(_parent: &SType, ts: &Vec<SType>, n: usize, r: &Expr, enums: &Vec<
         n <= ts@.len(),
     ensures
         out matches Some(xs) ==> unrank_seq_ok(stys(ts@).take(n as int), *r, xs@, enums@),
+        wf_stypes(stys(ts@).take(n as int), enums@) && keys_product(stys(ts@).take(n as int), enums@) is Some ==> (
+        out is Some && out->Some_0@.len() == width_sum(stys(ts@).take(n as int), enums@)),
     decreases _parent, 0nat, n,
 {
     proof {
@@ -400,6 +409,15 @@ fn unrank_seq(_parent: &SType, ts: &Vec<SType>, n: usize, r: &Expr, enums: &Vec<
             }
         }
         return Some(out);
+    }
+    let ghost ok = wf_stypes(tn, enums@) && keys_product(tn, enums@) is Some;
+    proof {
+        let tp = stys(ts@).take(n - 1);
+        assert(tn.drop_last() =~= tp);
+        assert(tn.last() == sty(ts@[n - 1]));
+        if ok {
+            lemma_keys_pos(sty(ts@[n - 1]), enums@);
+        }
     }
     let k = match keys_exec(&ts[n - 1], enums) {
         Some(k) => k,
@@ -535,6 +553,22 @@ pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> 
 
 pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
     picks_in(x, fs, r, 0, fs.len() as int)
+}
+
+/// 番号 `r` が範囲内で、その位置のスロットが真であるという式は純粋である。
+pub proof fn lemma_hit_pure(r: Expr, fs: Seq<Expr>, hit: Expr, n: nat)
+    requires
+        picks(hit, fs, r),
+        pure_below(r, n),
+        all_pure(fs, n),
+    ensures
+        pure_below(
+            crate::slots::and_s(Expr::Bin(BinOp::Ge, Box::new(r), Box::new(Expr::Const(Value::Int(0)))), hit),
+            n,
+        ),
+{
+    assert(pure_below(hit, n));
+    lemma_bin_const_pure(BinOp::Ge, r, 0, n);
 }
 
 /// 番号 `r` の位置の式を選ぶ式。

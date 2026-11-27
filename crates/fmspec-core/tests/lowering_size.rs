@@ -74,7 +74,7 @@ fn lower(w: usize, n: usize) -> Vec<Expr> {
         consts: vec![],
     };
     let st = SType::Tuple((0..w).map(|_| SType::Int(-100, 100)).collect());
-    lower_stored(&nested(w, n), &cx, &st, 0).expect("下ろせる")
+    lower_stored(&nested(w, n), &cx, &st, 0).ok().expect("下ろせる")
 }
 
 #[test]
