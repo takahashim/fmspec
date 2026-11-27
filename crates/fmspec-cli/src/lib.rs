@@ -65,6 +65,8 @@ const USAGE: &str = "\
 
 共通:
   --json                 結果を機械可読のJSONで出力する
+  -h, --help             この使い方を表示する
+  --                     以降の引数を、すべてファイルとして読む
 ";
 
 /// fmspec-api に渡す、値を取るオプション。[フラグ, オプションのキー, 種類]。
@@ -96,11 +98,26 @@ struct Args {
     strategy: Option<String>,
     certificate_out: Option<String>,
     trace_out: Option<String>,
-    /// 指定されたオプションの名前（`--json` を除く）。コマンドが使わないものを拒否するために持つ。
-    flags: Vec<String>,
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+/// 値を取らない、または fmspec-api のオプションに直さないフラグ。
+const OTHER_FLAGS: [&str; 5] = [
+    "--deadlock",
+    "--allow-other-model",
+    "--strategy",
+    "--certificate-out",
+    "--trace-out",
+];
+
+/// `--` より前の引数。`--` 以降はすべて位置引数として読む。
+fn before_separator(args: &[String]) -> &[String] {
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    &args[..end]
+}
+
+/// コマンド `command` の引数を、そのコマンドが受け付けるオプション（`allowed` と、`conditions` なら検査条件）で
+/// 解析する。左から順に読み、最初に見つけた誤りを返す。値を読む前に、オプションを受け付けるかを確かめる。
+fn parse_args(command: &str, allowed: &[&str], conditions: bool, args: &[String]) -> Result<Args, String> {
     let mut parsed = Args {
         positional: Vec::new(),
         json: false,
@@ -108,13 +125,30 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         strategy: None,
         certificate_out: None,
         trace_out: None,
-        flags: Vec::new(),
     };
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
-        if arg.starts_with("--") && arg != "--json" && !parsed.flags.iter().any(|f| f == arg) {
-            parsed.flags.push(arg.to_string());
+        if arg == "--" {
+            parsed.positional.extend(args[i + 1..].iter().cloned());
+            break;
+        }
+        if !arg.starts_with("--") {
+            parsed.positional.push(arg.to_string());
+            i += 1;
+            continue;
+        }
+        if arg == "--json" {
+            parsed.json = true;
+            i += 1;
+            continue;
+        }
+        if !OTHER_FLAGS.contains(&arg) && !VALUED.iter().any(|(name, _, _)| *name == arg) {
+            return Err(format!("未知のオプション {arg}"));
+        }
+        // コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
+        if !allowed.contains(&arg) && !(conditions && CONDITION_FLAGS.contains(&arg)) {
+            return Err(format!("{command} は {arg} を受け付けません"));
         }
         // `--` で始まる語は値として読まない。`--trace-out --json` の `--json` を値として消費すると、
         // run が引数全体から判定する出力の形式と食い違う。
@@ -128,7 +162,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
         };
         match arg {
-            "--json" => parsed.json = true,
             "--deadlock" => {
                 parsed.options.insert("deadlock".to_string(), json!(true));
             }
@@ -138,8 +171,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--strategy" => parsed.strategy = Some(value()?),
             "--certificate-out" => parsed.certificate_out = Some(value()?),
             "--trace-out" => parsed.trace_out = Some(value()?),
-            _ => match VALUED.iter().find(|(name, _, _)| *name == arg) {
-                Some((_, key, kind)) => {
+            _ => {
+                if let Some((_, key, kind)) = VALUED.iter().find(|(name, _, _)| *name == arg) {
                     let text = value()?;
                     let option = match kind {
                         Kind::Count => match text.parse::<u64>() {
@@ -150,9 +183,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     };
                     parsed.options.insert(key.to_string(), option);
                 }
-                None if arg.starts_with("--") => return Err(format!("未知のオプション {arg}")),
-                None => parsed.positional.push(arg.to_string()),
-            },
+            }
         }
         i += 1;
     }
@@ -271,16 +302,6 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
     ),
 ];
 
-/// コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
-fn accepts(a: &Args, command: &str, allowed: &[&str], conditions: bool) -> Result<(), Run> {
-    for flag in &a.flags {
-        if !allowed.contains(&flag.as_str()) && !(conditions && CONDITION_FLAGS.contains(&flag.as_str())) {
-            return Err(usage(a.json, format!("{command} は {flag} を受け付けません")));
-        }
-    }
-    Ok(())
-}
-
 /// 判定ゲートが受理したトレース（違反か評価エラー）だけを書き出す。拒否されたトレースは書き出さない。
 fn save_trace(io: &Io, a: &Args, body: &Value) -> Result<(), Run> {
     if !matches!(body["status"].as_str(), Some("violated" | "error")) {
@@ -395,15 +416,24 @@ pub fn run(
     }
     // parse_args は `--json` を値として消費しないので、引数の解析に失敗したときも、成功したときの
     // `Args::json` と同じ形式になる。
-    let json = rest.iter().any(|a| a == "--json");
-    let parsed = match parse_args(rest) {
+    let options = before_separator(rest);
+    let json = options.iter().any(|a| a == "--json");
+    let Some(&(name, allowed, conditions, cmd)) = COMMANDS.iter().find(|(name, ..)| name == command) else {
+        let message = format!("未知のコマンド {command:?}");
+        return if json {
+            usage(json, message)
+        } else {
+            Run::stderr(EXIT_ERROR, format!("usage_error: {message}\n{USAGE}"))
+        };
+    };
+    if options.iter().any(|a| a == "--help" || a == "-h") {
+        return Run::stdout(EXIT_OK, USAGE.to_string());
+    }
+    let parsed = match parse_args(name, allowed, conditions, rest) {
         Ok(a) => a,
         Err(e) => return usage(json, e),
     };
-    let Some(&(name, allowed, conditions, cmd)) = COMMANDS.iter().find(|(name, ..)| name == command) else {
-        return usage(json, format!("未知のコマンド {command:?}\n{USAGE}"));
-    };
-    match accepts(&parsed, name, allowed, conditions).and_then(|()| cmd(&io, &parsed)) {
+    match cmd(&io, &parsed) {
         Ok(run) | Err(run) => run,
     }
 }

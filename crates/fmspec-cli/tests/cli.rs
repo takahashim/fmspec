@@ -644,3 +644,72 @@ fn an_option_is_not_taken_as_the_value_of_another() {
         (2, "usage_error: --max-states には値が必要です\n")
     );
 }
+
+#[test]
+fn the_command_is_identified_before_its_options_are_read() {
+    let f = files();
+    // コマンドを先に特定し、そのコマンドが受け付けるかを、値を読む前に確かめる。
+    for (args, message) in [
+        (
+            vec!["validate", "tickets.json", "--seed", "abc"],
+            "validate は --seed を受け付けません",
+        ),
+        (
+            vec!["replay", "tickets.json", "t.json", "--trace-out"],
+            "replay は --trace-out を受け付けません",
+        ),
+        (
+            vec!["chek", "tickets.json", "--max-states", "x"],
+            "未知のコマンド \"chek\"",
+        ),
+        (
+            vec!["check", "tickets.json", "--bogus", "--seed", "1"],
+            "未知のオプション --bogus",
+        ),
+    ] {
+        let (code, body) = f.json(&args);
+        assert_eq!(
+            (code, &body["status"], &body["message"]),
+            (2, &json!("usage_error"), &json!(message)),
+            "{args:?}"
+        );
+    }
+    // 人間向けの表示では、未知のコマンドの後に使い方を示す。
+    let (code, out, err) = f.run(&["chek", "tickets.json"]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    assert!(
+        err.starts_with("usage_error: 未知のコマンド \"chek\"\n使い方:"),
+        "{err}"
+    );
+}
+
+#[test]
+fn help_is_accepted_after_the_command() {
+    let f = files();
+    for args in [
+        vec!["check", "-h"],
+        vec!["check", "tickets.json", "--help"],
+        vec!["replay", "--json", "-h"],
+    ] {
+        let (code, out, err) = f.run(&args);
+        assert_eq!((code, err.as_str()), (0, ""), "{args:?}");
+        assert!(out.starts_with("使い方:"), "{args:?}: {out}");
+    }
+}
+
+#[test]
+fn arguments_after_the_separator_are_files() {
+    let f = files();
+    f.put("--model.json", &tickets());
+    f.put("-h", &tickets());
+    let (code, out, _) = f.run(&["validate", "--json", "--", "--model.json"]);
+    let body: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!((code, &body["status"]), (0, &json!("valid")), "{body}");
+    let (code, out, _) = f.run(&["validate", "--", "-h"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("Valid: "), "{out}");
+    // `--` 以降の `--json` はファイル名なので、出力の形式は変わらない。
+    let (code, out, err) = f.run(&["validate", "tickets.json", "--", "--json"]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    assert_eq!(err, "usage_error: validate にはモデルのファイルを1つ指定します\n");
+}
