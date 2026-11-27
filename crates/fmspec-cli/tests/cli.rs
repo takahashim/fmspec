@@ -197,6 +197,45 @@ fn traces_can_be_saved_and_replayed() {
 }
 
 #[test]
+fn evidence_for_another_model_is_checked_only_when_allowed() {
+    let f = files();
+    let (_, found) = f.json(&["check", "noguard.json", "--trace-out", "trace.json"]);
+    let (_, model) = f.json(&["validate", "tickets.json"]);
+    // guard のあるモデルでは、guard のないモデルの反例の2ステップ目は遷移にないので、判定ゲートが拒否する。
+    for command in ["replay", "shrink"] {
+        let (code, body) = f.json(&[command, "tickets.json", "trace.json", "--allow-other-model"]);
+        assert_eq!((code, &body["status"]), (1, &json!("rejected")), "{body}");
+        assert_eq!(body["rejected"]["reason"], "step_mismatch", "{body}");
+        assert_eq!(body["model_digest"], model["model_digest"]);
+        assert_eq!(body["evidence_model_digest"], found["model_digest"]);
+    }
+    let (code, text, _) = f.run(&["replay", "tickets.json", "trace.json", "--allow-other-model"]);
+    assert_eq!(code, 1);
+    assert!(
+        text.contains(&format!(
+            "別のモデルに対する証拠を、指定によりこのモデルで扱いました（証拠のdigestは {}）",
+            found["model_digest"].as_str().unwrap()
+        )),
+        "{text}"
+    );
+
+    let (_, _) = f.json(&["check", "tickets.json", "--certificate-out", "cert.json"]);
+    let (code, body) = f.json(&["verify-certificate", "noguard.json", "cert.json", "--allow-other-model"]);
+    assert_eq!((code, &body["status"]), (1, &json!("rejected")), "{body}");
+    assert_ne!(body["rejected"]["reason"], "unreadable", "{body}");
+    assert_eq!(body["evidence_model_digest"], model["model_digest"]);
+
+    for command in ["check", "simulate"] {
+        let (code, body) = f.json(&[command, "tickets.json", "--allow-other-model"]);
+        assert_eq!((code, &body["status"]), (2, &json!("usage_error")));
+        assert_eq!(
+            body["message"],
+            json!(format!("{command} は --allow-other-model を受け付けません"))
+        );
+    }
+}
+
+#[test]
 fn human_readable_output() {
     let f = files();
     let (code, out, _) = f.run(&["check", "noguard.json"]);

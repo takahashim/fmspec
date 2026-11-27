@@ -24,6 +24,12 @@ pub enum TraceError {
         expected: String,
         found: String,
     },
+    /// 別のモデルに対する証拠を、指定により読もうとしたが、このモデルでは読めなかった。
+    /// `found` は証拠の digest、`error` は読めなかった理由（`Format`）。
+    OtherModel {
+        found: String,
+        error: Box<TraceError>,
+    },
 }
 
 impl fmt::Display for TraceError {
@@ -37,6 +43,12 @@ impl fmt::Display for TraceError {
                     "別のモデルに対する証拠です（モデルのdigestは {expected}、証拠のdigestは {found}）"
                 )
             }
+            TraceError::OtherModel { found, error } => {
+                write!(
+                    f,
+                    "別のモデル（証拠のdigestは {found}）に対する証拠を、このモデルでは読めません: {error}"
+                )
+            }
         }
     }
 }
@@ -45,12 +57,21 @@ fn format<T>(message: impl Into<String>) -> Result<T, TraceError> {
     Err(TraceError::Format(message.into()))
 }
 
+/// 読み込んだ証拠。`other_model_digest` は、証拠が別のモデルに対するもので、指定により読んだときの、証拠の digest である。
+#[derive(Clone, Debug)]
+pub struct Loaded<T> {
+    pub evidence: T,
+    pub other_model_digest: Option<String>,
+}
+
+/// 証拠の版と digest を確かめる。digest が違えば、`allow_other_model` が真のときだけ読み進め、証拠の digest を返す。
 fn header<'a>(
     json: &'a Value,
     model: &Model,
     version_key: &str,
     version: i64,
-) -> Result<&'a Map<String, Value>, TraceError> {
+    allow_other_model: bool,
+) -> Result<(&'a Map<String, Value>, Option<String>), TraceError> {
     let map = match json.as_object() {
         Some(map) => map,
         None => return format("オブジェクトが必要です"),
@@ -61,13 +82,31 @@ fn header<'a>(
     let Some(found) = map.get("model_digest").and_then(Value::as_str) else {
         return format("model_digest（文字列）が必要です");
     };
-    if found != model.digest {
+    if found == model.digest {
+        return Ok((map, None));
+    }
+    if !allow_other_model {
         return Err(TraceError::DigestMismatch {
             expected: model.digest.clone(),
             found: found.to_string(),
         });
     }
-    Ok(map)
+    Ok((map, Some(found.to_string())))
+}
+
+/// 本体を読み、別のモデルに対する証拠なら、読めなかった理由にそのことを添える。
+fn loaded<T>(other: Option<String>, body: impl FnOnce() -> Result<T, TraceError>) -> Result<Loaded<T>, TraceError> {
+    match (body(), other) {
+        (Ok(evidence), other_model_digest) => Ok(Loaded {
+            evidence,
+            other_model_digest,
+        }),
+        (Err(error), Some(found)) => Err(TraceError::OtherModel {
+            found,
+            error: Box::new(error),
+        }),
+        (Err(error), None) => Err(error),
+    }
 }
 
 fn conditions_of(map: &Map<String, Value>, model: &Model) -> Result<Conditions, TraceError> {
@@ -104,8 +143,23 @@ pub fn certificate_to_json(model: &Model, cert: &Certificate) -> Value {
 /// 証明書を読む。状態は符号化列の辞書順に整列する。
 /// 整列はここ（未検証）で行うが、証明書は判定ゲートが検査するので、誤りがあっても誤って受理されることはない。
 pub fn certificate_from_json(model: &Model, json: &str) -> Result<Certificate, TraceError> {
+    read_certificate(model, json, false).map(|l| l.evidence)
+}
+
+/// 証明書を読む。`allow_other_model` が真なら、`model_digest` が違う証明書も、このモデルの名前と型で読む。
+pub fn read_certificate(model: &Model, json: &str, allow_other_model: bool) -> Result<Loaded<Certificate>, TraceError> {
     let root: Value = serde_json::from_str(json).map_err(|e| TraceError::Json(e.to_string()))?;
-    let map = header(&root, model, "certificate_version", CERTIFICATE_VERSION)?;
+    let (map, other) = header(
+        &root,
+        model,
+        "certificate_version",
+        CERTIFICATE_VERSION,
+        allow_other_model,
+    )?;
+    loaded(other, || certificate_body(model, map))
+}
+
+fn certificate_body(model: &Model, map: &Map<String, Value>) -> Result<Certificate, TraceError> {
     let conditions = conditions_of(map, model)?;
     let Some(rows) = map.get("states").and_then(Value::as_array) else {
         return format("states は状態の配列です");
@@ -353,8 +407,17 @@ pub fn trace_to_json(model: &Model, trace: &Trace) -> Value {
 }
 
 pub fn trace_from_json(model: &Model, json: &str) -> Result<Trace, TraceError> {
+    read_trace(model, json, false).map(|l| l.evidence)
+}
+
+/// トレースを読む。`allow_other_model` が真なら、`model_digest` が違うトレースも、このモデルの名前と型で読む。
+pub fn read_trace(model: &Model, json: &str, allow_other_model: bool) -> Result<Loaded<Trace>, TraceError> {
     let root: Value = serde_json::from_str(json).map_err(|e| TraceError::Json(e.to_string()))?;
-    let map = header(&root, model, "trace_version", TRACE_VERSION)?;
+    let (map, other) = header(&root, model, "trace_version", TRACE_VERSION, allow_other_model)?;
+    loaded(other, || trace_body(model, map))
+}
+
+fn trace_body(model: &Model, map: &Map<String, Value>) -> Result<Trace, TraceError> {
     let conditions = conditions_of(map, model)?;
     // 開始状態が初期状態の1つであることは、判定ゲートが検査する。
     // 初期状態が1つのモデルでは、initial を省略できる。
