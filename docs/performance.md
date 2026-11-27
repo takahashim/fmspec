@@ -7,6 +7,7 @@
 
 ```sh
 cargo build --release
+rake compile                         # bench/models.rb がDSLでモデルを作るのに使う native extension
 ruby -Ilib bench/run.rb              # 各モデルを3回検査し、最小の時間を表にする
 ruby -Ilib bench/run.rb --repeat 5 --fmspec PATH/TO/fmspec
 ruby -Ilib bench/models.rb DIR       # モデルのIRを DIR に書く
