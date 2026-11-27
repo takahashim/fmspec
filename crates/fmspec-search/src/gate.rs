@@ -33,7 +33,7 @@ fn range_len(lo: i64, hi: i64) -> u64 {
 }
 
 /// 式を1回評価するときの、部分式の評価回数の上限。
-pub fn expr_cost(e: &Expr) -> u64 {
+fn expr_cost(e: &Expr) -> u64 {
     match e {
         Expr::Const(_)
         | Expr::Var(_)
@@ -65,7 +65,7 @@ fn domain_size(m: &RawModel, ty: &Type) -> u64 {
 }
 
 /// 1つの状態の検査（対象の不変条件、対象の操作の全引数での遷移と遷移契約、終端条件）の評価回数の上限。
-pub fn state_cost(model: &CheckedModel, cond: &Conditions) -> u64 {
+fn state_cost(model: &CheckedModel, cond: &Conditions) -> u64 {
     let m = model.raw();
     let mut cost: u64 = 1;
     for (i, inv) in m.invariants.iter().enumerate() {

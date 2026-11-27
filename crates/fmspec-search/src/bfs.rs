@@ -28,7 +28,7 @@ pub struct BfsOptions<'a> {
     pub max_states: Option<usize>,
     /// 中断要求の問い合わせ。真を返したら探索を打ち切る。証明書の検査の途中でも確かめる。
     pub interrupt: Option<&'a dyn Fn() -> bool>,
-    /// 判定ゲートが証拠の検査にかける評価回数の上限（`gate::evidence_cost` の見積もり）。
+    /// 判定ゲートが証拠の検査にかける評価回数の上限（`evidence_cost` の見積もり）。
     pub max_check_cost: Option<u64>,
     /// 深さ（初期状態からの遷移数）の上限。報告するトレースのステップ数は、この上限以下である。
     pub max_depth: Option<usize>,
