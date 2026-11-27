@@ -26,6 +26,7 @@ use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::{layout_at, layouts_at};
 use crate::source::TExpr;
+use crate::step::copy_vec;
 #[cfg(verus_keep_ghost)]
 use crate::total::{const_tys, cx_wf, layout_tys, layout_wf, sctx};
 #[cfg(verus_keep_ghost)]
@@ -266,7 +267,7 @@ pub fn check_model(sm: &SModel) -> (r: bool)
         return false;
     }
     let is = Scope {
-        enums: copy_enums(enums),
+        enums: copy_vec(enums),
         states: None,
         args: Vec::new(),
         next: false,
@@ -302,7 +303,7 @@ pub fn check_model(sm: &SModel) -> (r: bool)
     // 状態を参照する式
     let st = copy_stypes(&sm.states);
     let ss = Scope {
-        enums: copy_enums(enums),
+        enums: copy_vec(enums),
         states: Some(copy_stypes(&sm.states)),
         args: Vec::new(),
         next: false,
@@ -380,7 +381,7 @@ pub fn check_model(sm: &SModel) -> (r: bool)
         }
         let sa = &sm.actions[con.action];
         let cs = Scope {
-            enums: copy_enums(enums),
+            enums: copy_vec(enums),
             states: Some(copy_stypes(&st)),
             args: copy_stypes(&sa.args),
             next: true,
@@ -401,30 +402,6 @@ pub fn check_model(sm: &SModel) -> (r: bool)
     true
 }
 
-fn copy_enums(v: &Vec<i64>) -> (r: Vec<i64>)
-    ensures
-        r@ == v@,
-{
-    let mut out: Vec<i64> = Vec::new();
-    let mut i = 0;
-    while i < v.len()
-        invariant
-            i <= v@.len(),
-            out@ == v@.take(i as int),
-        decreases v.len() - i,
-    {
-        out.push(v[i]);
-        proof {
-            assert(v@.take(i + 1) =~= v@.take(i as int).push(v@[i as int]));
-        }
-        i += 1;
-    }
-    proof {
-        assert(v@.take(v@.len() as int) =~= v@);
-    }
-    out
-}
-
 /// 定数 `i` の式が型を持ち、大きさの条件を満たすか。
 fn check_const(sm: &SModel, i: usize, ctys: &Vec<SType>) -> (r: bool)
     requires
@@ -439,7 +416,7 @@ fn check_const(sm: &SModel, i: usize, ctys: &Vec<SType>) -> (r: bool)
 {
     let c = &sm.consts[i];
     let s = Scope {
-        enums: copy_enums(&sm.enums),
+        enums: copy_vec(&sm.enums),
         states: None,
         args: Vec::new(),
         next: false,
@@ -516,7 +493,7 @@ fn check_action(sm: &SModel, a: usize, ctys: &Vec<SType>, st: &Vec<SType>) -> (r
         return false;
     }
     let s = Scope {
-        enums: copy_enums(enums),
+        enums: copy_vec(enums),
         states: Some(copy_stypes(st)),
         args: copy_stypes(&sa.args),
         next: false,
