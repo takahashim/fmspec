@@ -88,6 +88,7 @@ pub(crate) struct Constant {
 }
 
 /// 式を名前解決する文脈。
+#[derive(Clone, Copy)]
 pub(crate) struct Ctx<'a> {
     pub enums: &'a [EnumNames],
     /// 状態変数。`None` なら状態を参照できない（初期値と定数）。
@@ -101,6 +102,22 @@ pub(crate) struct Ctx<'a> {
     pub constants: &'a [Constant],
     /// Recordのフィールドの名前の番号。モデル全体で共有する。
     pub fields: &'a Fields,
+}
+
+impl<'a> Ctx<'a> {
+    /// 状態も引数も参照できない文脈（定数と初期値）。
+    pub(crate) fn closed(enums: &'a [EnumNames], constants: &'a [Constant], fields: &'a Fields) -> Self {
+        Ctx {
+            enums,
+            states: None,
+            args: &[],
+            n_params: 0,
+            next: false,
+            output: None,
+            constants,
+            fields,
+        }
+    }
 }
 
 /// 名前で参照する局所変数。番号は、外側から数えた位置である。
