@@ -2,7 +2,7 @@
 //!
 //! 下ろしは、IRの式の値を、スロットごとの中核の式の列にする（[`crate::encoding`] の符号化）。
 //! ここにあるのは、その部品である。部品は、長さや型の合わない入力には `None` を返す。
-//! 下ろしは `None` を内部エラーにするので、`None` を返すことは健全性を損なわない。
+//! 下ろしは `None` を `Fail::Type`（内部エラー）にするので、`None` を返すことは健全性を損なわない。
 
 #[cfg(verus_keep_ghost)]
 use crate::bindings::eval_bound_body;
@@ -804,15 +804,6 @@ fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Op
         assert(xtys(ts@).take(ts@.len() as int) =~= xtys(ts@));
     }
     Some(acc)
-}
-
-/// 中核の型の既定値。Boolは偽、Intは範囲の最小値、Enumは最初のラベル。
-pub fn default_value(t: Type) -> (r: Value) {
-    match t {
-        Type::Bool => Value::Bool(false),
-        Type::Int(lo, _) => Value::Int(lo),
-        Type::Enum(id) => Value::Enum(id, 0),
-    }
 }
 
 /// 値の列を、定数の式の列にする。

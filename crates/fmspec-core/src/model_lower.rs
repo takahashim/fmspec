@@ -11,7 +11,7 @@ use crate::canon::{slot_types, slot_types_list};
 use crate::encoding::SVal;
 use crate::encoding::{copy_stype, wf_stype_exec, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, enc_seq, lemma_enc_len, lemma_stys, member, members, sty, stys, width_sum};
+use crate::encoding::{enc, enc_seq, lemma_stys, member, members, sty, stys, width_sum};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_width_pos, to_xty, XTy};
 #[cfg(verus_keep_ghost)]
@@ -34,7 +34,7 @@ use crate::model_total::{action_typed, const_ctx, out_sty, st_ctx};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{consts_match, lemma_const_ctx, lemma_sa_typed, lemma_state_ctx, model_typed, styped, tys_ok};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{env_rel, layouts_ok, lemma_members, prop_result, stored_result, top_ok};
+use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{inv_env, safe, Conditions};
 use crate::slots::{stype_width, Fail};

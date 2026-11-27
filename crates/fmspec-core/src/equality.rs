@@ -10,13 +10,15 @@ use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq, keys_or_zero};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_default_len, lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
+use crate::encoding::{lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_stys, list_items_member, map_rows_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, members, models, models_seq, sty, stys, width, width_sum, xtys, STy, SVal, XTy};
+use crate::encoding::{member, members, models_seq, sty, stys, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{binop_spec, eval_l, same_kind, Env, ErrKind};
+use crate::eval::{eval_l, same_kind, Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::maps::lemma_none_rows;
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
@@ -414,19 +416,6 @@ proof fn lemma_kinds_repeat(xs: Seq<Value>, n: nat, ks: Seq<int>)
     } else {
         lemma_kinds_repeat(xs, (n - 1) as nat, ks);
         lemma_kinds_add(enc_repeat(xs, (n - 1) as nat), xs);
-    }
-}
-
-/// 値が全部ない行の列は、Mapの行の列である。
-proof fn lemma_none_rows(n: nat, t: STy, enums: Seq<i64>)
-    ensures
-        map_rows_member(Seq::new(n, |_i: int| None::<SVal>), t, enums),
-    decreases n,
-{
-    if n > 0 {
-        let r = Seq::new(n, |_i: int| None::<SVal>);
-        assert(r.drop_last() =~= Seq::new((n - 1) as nat, |_i: int| None::<SVal>));
-        lemma_none_rows((n - 1) as nat, t, enums);
     }
 }
 

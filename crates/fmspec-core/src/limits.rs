@@ -12,7 +12,7 @@ use crate::encoding::{lemma_xwidth_of, to_xty, to_xtys, width, width_sum, xwidth
 #[cfg(verus_keep_ghost)]
 use crate::equality::{small, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{fits_all_s, fits_s, lemma_fits_all};
+use crate::preserve::{fits_all_s, fits_s};
 use vstd::prelude::*;
 
 verus! {
