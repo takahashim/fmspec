@@ -5,7 +5,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_api::{check, describe, human, load, replay, shrink, simulate, verify_certificate, Model};
+use fmspec_api::{check, describe, human, load, replay, replay_with, shrink, simulate, verify_certificate, Model};
 use serde_json::{json, Value};
 
 /// 支払い回数 `charges`（0..2）。`pay(id)` は内部選択 `ok` が真なら1回増やし、
@@ -283,4 +283,40 @@ fn shrinking_lowers_arguments_that_the_violation_does_not_need() {
         interrupted["shrink"],
         json!({"attempts": 0, "complete": false, "limit": "interrupted"})
     );
+}
+
+#[test]
+fn replay_and_shrink_take_a_check_cost_and_shrink_takes_a_time_limit() {
+    let m = orders();
+    let violated = check(&m, &json!({"actions": ["pay"]}), None).unwrap();
+    let mut trace = violated["trace"].clone();
+    for step in trace["steps"].as_array_mut().unwrap() {
+        step["args"]["id"] = json!(1);
+    }
+    let trace = trace.to_string();
+    // 見積もりが上限を超えるトレースは検査せず、縮小もしない。
+    for body in [
+        replay_with(&m, &trace, &json!({"max_check_cost": 1})).unwrap(),
+        shrink(&m, &trace, &json!({"max_check_cost": 1}), None).unwrap(),
+    ] {
+        assert_eq!(body["status"], "inconclusive", "{body}");
+        assert_eq!(body["reason"], "max_check_cost", "{body}");
+        assert_eq!(body.get("shrink"), None, "{body}");
+    }
+    let enough = json!({"max_check_cost": 1_000_000});
+    assert_eq!(replay_with(&m, &trace, &enough).unwrap()["status"], "violated");
+    let shrunk = shrink(&m, &trace, &enough, None).unwrap();
+    assert_eq!(shrunk["shrink"]["complete"], true, "{shrunk}");
+    // 時間の上限を過ぎていれば、最初の候補を試す前に打ち切る。結果のトレースは判定ゲートが受理したものである。
+    let late = shrink(&m, &trace, &json!({"max_time_ms": 0}), None).unwrap();
+    assert_eq!(late["status"], "violated");
+    assert_eq!(
+        late["shrink"],
+        json!({"attempts": 0, "complete": false, "limit": "max_time_ms"})
+    );
+    // トレースの検査は区切らないので、replay は時間の上限を受け付けない。
+    let err = replay_with(&m, &trace, &json!({"max_time_ms": 0})).unwrap_err();
+    assert_eq!(err, "未知のオプション \"max_time_ms\"");
+    let err = shrink(&m, &trace, &json!({"max_time_ms": -1}), None).unwrap_err();
+    assert_eq!(err, "max_time_ms は0以上の整数です（-1）");
 }

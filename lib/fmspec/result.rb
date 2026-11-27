@@ -65,6 +65,9 @@ module Fmspec
     # 探索器の報告。検査済みの値ではない。
     def search = @raw["search"]
     def simulation = @raw["simulation"]
+    # 縮小器の報告（`Model#shrink` の結果）。attempts（試した候補の数）、complete（打ち切らずに終わったか）、
+    # limit（打ち切った理由。"attempts"、"max_time_ms"、"interrupted"）を持つ。
+    def shrink = @raw["shrink"]
     def visited_states = search&.fetch("visited_states")
     def seed = simulation&.fetch("seed")
 

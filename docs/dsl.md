@@ -714,8 +714,8 @@ Workers.check(symmetry: false)     # 削減しない
 | `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, symmetry: nil, **検査条件)` | 幅優先探索によるモデル検査。`symmetry: false` で、宣言した対称性による削減を使わない |
 | `simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **検査条件)` | ランダムシミュレーション |
 | `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, allow_other_model: false, **検査条件)` | 証明書の検査 |
-| `replay(トレース, allow_other_model: false)` | トレースの再生 |
-| `shrink(トレース, attempts: nil, allow_other_model: false)` | モデル違反のトレースの縮小 |
+| `replay(トレース, max_check_cost: nil, allow_other_model: false)` | トレースの再生 |
+| `shrink(トレース, attempts: nil, max_time_ms: nil, max_check_cost: nil, allow_other_model: false)` | モデル違反のトレースの縮小 |
 
 `max_check_cost:` は、判定ゲートが証拠の検査にかける評価回数の上限である（[ir.md](ir.md) の「証拠の検査の資源上限と中断」）。
 検査の見積もりが上限を超えると、結果は `:inconclusive`（理由は `:max_check_cost`）になる。
@@ -762,7 +762,7 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `evidence_model_digest` | `allow_other_model: true` で別のモデルに対する証拠を扱ったときの、証拠の digest |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
-| `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
+| `visited_states`、`seed`、`search`、`simulation`、`shrink` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed。`shrink` は縮小器の報告（`Model#shrink`） |
 | `to_s` | 人間向けの報告 |
 | `to_h` | エンジンの結果（[ir.md](ir.md)の形式） |
 
@@ -772,6 +772,9 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 `Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くし、引数と内部選択をドメインの正規順で小さくする。
 シミュレーションで見つけたトレースに使う。
 `attempts:` は、試す候補（ステップの削除と引数の変更）の数の上限である（既定 10000）。
+`max_time_ms:` は縮小の時間の上限で、`max_check_cost:` は元のトレースの検査の上限である。
+候補の数か時間の上限に達するか、`Timeout` などで割り込まれると、縮小を打ち切る。上限で打ち切った結果は、それまでに判定ゲートが受理したトレースで、`status` は違反のままである。
+`Result#shrink` は縮小器の報告で、`"complete"`（打ち切らずに終わったか）、`"limit"`（打ち切った理由。`"attempts"`、`"max_time_ms"`、`"interrupted"`）、`"attempts"`（試した候補の数）を持つ。打ち切った結果は局所最小とは限らない。
 幅優先探索の反例は、不変条件の違反については最初から最短である（引数は小さくなることがある）。
 
 `:internal_error` は fmspec の不具合を示す。
