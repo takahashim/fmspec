@@ -11,10 +11,11 @@ module Fmspec
     # crash: :exception で、checkpoint から上げる例外の既定。retry_on で捕まえる。
     class InjectedFailure < StandardError; end
 
-    # crash: :kill で、checkpoint から上げる例外。ワーカーのプロセスが止まったことを表す。
-    # StandardError の子ではないので、rescue、retry_on、discard_on では捕まらない。ensure は実行される。
+    # テストケースの終わりに、checkpoint で止まったままの perform を巻き戻すために上げる例外。
+    # StandardError の子ではないので、rescue、retry_on、discard_on では捕まらない。
+    # crash: :kill のクラッシュには使わない（そちらは perform を再開せずに捨てるので、ensure も実行されない）。
     class Killed < Exception # rubocop:disable Lint/InheritException
-      def initialize(msg = "fmspec-rails がワーカーの停止を模して上げた例外です") = super
+      def initialize(msg = "fmspec-rails がテストケースの終わりに perform を巻き戻すために上げた例外です") = super
     end
 
     # ジョブの側の語彙（docs/rails_jobs_design.md §3）。ジョブのクラスに include する。
@@ -69,6 +70,8 @@ module Fmspec
         @payload = nil
         @job_id = nil
         @fiber = nil
+        # perform が止まった時点で、その Fiber が使っていたDBの接続。
+        @connections = []
       end
 
       # ---- インスタンスのスレッドから（Binding#job のハンドラ） ----
@@ -82,20 +85,9 @@ module Fmspec
       # 止まっている位置で落とす（§6）。
       def crash
         start unless @fiber
-        payload = @payload
-        result = resume(@crash == :kill ? :kill : :raise)
-        if @crash == :kill && result[0] == :killed
-          finish_fiber
-          if @spec_crash == :restart
-            # 止まったワーカーのジョブを、別のワーカーが同じ内容で拾い直す。
-            @context.redeliver(payload)
-            @pc = @steps.first
-          else
-            @pc = :crashed
-          end
-          return nil
-        end
-        settle(result, crashing: true)
+        return kill if @crash == :kill
+
+        settle(resume(:raise), crashing: true)
       end
 
       # テストケースの終わりに、止まったままの perform を巻き戻す。
@@ -116,10 +108,38 @@ module Fmspec
 
       private
 
+      # ワーカーのプロセスの停止（§6.2）。止まっている perform を再開せずに捨てるので、rescue も ensure も実行されない。
+      # perform が使っていたDBの接続は、接続プールから外して切る。プロセスが止まると接続が切れ、
+      # DBがその接続のロック（advisory lock など）を解放し、確定していないトランザクションを捨てるのと同じである。
+      def kill
+        payload = @payload
+        disconnect(@connections)
+        # Fiber への参照を捨てる。再開しないまま回収されるので、ensure は実行されない。
+        finish_fiber
+        if @spec_crash == :restart
+          # 止まったワーカーのジョブを、別のワーカーが同じ内容で拾い直す。
+          @context.redeliver(payload)
+          @pc = @steps.first
+        else
+          @pc = :crashed
+        end
+        nil
+      end
+
+      def disconnect(connections)
+        connections.each do |pool, connection|
+          pool.remove(connection)
+          connection.disconnect!
+        end
+        connections.clear
+      end
+
       # 自分が取り出したジョブのときだけ止まる。perform の中で別のジョブを perform_now したときは止まらない。
       def pause(job, event)
         return unless job.job_id == @job_id
 
+        # 接続は、Fiber の中から見る。isolation_level が :fiber の構成でも、perform の接続を得るためである。
+        @connections = active_connections
         case Fiber.yield(event)
         when :raise then raise @error, "fmspec-rails が #{@name}[#{@id}] のクラッシュとして上げた例外です"
         when :kill then raise Killed
@@ -197,14 +217,18 @@ module Fmspec
       def finish_fiber
         @fiber = nil
         @payload = nil
+        @connections = []
       end
 
-      def in_transaction?
-        ActiveRecord::Base.connection_handler.connection_pool_list.any? do |pool|
+      # 現在の Fiber（またはスレッド）が使っている、各接続プールの接続。
+      def active_connections
+        ActiveRecord::Base.connection_handler.connection_pool_list.filter_map do |pool|
           connection = pool.active_connection?
-          connection.respond_to?(:transaction_open?) && connection.transaction_open?
+          [pool, connection] if connection.is_a?(ActiveRecord::ConnectionAdapters::AbstractAdapter)
         end
       end
+
+      def in_transaction? = active_connections.any? { |_, connection| connection.transaction_open? }
     end
   end
 end
