@@ -43,12 +43,15 @@ impl Files {
         (code, body)
     }
 
-    fn get(&self, path: &str) -> String {
-        self.0
-            .borrow()
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| panic!("{path} が書かれていない"))
+    /// コマンドが書き出したJSONのファイル。
+    fn get(&self, path: &str) -> Value {
+        let text = self.0.borrow().get(path).cloned();
+        let text = text.unwrap_or_else(|| panic!("{path} が書かれていない"));
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn put(&self, path: &str, body: &Value) {
+        self.0.borrow_mut().insert(path.to_string(), body.to_string());
     }
 }
 
@@ -147,9 +150,9 @@ fn certificates_can_be_saved_and_verified_separately() {
     // 別の検査条件での検証、状態を欠いた証明書、別のモデルの証明書は拒否する。
     let (code, body) = f.json(&["verify-certificate", "tickets.json", "cert.json", "--deadlock"]);
     assert_eq!((code, &body["rejected"]["reason"]), (1, &json!("condition_mismatch")));
-    let mut cert: Value = serde_json::from_str(&f.get("cert.json")).unwrap();
+    let mut cert = f.get("cert.json");
     cert["states"].as_array_mut().unwrap().pop();
-    f.0.borrow_mut().insert("short.json".to_string(), cert.to_string());
+    f.put("short.json", &cert);
     let (code, body) = f.json(&["verify-certificate", "tickets.json", "short.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
     assert_eq!(body["rejected"]["reason"], json!("missing_successor"));
@@ -171,9 +174,9 @@ fn traces_can_be_saved_and_replayed() {
     assert_eq!((code, &body["status"]), (2, &json!("error")));
 
     // 途中の状態を書き換えたトレースは拒否する。
-    let mut trace: Value = serde_json::from_str(&f.get("trace.json")).unwrap();
+    let mut trace = f.get("trace.json");
     trace["steps"][0]["state"]["sold"] = json!(3);
-    f.0.borrow_mut().insert("forged.json".to_string(), trace.to_string());
+    f.put("forged.json", &trace);
     let (code, body) = f.json(&["replay", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
     assert_eq!(
@@ -304,9 +307,9 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     assert_eq!((code, &replayed["status"]), (1, &json!("violated")));
 
     // 受理されないトレースは縮小しない。
-    let mut forged: Value = serde_json::from_str(&f.get("long.json")).unwrap();
+    let mut forged = f.get("long.json");
     forged["steps"][0]["state"]["sold"] = json!(0);
-    f.0.borrow_mut().insert("forged.json".to_string(), forged.to_string());
+    f.put("forged.json", &forged);
     let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
 }
