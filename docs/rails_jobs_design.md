@@ -1,8 +1,8 @@
 # fmspec-rails のActive Job補助（設計案）
 
 Active Jobのジョブを、仕様の `process` のインスタンスとして実行し、ステップの境界で止め、そこで落とす補助の設計案である。
-まだ実装していない。
-語彙と名前は設計案で、試作で確定する。
+実装した。使い方は [rails.md](rails.md) の「ジョブのステップとクラッシュ」、テストは `fmspec-rails/test/job_test.rb` にある。
+§10 に、実装で設計から変えたことを書く。
 クラッシュの仕様の側は [crash_design.md](crash_design.md) と [dsl.md](dsl.md) の「クラッシュ」にある。
 
 ## 1. 動機
@@ -192,3 +192,12 @@ PostgreSQLのテストと違い、環境がなくてもskipしない。
 - ジョブが別のジョブを積む場合（`perform` の中の `perform_later`）に、積まれたジョブを別の `job` のインスタンスに結び付ける方法。`claim:` で足りるか。
 - `checkpoint` の名前と仕様のステップの対応を、テストの前に静的に検査できるか（Prismで `perform` を読む）。
 - Sidekiqのように、Active Jobを通さないジョブへの対応。
+
+## 10. 実装で決めたこと
+
+- `Checkpoints` を include すると、`before_perform` でも止まる。これにより、最初のステップの前（`crash_at:` に最初のステップを含めたとき）でも、`retry_on` を通して落とせる。`before_perform` の例外は `retry_on` が処理する。
+- 実行器はインスタンスごとに Context に1つ置き、再起動したインスタンスのスレッドでも同じものを使う。積み直されたジョブを、同じ `job_id` で取り出すためである。
+- `perform` の中で別のジョブを `perform_now` しても、取り出したジョブ（`job_id` が同じもの）の `checkpoint` でだけ止まる。
+- トランザクションの中かどうかは、`checkpoint` の時点で、Fiberの中から全接続プールの現在の接続を見て判定する。`isolation_level` が `:fiber` の構成でも、ジョブの接続を見るためである。
+- `crash: :exception` で上げた例外を、ジョブ自身が `rescue` して次の `checkpoint` まで進んだときは、そこをプログラムカウンタにする。仕様と食い違えば、観測の不一致になる。
+- `Checkpoints` を include していないジョブを `job` に結合すると、最初のステップで `CheckpointError` になる。
