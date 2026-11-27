@@ -86,6 +86,11 @@ fn unknown_versions_operators_and_keys_are_rejected() {
     assert!(schema_error(|ir| ir["invariants"][0]["expr"] = json!({"var": -1})).contains("添字"));
     assert!(schema_error(|ir| ir["invariants"][0]["expr"] = json!({"bool": true, "int": 1})).contains("1つだけ"));
     assert!(matches!(load("{"), Err(LoadError::Json(_))));
+    // List の長さの上限。2^32 + 1 は、32ビットで切り詰めると 1 になるが、そう読まない。
+    for max in [json!(1025), json!(4_294_967_297u64), json!(-1)] {
+        let list = json!({"list": {"of": {"bool": {}}, "max": max}});
+        assert!(schema_error(|ir| ir["states"][1]["type"] = list).contains("1024 以下"));
+    }
 }
 
 #[test]

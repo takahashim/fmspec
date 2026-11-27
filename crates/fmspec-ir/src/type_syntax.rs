@@ -108,8 +108,9 @@ fn parse_type_inner(v: &Value, path: &str, enums: &[EnumNames]) -> Res<SType> {
         _ => {
             let m = object(body, &path, &["of", "max"])?;
             let t = parse_type_inner(required(m, &path, "of")?, &format!("{path}.of"), enums)?;
+            // 32ビット環境で切り詰めないように、usize にする前に上限と比べる。
             let max = match required(m, &path, "max")?.as_u64() {
-                Some(n) if n as usize <= MAX_LIST => n as usize,
+                Some(n) if n <= MAX_LIST as u64 => n as usize,
                 _ => return schema(&format!("{path}.max"), format!("0以上 {MAX_LIST} 以下の整数が必要です")),
             };
             Ok(SType::List(Box::new(t), max))

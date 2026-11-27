@@ -89,6 +89,12 @@ fn update_errors_name_the_target_and_the_slot_of_an_out_of_range_value() {
     let mut json = trace_json(&m, Claim::StepError(0, vec![], Site::Update(1), ErrKind::OutOfRange(4)));
     json["claim"]["slot"] = json!(2);
     assert!(format_error(&m, &json).contains("\"p\" を更新しません"));
+    // 2^32 + 1 は、32ビットで切り詰めると 1 になるが、そう読まない。
+    json["claim"]["slot"] = json!(4_294_967_297u64);
+    assert!(format_error(&m, &json).contains("を更新しません"));
+    // 整数でない slot を、最初のスロットとして読まない。
+    json["claim"]["slot"] = json!("1");
+    assert!(format_error(&m, &json).contains("claim.slot"));
 }
 
 #[test]
@@ -144,14 +150,15 @@ fn malformed_traces_are_rejected_as_format_errors() {
     assert!(matches!(trace_from_json(&m, "{"), Err(TraceError::Json(_))));
 }
 
-/// `model_digest` のない証拠は受理しない。現状は `DigestMismatch`（found が空）になるが、
-/// `Format` にするべきかは決めていないので、拒否することだけを確かめる。
+/// `model_digest` のない証拠は、別のモデルに対する証拠でなく、形式の誤りとして拒否する。
 #[test]
-fn evidence_without_a_model_digest_is_rejected() {
+fn evidence_without_a_model_digest_is_a_format_error() {
     let m = model();
     let mut json = trace_json(&m, Claim::Deadlock);
     json.as_object_mut().unwrap().remove("model_digest");
-    assert!(read_back(&m, &json).is_err());
+    assert!(format_error(&m, &json).contains("model_digest"));
+    json["model_digest"] = json!(1);
+    assert!(format_error(&m, &json).contains("model_digest"));
 
     let cert = Certificate {
         conditions: default_conditions(&m, false),
@@ -159,7 +166,26 @@ fn evidence_without_a_model_digest_is_rejected() {
     };
     let mut json = certificate_to_json(&m, &cert);
     json.as_object_mut().unwrap().remove("model_digest");
-    assert!(certificate_from_json(&m, &json.to_string()).is_err());
+    match certificate_from_json(&m, &json.to_string()) {
+        Err(TraceError::Format(message)) => assert!(message.contains("model_digest"), "{message}"),
+        other => panic!("形式の誤りとして拒否されるはず: {other:?}"),
+    }
+}
+
+#[test]
+fn a_seed_is_null_or_a_non_negative_integer() {
+    let m = model();
+    let mut json = trace_json(&m, Claim::Deadlock);
+    assert_eq!(json["seed"], Value::Null);
+    assert_eq!(read_back(&m, &json).unwrap().seed, None);
+    json.as_object_mut().unwrap().remove("seed");
+    assert_eq!(read_back(&m, &json).unwrap().seed, None);
+    json["seed"] = json!(u64::MAX);
+    assert_eq!(read_back(&m, &json).unwrap().seed, Some(u64::MAX));
+    for bad in [json!("7"), json!(-1), json!(1.5)] {
+        json["seed"] = bad;
+        assert!(format_error(&m, &json).contains("seed"));
+    }
 }
 
 #[test]
