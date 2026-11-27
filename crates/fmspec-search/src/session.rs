@@ -193,6 +193,9 @@ impl Session {
     ) -> Option<(Vec<i64>, usize, Vec<i64>)> {
         let mut found = None;
         for s in before {
+            // 評価エラー（`Fail`）なら、遷移を確定しない。`None`（操作の添字が範囲外か、状態が状態型に従わない）は、
+            // 候補が中核のセッションの状態で、操作は中核が受理した入力なので来ないはずである。来ても遷移を確定しないだけで、
+            // 確実に通った遷移を多く報告することはなく、適合性の判定（中核の `mbt::Session::observe`）も変わらない。
             let Some(Enumerated::Ok(ts)) = model.successors(action, s) else {
                 return None;
             };
@@ -338,6 +341,8 @@ impl Session {
         let model = core.model();
         let mut possible: BTreeSet<Outcome> = BTreeSet::new();
         for state in core.candidates() {
+            // 診断に添える結果を集めるだけである。`None` は `explanation` と同じ理由で来ないはずで、来ても診断の候補が減るだけで、
+            // 不適合の判定（中核の `mbt::Session::observe` が返す）は変わらない。
             let Some(Enumerated::Ok(ts)) = model.successors(action, state) else {
                 continue;
             };

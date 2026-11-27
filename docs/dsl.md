@@ -609,6 +609,8 @@ end
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
 | `reason` | `:inconclusive` の理由 |
+| `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
+| `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
 | `visited_states`、`search`、`simulation` | 探索器の報告。検査済みの値ではない |
 | `to_s` | 人間向けの報告 |
 | `to_h` | エンジンの結果（[ir.md](ir.md)の形式） |
@@ -620,8 +622,13 @@ end
 シミュレーションで見つけたトレースに使う。
 幅優先探索の反例は、不変条件の違反については最初から最短である。
 
+`:internal_error` は fmspec の不具合を示す。
+探索器が生成した証拠を判定ゲートが拒否した場合は `rejected` に理由があり、
+探索器が内部の不整合で証拠を生成できなかった場合は `inconsistency` に内容がある（[ir.md](ir.md)）。
+
 エンジン内部のpanicは `Fmspec::InternalError` になる。
 これは `Exception` の子で、`rescue => e` では捕まらない。
+カバレッジとテスト経路のグラフを集める途中で探索器の内部の不整合を見つけた場合も、`Fmspec::InternalError` になる。
 
 ## 実装との適合性検査
 

@@ -66,8 +66,12 @@ module Fmspec
     def visited_states = search&.fetch("visited_states")
     def seed = simulation&.fetch("seed")
 
-    # 判定ゲートが証拠を拒否した理由。:rejected と :internal_error のとき。
+    # 判定ゲートが証拠を拒否した理由。:rejected のときと、探索器の証拠を拒否した :internal_error のとき。
     def rejected = @raw["rejected"]
+
+    # 探索器の内部の不整合の内容。証拠を生成できなかった :internal_error のとき。
+    # kind（"successors"）、action、state（状態型に従うときだけ）、encoded_state、message を持つ。
+    def inconsistency = @raw["inconsistency"]
 
     def to_h = @raw
 

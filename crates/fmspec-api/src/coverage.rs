@@ -5,6 +5,7 @@
 
 use crate::inject::{inject_slots, input_json, parse_inject};
 use crate::options::{conditions, count, max_states, options, size};
+use crate::report::inconsistency_report;
 use crate::Interrupt;
 use fmspec_ir::{args_to_json, state_to_json, Model};
 use fmspec_search::{explore, test_paths as search_paths};
@@ -81,6 +82,10 @@ pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
         .collect();
 
     let g = explore(model.checked(), &cond, max_states(map)?, interrupt);
+    // 探索器の内部の不整合で集めきれなかったグラフは、分母にしない。
+    if let Some(inconsistency) = &g.inconsistency {
+        return Ok(inconsistency_report(model, inconsistency));
+    }
     let covered_states = g.states.iter().filter(|s| states.contains(*s)).count();
     let n_actions = model.names.actions.len();
     let mut per_action = vec![(0usize, 0usize); n_actions];
@@ -137,6 +142,9 @@ pub fn test_paths(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<V
     let injected = parse_inject(model, map.get("inject"))?;
     let slots = inject_slots(model, &injected);
     let found = search_paths(model.checked(), &cond, &slots, max_states(map)?, max_steps, interrupt);
+    if let Some(inconsistency) = &found.graph.inconsistency {
+        return Ok(inconsistency_report(model, inconsistency));
+    }
     let paths: Vec<Value> = found
         .paths
         .iter()

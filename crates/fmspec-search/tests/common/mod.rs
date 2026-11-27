@@ -132,7 +132,10 @@ pub fn truncating_search(m: &Model, limit: usize) -> Evidence {
 pub fn forgetful_search(m: &Model, forgetful: &Model) -> Outcome {
     let cond = conditions(m, false);
     let found = fmspec_search::bfs(forgetful.checked(), &cond, &BfsOptions::default());
-    check_evidence(m.checked(), &cond, found.evidence, Stats::default())
+    let evidence = found
+        .evidence
+        .expect("このテストのモデルでは探索器の内部の不整合は起きない");
+    check_evidence(m.checked(), &cond, evidence, Stats::default())
 }
 
 pub fn trace(o: &Outcome) -> (&Vec<TraceStep>, &Claim) {

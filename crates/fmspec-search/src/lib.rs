@@ -10,14 +10,16 @@ pub mod check;
 mod claim;
 pub mod gate;
 pub mod graph;
+pub mod inconsistency;
 pub mod session;
 pub mod shrink;
 pub mod simulate;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
-pub use check::{check, check_evidence, check_evidence_with, sample, Outcome, Sampled, Status};
+pub use check::{check, check_evidence, check_evidence_with, sample, Internal, Outcome, Sampled, Status};
 pub use gate::{evidence_cost, judge, GateOptions};
 pub use graph::{explore, input_of, test_paths, Edge, Graph, Paths, TestPath};
+pub use inconsistency::Inconsistency;
 pub use session::{
     Covered, InputCheck, ModelError, NextInput, Observed, Outcome as PossibleOutcome, Seen, SeenOutput, Session,
 };

@@ -7,6 +7,7 @@
 //! 同じモデル、検査条件、seed、トレース数、最大ステップ数に対して、結果は同じになる。
 
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
+use crate::inconsistency::{successors, Inconsistency};
 use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
@@ -63,17 +64,26 @@ pub struct SimStats {
 
 pub struct SimResult {
     /// 違反または評価エラーに至るトレース、または中断。すべてのサンプルを検査し終えたら `None`。
-    pub evidence: Option<Evidence>,
+    /// 探索器の内部の不整合を見つけたら、証拠の代わりに不整合（`Err`）。
+    pub evidence: Result<Option<Evidence>, Inconsistency>,
     pub stats: SimStats,
 }
 
 /// ランダムシミュレーションで証拠を探す。
 pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> SimResult {
+    run(model, cond, opts, |a, s| successors(model, a, s))
+}
+
+/// `simulate` の本体。遷移の列挙 `successors` を引数に取るのは、列挙の不整合をシミュレータが返すことをテストするためである。
+fn run<F>(model: &CheckedModel, cond: &Conditions, opts: &SimOptions, successors: F) -> SimResult
+where
+    F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
+{
     let n_actions = model.raw().actions.len();
     let mut rng = SplitMix64::new(opts.seed);
     let mut stats = SimStats::default();
     let found = |evidence: Evidence, stats: SimStats| SimResult {
-        evidence: Some(evidence),
+        evidence: Ok(Some(evidence)),
         stats,
     };
     // 有効な遷移の作業用の列。ステップごとに空にして使い回す。
@@ -107,16 +117,22 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
                 if !selected(&cond.actions, a) {
                     continue;
                 }
-                match model.successors(a, state) {
-                    // 到達した状態は型に従い、操作の添字は範囲内なので、ここには来ない。
-                    None => return found(Evidence::Unavailable(Limit::Interrupted), stats),
-                    Some(Enumerated::Fail(args, site, kind)) => {
+                match successors(a, state) {
+                    // 到達した状態は型に従い、操作の添字は範囲内なので、ここには来ないはずである。
+                    // 来たら中断とは報告せず、不整合として返す。
+                    Err(inconsistency) => {
+                        return SimResult {
+                            evidence: Err(inconsistency),
+                            stats,
+                        }
+                    }
+                    Ok(Enumerated::Fail(args, site, kind)) => {
                         return found(
                             Evidence::Trace(start, steps, Claim::StepError(a, args, site, kind)),
                             stats,
                         );
                     }
-                    Some(Enumerated::Ok(ts)) => enabled.extend(ts.into_iter().map(|t| (a, t))),
+                    Ok(Enumerated::Ok(ts)) => enabled.extend(ts.into_iter().map(|t| (a, t))),
                 }
             }
             if enabled.is_empty() {
@@ -145,12 +161,63 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
         }
         stats.traces += 1;
     }
-    SimResult { evidence: None, stats }
+    SimResult {
+        evidence: Ok(None),
+        stats,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SplitMix64;
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{run, simulate, SimOptions, SplitMix64};
+    use crate::inconsistency::tests::counter;
+    use crate::inconsistency::{successors, Inconsistency};
+    use fmspec_ir::default_conditions;
+
+    fn options() -> SimOptions<'static> {
+        SimOptions {
+            seed: 0,
+            traces: 3,
+            max_steps: 10,
+            interrupt: None,
+        }
+    }
+
+    #[test]
+    fn an_inconsistent_enumeration_is_returned_instead_of_evidence() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        // 状態 x = 1 で、列挙が状態を受け付けなかったものとする。
+        let result = run(m.checked(), &cond, &options(), |a, s| {
+            if s == &vec![1] {
+                Err(Inconsistency::Successors {
+                    action: a,
+                    state: s.clone(),
+                })
+            } else {
+                successors(m.checked(), a, s)
+            }
+        });
+        assert_eq!(
+            result.evidence.err(),
+            Some(Inconsistency::Successors {
+                action: 0,
+                state: vec![1]
+            })
+        );
+        assert_eq!(result.stats.traces, 0);
+        assert_eq!(result.stats.steps, 1);
+    }
+
+    #[test]
+    fn a_consistent_simulation_samples_every_trace() {
+        let m = counter();
+        let result = simulate(m.checked(), &default_conditions(&m, false), &options());
+        assert!(matches!(result.evidence, Ok(None)));
+        assert_eq!(result.stats.traces, 3);
+    }
 
     /// 結果に記録する乱数の名前 `PRNG_NAME` のとおり、標準の SplitMix64 の列を作る。
     /// 参照実装と同じ seed で同じトレースをたどることは、この列に依存する。

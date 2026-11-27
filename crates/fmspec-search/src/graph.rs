@@ -5,6 +5,7 @@
 //! 性質は検査しない。モデルの検査は `check` が判定ゲートを通して行う。
 
 use crate::claim::selected;
+use crate::inconsistency::{successors, Inconsistency};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
@@ -28,8 +29,10 @@ pub struct Graph {
     pub parent: Vec<Option<usize>>,
     /// 遷移。遷移元の訪問順、操作の定義順、引数の辞書順に並ぶ。
     pub edges: Vec<Edge>,
-    /// 到達できるすべての状態と遷移を集めたか。状態数の上限、評価エラー、中断で集めきれなければ偽。
+    /// 到達できるすべての状態と遷移を集めたか。状態数の上限、評価エラー、中断、内部の不整合で集めきれなければ偽。
     pub complete: bool,
+    /// 探索器の内部の不整合。見つけたら探索をやめる。このグラフをカバレッジの分母やテスト経路に使ってはならない。
+    pub inconsistency: Option<Inconsistency>,
 }
 
 /// 到達可能な状態と遷移を集める。評価エラーになる遷移は集めない。
@@ -39,12 +42,27 @@ pub fn explore(
     max_states: Option<usize>,
     interrupt: Option<&dyn Fn() -> bool>,
 ) -> Graph {
+    collect(model, cond, max_states, interrupt, |a, s| successors(model, a, s))
+}
+
+/// `explore` の本体。遷移の列挙 `successors` を引数に取るのは、列挙の不整合を記録することをテストするためである。
+fn collect<F>(
+    model: &CheckedModel,
+    cond: &Conditions,
+    max_states: Option<usize>,
+    interrupt: Option<&dyn Fn() -> bool>,
+    successors: F,
+) -> Graph
+where
+    F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
+{
     let mut g = Graph {
         states: Vec::new(),
         index: HashMap::new(),
         parent: Vec::new(),
         edges: Vec::new(),
         complete: true,
+        inconsistency: None,
     };
     let full = |g: &Graph| max_states.is_some_and(|max| g.states.len() >= max);
     for init in model.initials() {
@@ -68,11 +86,19 @@ pub fn explore(
             if !selected(&cond.actions, a) {
                 continue;
             }
-            let ts = match model.successors(a, &state) {
-                Some(Enumerated::Ok(ts)) => ts,
-                _ => {
+            let ts = match successors(a, &state) {
+                Ok(Enumerated::Ok(ts)) => ts,
+                // 評価エラーになる遷移は集めず、残りの遷移を集める。
+                Ok(Enumerated::Fail(..)) => {
                     g.complete = false;
                     continue;
+                }
+                // 集めた状態は型に従い、操作の添字は範囲内なので、ここには来ないはずである。
+                // 来たら、評価エラーと区別して記録し、探索をやめる。
+                Err(inconsistency) => {
+                    g.complete = false;
+                    g.inconsistency = Some(inconsistency);
+                    return g;
                 }
             };
             for t in ts {
@@ -239,5 +265,49 @@ pub fn test_paths(
         paths,
         targets: n,
         covered: done,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{collect, explore};
+    use crate::inconsistency::tests::counter;
+    use crate::inconsistency::{successors, Inconsistency};
+    use fmspec_ir::default_conditions;
+
+    #[test]
+    fn an_inconsistent_enumeration_is_recorded_and_stops_the_exploration() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        let g = collect(m.checked(), &cond, None, None, |a, s| {
+            if s == &vec![1] {
+                Err(Inconsistency::Successors {
+                    action: a,
+                    state: s.clone(),
+                })
+            } else {
+                successors(m.checked(), a, s)
+            }
+        });
+        assert!(!g.complete);
+        assert_eq!(
+            g.inconsistency,
+            Some(Inconsistency::Successors {
+                action: 0,
+                state: vec![1]
+            })
+        );
+        assert_eq!(g.states, vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn a_consistent_exploration_records_no_inconsistency() {
+        let m = counter();
+        let g = explore(m.checked(), &default_conditions(&m, false), None, None);
+        assert!(g.complete);
+        assert_eq!(g.inconsistency, None);
+        assert_eq!(g.states.len(), 4);
     }
 }
