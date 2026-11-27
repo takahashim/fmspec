@@ -7,6 +7,7 @@
 
 pub mod bfs;
 pub mod check;
+mod claim;
 pub mod gate;
 pub mod graph;
 pub mod session;

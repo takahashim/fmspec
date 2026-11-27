@@ -6,6 +6,7 @@
 //! 乱数は SplitMix64 で、遷移の列挙順は幅優先探索と同じ（操作の定義順、引数の辞書順）である。
 //! 同じモデル、検査条件、seed、トレース数、最大ステップ数に対して、結果は同じになる。
 
+use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
@@ -66,18 +67,6 @@ pub struct SimResult {
     pub stats: SimStats,
 }
 
-fn property_claim(
-    index: usize,
-    value: Result<bool, fmspec_core::eval::ErrKind>,
-    violated: fn(usize) -> Claim,
-    failed: fn(usize, fmspec_core::eval::ErrKind) -> Claim,
-) -> Claim {
-    match value {
-        Err(e) => failed(index, e),
-        Ok(_) => violated(index),
-    }
-}
-
 /// ランダムシミュレーションで証拠を探す。
 pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> SimResult {
     let n_actions = model.raw().actions.len();
@@ -87,6 +76,8 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
         evidence: Some(evidence),
         stats,
     };
+    // 有効な遷移の作業用の列。ステップごとに空にして使い回す。
+    let mut enabled: Vec<(usize, Transition)> = Vec::new();
 
     for _ in 0..opts.traces {
         // 初期状態が1つなら乱数を消費しない。同じシードで、初期状態が1つのモデルの結果を変えないためである。
@@ -96,22 +87,22 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
         } else {
             inits[0].clone()
         };
-        let mut state = start.clone();
         let mut steps: Vec<TraceStep> = Vec::new();
-        if let Some((i, v)) = model.invariants(cond, &state) {
-            let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+        if let Some(claim) = invariant_claim(model, cond, &start) {
             return found(Evidence::Trace(start, steps, claim), stats);
         }
         for _ in 0..opts.max_steps {
             if opts.interrupt.is_some_and(|requested| requested()) {
                 return found(Evidence::Unavailable(Limit::Interrupted), stats);
             }
-            let mut enabled: Vec<(usize, Transition)> = Vec::new();
+            // 現在の状態は、最後のステップの遷移先である。状態を複製して別に持たない。
+            let state = steps.last().map_or(&start, |step| &step.state);
+            enabled.clear();
             for a in 0..n_actions {
-                if !cond.actions.get(a).copied().unwrap_or(false) {
+                if !selected(&cond.actions, a) {
                     continue;
                 }
-                match model.successors(a, &state) {
+                match model.successors(a, state) {
                     // 到達した状態は型に従い、操作の添字は範囲内なので、ここには来ない。
                     None => return found(Evidence::Unavailable(Limit::Interrupted), stats),
                     Some(Enumerated::Fail(args, site, kind)) => {
@@ -125,10 +116,8 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
             }
             if enabled.is_empty() {
                 if cond.deadlock {
-                    match model.terminal(&state) {
-                        Ok(true) => {}
-                        Ok(false) => return found(Evidence::Trace(start, steps, Claim::Deadlock), stats),
-                        Err(e) => return found(Evidence::Trace(start, steps, Claim::TerminalError(e)), stats),
+                    if let Some(claim) = deadlock_claim(model, state) {
+                        return found(Evidence::Trace(start, steps, claim), stats);
                     }
                 }
                 break;
@@ -136,20 +125,16 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
             let pick = rng.below(enabled.len() as u64) as usize;
             let (a, t) = enabled.swap_remove(pick);
             stats.steps += 1;
-            let violation = model.contracts(cond, a, &state, &t.args, &t.state, &t.output);
+            // 遷移契約を先に検査し、満たせば遷移先の不変条件を検査する。
+            let violation = contract_claim(model, cond, a, state, &t.args, &t.state, &t.output)
+                .or_else(|| invariant_claim(model, cond, &t.state));
             steps.push(TraceStep {
                 action: a,
                 args: t.args,
                 output: t.output,
-                state: t.state.clone(),
+                state: t.state,
             });
-            if let Some((k, v)) = violation {
-                let claim = property_claim(k, v, Claim::Contract, Claim::ContractError);
-                return found(Evidence::Trace(start, steps, claim), stats);
-            }
-            state = t.state;
-            if let Some((i, v)) = model.invariants(cond, &state) {
-                let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+            if let Some(claim) = violation {
                 return found(Evidence::Trace(start, steps, claim), stats);
             }
         }
