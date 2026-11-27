@@ -52,8 +52,58 @@ fn the_denominator_is_every_reachable_state_and_transition() {
     let limited = coverage(&m, &json!({"max_states": 2}), None).unwrap();
     assert_eq!(limited["complete"], false);
     assert_eq!(limited["states"]["reachable"], 2);
+}
 
-    assert!(coverage(&m, &json!({"seen": {"transitions": [[0, 0]]}}), None).is_err());
+#[test]
+fn malformed_seen_values_are_errors_with_a_message() {
+    let m = tickets();
+    let error = |seen: Value| coverage(&m, &json!({"seen": seen}), None).unwrap_err();
+    assert_eq!(error(json!([])), "seen はオブジェクトです");
+    assert_eq!(error(json!({"states": {}})), "seen の states は配列です");
+    assert_eq!(error(json!({"transitions": 1})), "seen の transitions は配列です");
+    assert_eq!(error(json!({"states": [[0.5]]})), "seen の状態は整数の配列です");
+    assert_eq!(
+        error(json!({"transitions": [[[0], 0]]})),
+        "seen の遷移は [状態, 操作, 引数] です"
+    );
+    assert_eq!(
+        error(json!({"transitions": [[[0], -1, []]]})),
+        "seen の遷移の操作は添字です"
+    );
+    assert_eq!(
+        error(json!({"transitions": [[[0], 0, "2"]]})),
+        "seen の引数は整数の配列です"
+    );
+    // null は省略と同じ。到達できない状態や遷移は、数えないだけで誤りではない。
+    let ignored = json!({"states": [[9]], "transitions": [[[9], 7, []]]});
+    for seen in [Value::Null, json!({"states": null, "transitions": null}), ignored] {
+        let r = coverage(&m, &json!({"seen": seen}), None).unwrap();
+        assert_eq!(r["states"]["covered"], 0, "{r}");
+        assert_eq!(r["transitions"]["covered"], 0, "{r}");
+    }
+}
+
+#[test]
+fn the_uncovered_list_names_the_transition_and_is_capped() {
+    // 1状態で、引数が30通りの自己遷移。
+    let ir = json!({
+        "ir_version": 1,
+        "name": "dial",
+        "states": [{"name": "n", "type": {"int": {"min": 0, "max": 0}}, "initial": {"int": 0}}],
+        "actions": [{"name": "press", "params": [{"name": "key", "type": {"int": {"min": 0, "max": 29}}}],
+                     "choices": [{"name": "long", "type": {"bool": {}}}]}]
+    });
+    let m = load(&ir.to_string()).unwrap();
+    let seen = json!({"transitions": [[[0], 0, [0, 0]]]});
+    let r = coverage(&m, &json!({"seen": seen}), None).unwrap();
+    assert_eq!(r["transitions"], json!({"reachable": 60, "covered": 1}));
+    assert_eq!(r["uncovered_count"], 59);
+    let uncovered = r["uncovered"].as_array().unwrap();
+    assert_eq!(uncovered.len(), 20);
+    assert_eq!(
+        uncovered[0],
+        json!({"state": {"n": 0}, "action": "press", "args": {"key": 0}, "choices": {"long": true}})
+    );
 }
 
 fn inputs(path: &Value) -> Vec<(String, Value)> {
