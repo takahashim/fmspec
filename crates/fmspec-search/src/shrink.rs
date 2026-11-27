@@ -182,20 +182,33 @@ impl Shrinker<'_> {
         self.attempt(i, &inputs)
     }
 
-    /// 引数を小さくする。前のステップから順に、各ステップの引数の列（公開引数、内部選択の順）の前の位置から順に、
-    /// その1つの位置だけを、ドメインの正規順でより前の値に変えた候補を、前の値から試す。戻り値は、何か変えたか。
-    fn lower_args(&mut self) -> Result<bool, Stopped> {
+    /// 引数を、位置ごとに少ない候補で小さくする（1巡目）。前のステップから順に、各ステップの引数の列
+    /// （公開引数、内部選択の順）の前の位置から順に、その1つの位置だけを変える。
+    /// まずドメインの正規順で最初の値を試し、棄却されたら、棄却された値と今の値の間を二分して試す。
+    /// 受理されたら今の値をそれに置き換え、棄却されたら棄却された値をそれに置き換えて、2つが隣り合うまで続ける。
+    /// 戻り値は、何か変えたか。何も変えずに戻ったなら、どの位置でも、最初の値と今の値の1つ前の値は棄却されている。
+    fn lower_args_quickly(&mut self) -> Result<bool, Stopped> {
         let mut changed = false;
         for i in 0..self.best.len() {
             for j in 0..self.best[i].args.len() {
                 let Some((lo, current)) = self.bounds(i, j) else {
                     continue;
                 };
-                for value in lo..current {
-                    if self.try_value(i, j, value)? {
-                        // より前の値はすでに試して棄却されたので、この位置ではこれより小さくできない。
+                if current <= lo {
+                    continue;
+                }
+                if self.try_value(i, j, lo)? {
+                    changed = true;
+                    continue;
+                }
+                let (mut rejected, mut accepted) = (lo, current);
+                while accepted - rejected > 1 {
+                    let mid = rejected + (accepted - rejected) / 2;
+                    if self.try_value(i, j, mid)? {
+                        accepted = mid;
                         changed = true;
-                        break;
+                    } else {
+                        rejected = mid;
                     }
                 }
             }
@@ -203,12 +216,36 @@ impl Shrinker<'_> {
         Ok(changed)
     }
 
-    /// ステップの削除をできなくなるまで行い、次に引数を小さくする。引数を変えたら、削除からやり直す。
+    /// 引数を、より前の値をすべて試して小さくする（2巡目）。1巡目が何も変えなかった直後に呼ぶ。
+    /// 1巡目と同じ順に位置をたどり、1巡目が同じトレースで棄却した最初の値と今の値の1つ前の値を除く、
+    /// より前の値を前から試す。最初に受理された値で今の値を置き換えて、`true` を返す（ほかの位置の1巡目の棄却は、
+    /// トレースが変わると当てはまらないので、ここで戻る）。
+    fn lower_args_thoroughly(&mut self) -> Result<bool, Stopped> {
+        for i in 0..self.best.len() {
+            for j in 0..self.best[i].args.len() {
+                let Some((lo, current)) = self.bounds(i, j) else {
+                    continue;
+                };
+                for value in lo + 1..current - 1 {
+                    if self.try_value(i, j, value)? {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// ステップの削除をできなくなるまで行い、次に引数の変更の1巡目を行う。1巡目が何も変えなければ2巡目を行う。
+    /// 引数を変えたら、削除からやり直す。
     fn run(&mut self) -> Result<(), Stopped> {
         // 候補を採用するたびに、長さが減るか、長さが同じで引数の列が辞書順で前になるので、この繰り返しは終わる。
         loop {
             self.remove_steps()?;
-            if !self.lower_args()? {
+            if self.lower_args_quickly()? {
+                continue;
+            }
+            if !self.lower_args_thoroughly()? {
                 return Ok(());
             }
         }

@@ -845,6 +845,83 @@ fn removals_and_argument_changes_share_the_attempts_and_a_spent_budget_leaves_an
     assert!(both > 10, "削除と引数の変更の両方で縮んだトレースが少なすぎる: {both}");
 }
 
+/// 操作 `set(d)`（`x := d`、`d` は0から1_000_000）と `tick(e)`（`y := y + 1`、`e` は0か1で遷移先に効かない）を持つモデル。
+/// 不変条件は「`x >= 500000` かつ `y >= 3` でない」。
+fn wide() -> CheckedModel {
+    let bin = |op, a, b| Expr::Bin(op, Box::new(a), Box::new(b));
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, 1_000_000), Type::Int(0, 3)],
+        inits: vec![vec![0, 0]],
+        actions: vec![
+            Action {
+                n_params: 1,
+                domains: vec![Type::Int(0, 1_000_000)],
+                guard: Expr::Const(Value::Bool(true)),
+                updates: vec![Update {
+                    target: 0,
+                    expr: Expr::Arg(0),
+                }],
+                output: None,
+            },
+            Action {
+                n_params: 1,
+                domains: vec![Type::Int(0, 1)],
+                guard: bin(BinOp::Lt, Expr::Var(1), int(3)),
+                updates: vec![Update {
+                    target: 1,
+                    expr: bin(BinOp::Add, Expr::Var(1), int(1)),
+                }],
+                output: None,
+            },
+        ],
+        invariants: vec![Expr::Not(Box::new(Expr::And(
+            Box::new(bin(BinOp::Ge, Expr::Var(0), int(500_000))),
+            Box::new(bin(BinOp::Ge, Expr::Var(1), int(3))),
+        )))],
+        contracts: vec![],
+        terminal: None,
+    };
+    validate(raw).expect("整形式のモデル")
+}
+
+#[test]
+fn a_wide_domain_does_not_spend_the_attempts_before_other_arguments_are_lowered() {
+    let m = wide();
+    let cond = conditions(&m, false);
+    let claim = Claim::Invariant(0);
+    let step = |action, arg, state: [i64; 2]| TraceStep {
+        action,
+        args: vec![arg],
+        output: None,
+        state: state.to_vec(),
+    };
+    let steps = vec![
+        step(0, 700_000, [700_000, 0]),
+        step(1, 1, [700_000, 1]),
+        step(1, 1, [700_000, 2]),
+        step(1, 1, [700_000, 3]),
+    ];
+    let shrunk = shrink(&m, &cond, &[0, 0], &steps, &claim, &ShrinkOptions::attempts(10_000));
+    let kind = decide(
+        &m,
+        &cond,
+        &Evidence::Trace(vec![0, 0], shrunk.steps.clone(), claim.clone()),
+    )
+    .kind();
+    assert_eq!(kind, VerdictKind::Violated);
+    // d は二分探索で、違反に要る最小の値まで小さくなり、遷移先に効かない e は0になる。
+    let expected = vec![
+        step(0, 500_000, [500_000, 0]),
+        step(1, 0, [500_000, 1]),
+        step(1, 0, [500_000, 2]),
+        step(1, 0, [500_000, 3]),
+    ];
+    assert_eq!(shrunk.steps, expected);
+    // d より前の値をすべて試して局所最小を確かめるには候補が足りないので、打ち切ったことを報告する。
+    assert_eq!((shrunk.attempts, shrunk.stopped), (10_000, Some(ShrinkStop::Attempts)));
+}
+
 // ---- 状態と遷移のグラフ（仕様書 §11.3）----
 
 #[test]
