@@ -23,6 +23,11 @@ pub struct GateOptions<'a> {
     pub interrupt: Option<&'a dyn Fn() -> bool>,
 }
 
+/// 整数の範囲 `lo..=hi` の要素の数。空なら0。
+fn range_len(lo: i64, hi: i64) -> u64 {
+    u64::try_from(i128::from(hi) - i128::from(lo) + 1).unwrap_or(0)
+}
+
 /// 式を1回評価するときの、部分式の評価回数の上限。
 pub fn expr_cost(e: &Expr) -> u64 {
     match e {
@@ -41,17 +46,16 @@ pub fn expr_cost(e: &Expr) -> u64 {
         Expr::Ite(c, x, y) => expr_cost(c)
             .saturating_add(expr_cost(x).max(expr_cost(y)))
             .saturating_add(1),
-        Expr::Forall(_, lo, hi, body) | Expr::Exists(_, lo, hi, body) => {
-            let n = u64::try_from(i128::from(*hi) - i128::from(*lo) + 1).unwrap_or(0);
-            n.saturating_mul(expr_cost(body).saturating_add(1)).saturating_add(1)
-        }
+        Expr::Forall(_, lo, hi, body) | Expr::Exists(_, lo, hi, body) => range_len(*lo, *hi)
+            .saturating_mul(expr_cost(body).saturating_add(1))
+            .saturating_add(1),
     }
 }
 
 fn domain_size(m: &RawModel, ty: &Type) -> u64 {
     match ty {
         Type::Bool => 2,
-        Type::Int(lo, hi) => u64::try_from(i128::from(*hi) - i128::from(*lo) + 1).unwrap_or(0),
+        Type::Int(lo, hi) => range_len(*lo, *hi),
         Type::Enum(id) => m.enums.get(*id).and_then(|n| u64::try_from(*n).ok()).unwrap_or(0),
     }
 }
