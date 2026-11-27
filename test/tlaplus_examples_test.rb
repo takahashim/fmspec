@@ -56,7 +56,14 @@ class TlaplusExamplesTest < Minitest::Test
                                     expected: :violated },
     "DiningPhilosophers" => { model: "dining_philosophers", config: "CONSTANTS N = 5\nSPECIFICATION Spec",
                               type_ok: %w[TypeOK], invariants: { "NoDeadlock" => :deadlock }, deadlock: true,
-                              expected: 58 }
+                              expected: 58 },
+    # PlusCal から翻訳された仕様。DSL では process で書く。pc はインスタンスごとのプログラムカウンタにあたる。
+    "Simple" => { model: "simple", config: "CONSTANT N = 5\nSPECIFICATION Spec", type_ok: %w[TypeOK],
+                  invariants: { "PCorrect" => "p_correct", "Inv" => "inv" }, deadlock: true, expected: 723 },
+    "Lock" => { model: "lock", config: "SPECIFICATION Spec", type_ok: %w[TypeOK],
+                invariants: { "LockInv" => "lock_inv" }, deadlock: true, expected: 12 },
+    "Peterson" => { model: "peterson", config: "SPECIFICATION Spec", type_ok: %w[TypeOK],
+                    invariants: { "Inv" => "inv" }, deadlock: true, expected: 42 }
   }.freeze
 
   def setup
