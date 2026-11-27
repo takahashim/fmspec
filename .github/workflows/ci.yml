@@ -3,9 +3,11 @@
 #   rust   rake lint、nupur:check、test:rust、test:reference、test:differential
 #   ruby   rake compile、test:ruby（対応する Ruby の下限と開発版）
 #   rails  rake test:rails。PostgreSQL を立てて、分離レベル別のテストも skip させない
-#   verus          rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件）
-#   verus-mutants  rake verus:mutants（変異と assert(false)）。重いので、main への PR、定期実行、手動実行に限る
+#   verus  rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件）
 #   nupur  rake nupur:upstream、nupur:lint（Makiri の固定コミットと nupur_lints）
+#
+# 変異と assert(false) の検査（rake verus:mutants）は、変種ごとに crate 全体を検証し直すので数時間かかる。
+# CI では回さず、証明を変えたときに手元で、変えたファイルに絞って実行する（VERUS_MUTANTS_FILES）。
 #
 # バージョンは docs/verification.md の表に合わせる。Verus と Nupur のバージョンは rakelib から読む。
 name: CI
@@ -15,9 +17,6 @@ on:
     branches: [main, core-mvp]
   pull_request:
   workflow_dispatch:
-  schedule:
-    # 毎日 03:17 JST。変異の検査（verus-mutants）をここで回す。
-    - cron: "17 18 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -138,25 +137,6 @@ jobs:
       - run: gem install --no-document rake
       - uses: ./.github/actions/setup-verus
       - run: rake verus:proof
-
-  verus-mutants:
-    name: Verus (mutants)
-    # 変異162件と assert(false) 100件のそれぞれで crate 全体を検証し直すので、push ごとには回さない。
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.base_ref == 'main')
-    needs: verus
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: ${{ env.RUBY_VERSION }}
-      - run: gem install --no-document rake
-      - uses: ./.github/actions/setup-verus
-      - run: rake verus:mutants
 
   nupur:
     name: Nupur (upstream, lint)
