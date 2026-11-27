@@ -5,11 +5,11 @@
 //! 下ろしは `Fail::Type` で失敗せず、型の幅だけの純粋なスロットを返す（[`tpost`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, lemma_width_pos, sty, to_xty, wf_stype, wf_xtype, wf_xtypes, width, xty, xwidth, xwidth_sum, STy, XTy, XType};
+use crate::encoding::{keys, lemma_width_pos, lemma_xwidth_of, to_xtys, wf_stypes, sty, to_xty, wf_stype, wf_xtype, wf_xtypes, width, xty, xwidth, xwidth_sum, STy, XTy, XType};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{type_of, SCtx};
 #[cfg(verus_keep_ghost)]
-use crate::limits::{lim_s, lim_x};
+use crate::limits::{lim_s, lim_ss, lim_x, lim_xs};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::{Bound, Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
@@ -164,6 +164,43 @@ pub proof fn lemma_xwidth_sum_pos(ts: Seq<XTy>, enums: Seq<i64>)
     decreases ts, 0nat,
 {
     lemma_xwidth_pos(ts.last(), enums);
+}
+
+/// 格納の型が条件を満たせば、それから作った式の型も満たす。
+pub proof fn lemma_ok_to_x(t: STy, enums: Seq<i64>)
+    requires
+        ok_s(t, enums),
+    ensures
+        ok_x(to_xty(t), enums),
+    decreases t, 1nat,
+{
+    lemma_xwidth_of(t, enums);
+    match t {
+        STy::Tuple(ts) => lemma_ok_to_xs(ts, enums),
+        STy::Record(_, ts) => lemma_ok_to_xs(ts, enums),
+        STy::Option(x) => lemma_ok_to_x(*x, enums),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_ok_to_xs(ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        wf_stypes(ts, enums),
+        lim_ss(ts, enums),
+    ensures
+        wf_xtypes(to_xtys(ts), enums),
+        lim_xs(to_xtys(ts), enums),
+        to_xtys(ts).len() == ts.len(),
+        xwidth_sum(to_xtys(ts), enums) == crate::encoding::width_sum(ts, enums),
+    decreases ts, 0nat,
+{
+    if ts.len() > 0 {
+        lemma_ok_to_xs(ts.drop_last(), enums);
+        lemma_ok_to_x(ts.last(), enums);
+        lemma_xwidth_of(ts.last(), enums);
+        assert(to_xtys(ts).drop_last() == to_xtys(ts.drop_last()));
+        assert(to_xtys(ts).last() == to_xty(ts.last()));
+    }
 }
 
 // ---- 行の形 ----
@@ -394,6 +431,11 @@ pub open spec fn put_pre(key: TExpr, value: TExpr, cx: LowerCtx, sc: Seq<Bound>,
     &&& ok_s(mt, cx.enums@)
     &&& ms.len() == width(mt, cx.enums@)
     &&& all_pure(ms, n)
+}
+
+/// Setの型 `x` の要素の型は `t` で、要素の型は値の数を持つ。
+pub open spec fn n_ok_set(x: XTy, t: STy, enums: Seq<i64>) -> bool {
+    x == XTy::Set(Box::new(t)) ==> keys(t, enums) is Some
 }
 
 /// 失敗するなら、束縛の深さが上限に達したためである。
