@@ -163,7 +163,7 @@ proof fn lemma_last_contract(m: RawModel, c: Conditions, start: Seq<i64>, steps:
 // ---- 検査器 ----
 
 /// `s` が初期状態の1つであることを確かめる。
-fn is_initial(m: &RawModel, s: &Vec<i64>) -> (r: bool)
+pub(crate) fn is_initial(m: &RawModel, s: &Vec<i64>) -> (r: bool)
     ensures
         r ==> is_init(*m, s@),
 {
@@ -184,7 +184,7 @@ fn is_initial(m: &RawModel, s: &Vec<i64>) -> (r: bool)
 
 /// 開始状態から操作列を再生し、各ステップの出力と状態を照合する。
 #[verifier::loop_isolation(false)]
-fn replay(m: &RawModel, c: &Conditions, start: &Vec<i64>, steps: &Vec<TraceStep>) -> (r: Option<Reject>)
+pub(crate) fn replay(m: &RawModel, c: &Conditions, start: &Vec<i64>, steps: &Vec<TraceStep>) -> (r: Option<Reject>)
     ensures
         r is None ==> trace_ok(*m, *c, start@, steps@),
 {
@@ -302,7 +302,7 @@ fn eval_last_contract(m: &RawModel, c: &Conditions, start: &Vec<i64>, steps: &Ve
 }
 
 /// 末尾の状態で、主張どおりの事象が起きることを確かめる。
-fn check_claim(m: &RawModel, c: &Conditions, start: &Vec<i64>, steps: &Vec<TraceStep>, claim: &Claim) -> (r: bool)
+pub(crate) fn check_claim(m: &RawModel, c: &Conditions, start: &Vec<i64>, steps: &Vec<TraceStep>, claim: &Claim) -> (r: bool)
     ensures
         r ==> claim_holds(*m, *c, start@, steps@, *claim),
 {

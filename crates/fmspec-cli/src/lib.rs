@@ -3,8 +3,8 @@
 //! 引数を fmspec-api のオプションに直して呼び出し、結果をJSONまたは人間向けの形で出力する。
 //! 終了コードは次のとおり。成功の種類は出力の `status` で区別する。
 //!
-//! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`）
-//! - `1`: 反例、または提示された証明書やトレースの拒否
+//! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`、`refines`）
+//! - `1`: 反例（`violated`、`not_refines`）、または提示された証明書やトレースの拒否
 //! - `2`: 評価エラー、不正な入力、内部エラー
 //! - `3`: 探索未完了
 
@@ -30,6 +30,7 @@ const USAGE: &str = "\
   fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [検査条件]
   fmspec replay MODEL.json TRACE.json
   fmspec shrink MODEL.json TRACE.json [--trace-out FILE]
+  fmspec refine REFINEMENT.json [--max-states N] [--actions A,B,...]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
   --actions A,B,...      対象の操作
@@ -152,8 +153,8 @@ fn failure(json: bool, status: &str, message: String) -> Run {
 
 fn exit_code(body: &Value) -> i32 {
     match body["status"].as_str() {
-        Some("verified" | "sampled" | "valid") => EXIT_OK,
-        Some("violated" | "rejected") => EXIT_VIOLATED,
+        Some("verified" | "sampled" | "valid" | "refines") => EXIT_OK,
+        Some("violated" | "rejected" | "not_refines") => EXIT_VIOLATED,
         Some("inconclusive") => EXIT_INCONCLUSIVE,
         _ => EXIT_ERROR,
     }
@@ -307,6 +308,18 @@ fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
     Ok(finish(a.json, body))
 }
 
+fn cmd_refine(io: &Io, a: &Args) -> Result<Run, Run> {
+    accepts(a, "refine", &["--max-states", "--actions"], false)?;
+    let [path] = a.positional.as_slice() else {
+        return usage(a.json, "refine には詳細化の文書のファイルを1つ指定します");
+    };
+    let text = read(io, path, a.json)?;
+    let r = fmspec_api::load_refinement(&text).map_err(|e| failure(a.json, "invalid_model", format!("{path}: {e}")))?;
+    let body = fmspec_api::refine(&r, &Value::Object(a.options.clone()), None)
+        .map_err(|e| failure(a.json, "usage_error", e))?;
+    Ok(finish(a.json, body))
+}
+
 /// コマンドを実行する。ファイルの読み書きは引数の関数で行う。
 pub fn run(
     args: &[String],
@@ -347,6 +360,7 @@ pub fn run(
         "verify-certificate" => cmd_verify_certificate(&io, &parsed),
         "replay" => cmd_replay(&io, &parsed),
         "shrink" => cmd_shrink(&io, &parsed),
+        "refine" => cmd_refine(&io, &parsed),
         _ => usage(json, format!("未知のコマンド {command:?}\n{USAGE}")),
     };
     match result {

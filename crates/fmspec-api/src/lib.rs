@@ -7,6 +7,7 @@
 
 mod coverage;
 mod human;
+mod refine;
 mod report;
 mod session;
 
@@ -22,8 +23,9 @@ use serde_json::{json, Map, Value};
 use std::time::Instant;
 
 pub use coverage::{coverage, test_paths};
-pub use fmspec_ir::{load, Model};
+pub use fmspec_ir::{load, load_refinement, Model, Refinement};
 pub use human::human;
+pub use refine::{describe_refinement, refine};
 pub use session::Session;
 
 /// 中断要求の問い合わせ。真を返したら、探索か証明書の検査を打ち切って `inconclusive` を返す。

@@ -577,7 +577,7 @@ Ghost Stateは有限の補助状態として履歴を記録する。例：決済
 
 移行は旧・新スキーマや機能フラグ、混在バージョン、バックフィル、再試行を状態として表し、各過渡状態で成立すべき不変条件を定義する。実DBの移行全体の正しさを証明するものではない。
 
-詳細化の検査は、具体モデルの状態から抽象モデルの状態への写像を与え、具体モデルの各到達可能な遷移が、抽象モデルの遷移か状態の変わらないステップに写ることを判定ゲートで検査する。安全性の部分だけを扱い、活性と公平性の保存は対象外とする。計画は[refinement_symmetry_constants.md](plans/refinement_symmetry_constants.md)にある。
+詳細化の検査は、具体モデルの状態から抽象モデルの状態への写像を与え、具体モデルの各到達可能な遷移が、抽象モデルの遷移か状態の変わらないステップに写ることを判定ゲートで検査する。安全性の部分だけを扱い、活性と公平性の保存は対象外とする。判定は安全性の判定と別の型（`Refines`、`NotRefines`、`Error`）で返す。計画と実装の範囲は[refinement_symmetry_constants.md](plans/refinement_symmetry_constants.md)にある。
 
 ### 12.6 中核を拡張しないための原則
 
@@ -730,7 +730,7 @@ Ruby側にはBindingの雛形生成、RSpecへの組み込み、反例から固�
 
 中核MVPは1〜3、Ruby向けMVPは1〜5、Rails向け初期リリースは1〜6とする。段階7以降は追加の保証を確立してから公開する。
 
-定数を変えた繰り返し検査は段階4のDSLの拡張として、詳細化の検査は段階7と8の上に、対称性による削減は段階9で扱う。この順に着手する（[refinement_symmetry_constants.md](plans/refinement_symmetry_constants.md)）。
+定数を変えた繰り返し検査は段階4のDSLの拡張として、詳細化の検査は段階7と8の上に、対称性による削減は段階9で扱う。この順に着手し、定数を変えた繰り返し検査と詳細化の検査は実装した（[refinement_symmetry_constants.md](plans/refinement_symmetry_constants.md)）。
 
 ## 17. 受入基準
 

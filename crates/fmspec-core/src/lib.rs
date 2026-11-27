@@ -55,6 +55,7 @@ pub mod model_total;
 pub mod preserve;
 pub mod quant;
 pub mod ranking;
+pub mod refine;
 pub mod semantics;
 pub mod slots;
 pub mod smodel;

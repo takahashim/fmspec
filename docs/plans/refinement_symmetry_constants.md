@@ -67,6 +67,26 @@ Tickets.sweep(capacity: 2..4).each { |values, result| puts "#{values} #{result.s
 
 ## 2. 詳細化の検査
 
+実装済み。中核は `crates/fmspec-core/src/refine.rs`（検査器、判定ゲート `decide_refinement`、補題）と `model_lower.rs` の `lower_model_map`（写像の下ろし）、
+読み込みは `crates/fmspec-ir/src/refinement.rs`、探索器は `crates/fmspec-search/src/refine.rs`、APIとCLIは `fmspec refine`、DSLは `Fmspec.refinement`（`lib/fmspec/refinement.rb`）である。
+使い方は [dsl.md](../dsl.md) の「詳細化の検査」、文書の形式は [ir.md](../ir.md) の「詳細化」、定理は [verification.md](../verification.md) にある。
+
+実装で決めたこと：
+
+- 判定の型（`RefVerdictKind`）を安全性の判定と分けた。`Refines` は、具体モデルの証明書が帰納的で、具体モデルが検査条件のもとで安全（到達可能な評価エラーがない）で、`refines` が成り立つことを述べる。
+- 具体モデルの評価エラーは、主張 `RefClaim::Model`（安全性のトレースの主張と同じもの）で `Error` にする。写像の評価の失敗は `RefClaim::Map` で `Error` にする。
+- 写した状態で抽象モデルの遷移列挙が評価エラーになり、移れるかを決められないときは、探索器が `Inconclusive`（理由 `abstract_failed`）を返す。判定ゲートは、移れないと示せた遷移だけを `NotRefines` にする。
+- 詳細化の検査では、具体モデルの不変条件、遷移契約、デッドロックは検査しない（検査条件は対象の操作だけを選ぶ）。
+- 抽象モデルの操作は、すべてを照合に使う。
+
+まだ行っていないこと：
+
+- 写像の式について、値の意味論との対応の証明（`lemma_safe` にあたるもの）。今の定理は、下ろした中核の式について述べる。
+- 出力と操作名の対応の照合。
+- 証拠の検査の資源上限（`max_check_cost`）。検査器は、具体モデルの遷移ごとに抽象モデルの遷移を列挙し直す。
+- 外部から提示した詳細化の証明書とトレースの検査（`verify-certificate` と `replay` にあたるもの）。
+- DSLの写像のブロックから、プロセスの状態（`s.incr[0].pc`）と定数を参照すること。
+
 ### 目的
 
 実装寄りの具体モデル B が、抽象モデル A の正しい実装になっていることを確かめる。

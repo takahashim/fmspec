@@ -22,11 +22,12 @@ fn base(model: &Model, cond: &Conditions, status: &str) -> Value {
     })
 }
 
-fn limit_name(limit: Limit) -> &'static str {
+pub(crate) fn limit_name(limit: Limit) -> &'static str {
     match limit {
         Limit::MaxStates => "max_states",
         Limit::Interrupted => "interrupted",
         Limit::CheckBudget => "max_check_cost",
+        Limit::AbstractFailed => "abstract_failed",
     }
 }
 
@@ -52,14 +53,21 @@ fn claim_source(model: &Model, claim: &Claim) -> Value {
 
 /// 証拠を拒否した理由。証明書の状態は添字ではなく値で示す。
 fn reject_json(model: &Model, evidence: &Evidence, reject: Reject) -> Value {
+    let states = match evidence {
+        Evidence::Certificate(cert) => Some(&cert.states),
+        _ => None,
+    };
+    reject_json_in(model, states, reject)
+}
+
+/// 証拠を拒否した理由。`states` は証明書の状態の列（証明書でなければ `None`）。
+pub(crate) fn reject_json_in(model: &Model, states: Option<&Vec<Vec<i64>>>, reject: Reject) -> Value {
     let names = &model.names;
-    let state = |k: usize| match evidence {
-        Evidence::Certificate(cert) => cert
-            .states
-            .get(k)
+    let state = |k: usize| {
+        states
+            .and_then(|ss| ss.get(k))
             .map(|s| state_to_json(model, s))
-            .unwrap_or(Value::Null),
-        _ => Value::Null,
+            .unwrap_or(Value::Null)
     };
     let action = |a: usize| names.actions.get(a).map(|n| json!(n.name)).unwrap_or(json!(a));
     match reject {
@@ -106,6 +114,22 @@ fn reject_json(model: &Model, evidence: &Evidence, reject: Reject) -> Value {
         Reject::ClaimNotReproduced => json!({
             "reason": "claim_not_reproduced",
             "message": "トレースの末尾で、主張どおりの事象が起きません",
+        }),
+        Reject::MappingFailed(k, _) => json!({
+            "reason": "mapping_failed", "state": state(k),
+            "message": "証明書の状態、またはその遷移先で、写像の評価が失敗します",
+        }),
+        Reject::StepNotMapped(k, a) => json!({
+            "reason": "step_not_mapped", "state": state(k), "action": action(a),
+            "message": "証明書の状態からの遷移が、抽象モデルの遷移にも、状態の変わらないステップにも写りません",
+        }),
+        Reject::InitialMappingFailed(_, _) => json!({
+            "reason": "initial_mapping_failed",
+            "message": "初期状態で写像の評価が失敗します",
+        }),
+        Reject::InitialNotMapped(_) => json!({
+            "reason": "initial_not_mapped",
+            "message": "初期状態が、抽象モデルの初期状態に写りません",
         }),
     }
 }

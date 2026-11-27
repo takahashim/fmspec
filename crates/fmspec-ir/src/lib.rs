@@ -11,6 +11,7 @@ mod evidence;
 mod json;
 mod lower;
 mod model;
+mod refinement;
 mod resolve;
 pub mod types;
 mod value;
@@ -21,6 +22,7 @@ pub use evidence::{
     TraceError,
 };
 pub use model::{load, parse, ActionNames, EnumNames, LoadError, Model, Names, Source, UpdateSlot};
+pub use refinement::{load_refinement, Refinement};
 pub use types::{SType, XType};
 pub use value::{
     args_from_json, args_to_json, core_type_to_json, output_to_json, output_value_from_json, state_to_json,

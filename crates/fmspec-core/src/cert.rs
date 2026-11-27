@@ -51,7 +51,7 @@ pub open spec fn inductive(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>) -> b
     &&& forall|i: int| 0 <= i < cert.len() ==> state_closed(m, c, cert, (#[trigger] cert[i])@)
 }
 
-proof fn lemma_reach_in_cert(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s: Seq<i64>, n: nat)
+pub(crate) proof fn lemma_reach_in_cert(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s: Seq<i64>, n: nat)
     requires
         inductive(m, c, cert),
         reach(m, c, s, n),

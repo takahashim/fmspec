@@ -261,6 +261,27 @@ fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Resul
     text(ruby, &result)
 }
 
+/// `Native.refine(refinement_json, options_json)`: 詳細化の文書を読み込んで検査し、結果のJSON文字列を返す。
+/// 読み込めなければ、理由を書いたJSON文字列（`status` が `invalid_model`）を返す。
+fn refine(ruby: &Ruby, document: Value, options: Value) -> Result<Value, Error> {
+    let options = read_json(ruby, options)?;
+    let r = match fmspec_api::load_refinement(&read(ruby, document)?) {
+        Ok(r) => r,
+        Err(e) => return text(ruby, &fmspec_api::load_error(&e).to_string()),
+    };
+    let r = &r;
+    // `model_check` と同じ理由の例外。
+    #[cfg_attr(
+        dylint_lib = "nupur_lints",
+        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
+    )]
+    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
+        let interrupt = || cancel.requested();
+        fmspec_api::to_text(fmspec_api::refine(r, &options, Some(&interrupt)))
+    })?;
+    text(ruby, &result)
+}
+
 /// `Native.format(result_json)`: 結果の人間向けの表示。
 fn format_result(ruby: &Ruby, result: Value) -> Result<Value, Error> {
     text(ruby, &fmspec_api::human(&read_json(ruby, result)?))
@@ -293,6 +314,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let native = fmspec.define_module("Native")?;
     native.define_module_function("version", function!(version, 0))?;
     native.define_module_function("format", function!(format_result, 1))?;
+    native.define_module_function("refine", function!(refine, 2))?;
     #[cfg(feature = "test-hooks")]
     native.define_module_function("test_panic", function!(test_panic, 0))?;
 

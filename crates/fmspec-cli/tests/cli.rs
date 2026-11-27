@@ -310,3 +310,32 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
 }
+
+#[test]
+fn refine_exit_codes_follow_the_status() {
+    let mapping = json!([{"state": "sold", "expr": {"var": 0}}]);
+    let doc = |concrete: Value| {
+        json!({"ir_version": 1, "name": "r", "concrete": concrete, "abstract": tickets(), "mapping": mapping})
+            .to_string()
+    };
+    let f = Files::new(&[
+        ("same.json", doc(tickets())),
+        ("noguard.json", doc(tickets_without_guard())),
+        ("broken.json", "{}".to_string()),
+    ]);
+    let (code, body) = f.json(&["refine", "same.json"]);
+    assert_eq!((code, &body["status"]), (0, &json!("refines")), "{body}");
+    let (code, body) = f.json(&["refine", "noguard.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("not_refines")), "{body}");
+    assert_eq!(body["property"]["violation"], json!("step"));
+    let (code, out, _) = f.run(&["refine", "noguard.json"]);
+    assert_eq!(code, 1);
+    assert!(out.starts_with("NotRefines: r（tickets → tickets）"), "{out}");
+    assert!(out.contains("（抽象 "), "{out}");
+    let (code, body) = f.json(&["refine", "same.json", "--max-states", "1"]);
+    assert_eq!((code, &body["reason"]), (3, &json!("max_states")));
+    let (code, body) = f.json(&["refine", "broken.json"]);
+    assert_eq!((code, &body["status"]), (2, &json!("invalid_model")));
+    let (code, body) = f.json(&["refine", "same.json", "--deadlock"]);
+    assert_eq!((code, &body["status"]), (2, &json!("usage_error")));
+}

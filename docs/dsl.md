@@ -515,6 +515,61 @@ end
 
 これは移行の手順のモデルであり、実DBの移行全体の正しさを証明するものではない。
 
+## 詳細化の検査
+
+`Fmspec.refinement` は、実装寄りの**具体モデル**が、抽象的な**抽象モデル**の正しい実装になっているかを検査する。
+抽象モデルの状態変数ごとに、具体モデルの状態から値を求める式（写像）を書く。
+
+```ruby
+Atomic = Fmspec.define(:atomic) do
+  state :count, int(0..2), initial: 0
+  state :finished, int(0..2), initial: 0
+  action :incr do |s|
+    guard s.finished < 2
+    update count: s.count + 1, finished: s.finished + 1
+  end
+end
+
+R = Fmspec.refinement(:counter_refines_atomic, concrete: Counter, abstract: Atomic) do
+  map(:count) { |s| s.count }
+  map(:finished) { |s| ite(s.pc_a.eq(:done), 1, 0) + ite(s.pc_b.eq(:done), 1, 0) }
+end
+
+R.check.refines?
+```
+
+| 語彙 | 内容 |
+|---|---|
+| `Fmspec.refinement(名前, concrete:, abstract:) { ... }` | 詳細化の検査を定義する。抽象モデルのすべての状態変数に写像が要る |
+| `map(状態変数) { \|s\| 式 }` | 抽象モデルの状態変数の写像。`s` は具体モデルの記号的な状態で、式の型はその状態変数の型である |
+| `#check(max_states:, actions:)` | 検査する。`actions` は具体モデルの対象の操作 |
+| `#to_ir` | 詳細化の文書（[ir.md](ir.md) の「詳細化」） |
+
+検査は、次の3つを確かめる。
+
+- 具体モデルの初期状態は、写像で抽象モデルの初期状態に写る。
+- 具体モデルの到達可能な状態では、写像の評価が成功する（値が抽象モデルの状態の型に属する）。
+- 具体モデルの到達可能な状態からの有効な遷移は、抽象モデルの遷移か、写した状態の変わらないステップ（stutter）に写る。
+
+抽象モデルの操作は、すべてを照合に使う。
+具体モデルの不変条件と遷移契約は、この検査では評価しない。それぞれ `check` で検査する。
+活性と公平性の保存は扱わない。具体モデルが抽象モデルの操作をいつまでも先延ばしにしても、検出しない。
+出力と操作名の対応も照合しない（状態だけを照合する）。
+
+結果（`Fmspec::RefinementResult`）の `status` は次のどれかである。
+
+| `status` | 意味 |
+|---|---|
+| `:refines` | 判定ゲートが、具体モデルの証明書と、各遷移の照合を受理した |
+| `:not_refines` | 詳細化が破れるトレースを判定ゲートが受理した。`property["violation"]` は `"initial"`（初期状態）か `"step"`（最後の遷移） |
+| `:error` | 写像の評価の失敗（`property["violation"]` が `"mapping"`）か、具体モデルの評価エラーに至るトレースを受理した |
+| `:inconclusive` | 状態数の上限（`:max_states`）、中断、または写した状態で抽象モデルの遷移列挙が評価エラーになった（`:abstract_failed`） |
+| `:internal_error` | 探索器の証拠を判定ゲートが拒否した。fmspec の不具合である |
+
+`trace` は具体モデルのトレースで、`abstract_states` は各状態を写した抽象モデルの状態（写像が失敗した状態は `nil`）である。
+2つのモデルは列挙型を名前で共有する。同じ名前の列挙型は、ラベルも同じでなければならない。
+記号ブロックから参照できるのは、具体モデルの状態変数だけである。プロセスの状態（`s.incr[0].pc`）と定数は、まだ参照できない。
+
 ## 検査
 
 | メソッド | 内容 |

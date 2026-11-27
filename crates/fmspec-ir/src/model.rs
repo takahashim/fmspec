@@ -8,8 +8,8 @@ use crate::types::SType;
 use crate::IR_VERSION;
 use fmspec_core::eval::ErrKind;
 use fmspec_core::gate::{validate, CheckedModel};
-use fmspec_core::model::{RawModel, Value as CoreValue};
-use fmspec_core::model_lower::lower_model;
+use fmspec_core::model::{Expr, RawModel, Value as CoreValue};
+use fmspec_core::model_lower::{lower_model_map, SMap};
 use fmspec_core::smodel::{Fault, LowerError, SAction, SConst, SContract, SModel, SOutput, SUpdate};
 use fmspec_core::source::TExpr;
 use fmspec_core::typing::InvalidModel;
@@ -435,9 +435,23 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
 /// IRのJSONを読み、名前を解決したモデルを組み立てる。中核のIR検証はまだ通していない。
 pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
     let root: Value = serde_json::from_str(json).map_err(|e| LoadError::Json(e.to_string()))?;
+    let (raw, names, _) = parse_value(&root, &[])?;
+    Ok((raw, names, canonical::digest(&root)))
+}
+
+/// 写像の1つの式。`expr` を具体モデルの状態の上で評価し、型 `ty`（抽象モデルの状態変数の型のJSON）の値にする。
+/// `path` は誤りの報告に使う位置。
+pub(crate) struct MapSource<'a> {
+    pub path: String,
+    pub expr: &'a Value,
+    pub ty: &'a Value,
+}
+
+/// 値になったIRを読み込む。`maps` の式を、このモデルの状態の上の式として下ろし、スロットごとの式の列を返す。
+pub(crate) fn parse_value(root: &Value, maps: &[MapSource]) -> Result<(RawModel, Names, Vec<Expr>), LoadError> {
     let path = "$";
     let map = object(
-        &root,
+        root,
         path,
         &[
             "ir_version",
@@ -679,6 +693,18 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         })?),
     };
 
+    let mut smaps = Vec::new();
+    for m in maps {
+        let ty = parse_stype(m.ty, &m.path, &enums)?;
+        let expr = lowered(ctx.stored(m.expr, &m.path, &ty), |detail| LoadError::Schema {
+            path: m.path.clone(),
+            message: format!("写像の式の型が、抽象モデルの状態変数の型と合いません（{detail}）"),
+        })?;
+        smaps.push(SMap {
+            expr,
+            ty: fields.stype(&ty),
+        });
+    }
     let sm = SModel {
         enums: enums.iter().map(|e| e.variants.len() as i64).collect(),
         consts: sconsts,
@@ -703,8 +729,14 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         contracts: contract_names,
         contract_sources,
     };
-    let raw = lower_model(&sm).map_err(|e| lower_error(e, &names, &constants, &choice_paths))?;
-    Ok((raw, names, canonical::digest(&root)))
+    let (raw, slots) = lower_model_map(&sm, &smaps).map_err(|e| match e {
+        LowerError::Mapping(i) => LoadError::Schema {
+            path: maps.get(i).map_or("$".to_string(), |m| m.path.clone()),
+            message: "内部エラー: 中核の下ろしが写像の式を受理しません".to_string(),
+        },
+        e => lower_error(e, &names, &constants, &choice_paths),
+    })?;
+    Ok((raw, names, slots))
 }
 
 /// 中核の下ろしの失敗を、読み込みの誤りにする。
@@ -778,6 +810,7 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
             message: "内部エラー: fmspec-ir と中核の型検査が食い違います".to_string(),
         },
         LowerError::Depth => too_deep("$"),
+        LowerError::Mapping(_) => internal("$"),
     }
 }
 
@@ -867,6 +900,11 @@ fn describe(reason: &InvalidModel, names: &Names) -> String {
 /// IRのJSONを読み込み、中核のIR検証を通したモデルを返す。
 pub fn load(json: &str) -> Result<Model, LoadError> {
     let (raw, names, digest) = parse(json)?;
+    checked_model(raw, names, digest)
+}
+
+/// 中核のIR検証を通して、モデルにする。
+pub(crate) fn checked_model(raw: RawModel, names: Names, digest: String) -> Result<Model, LoadError> {
     match validate(raw) {
         Ok(checked) => Ok(Model {
             names,

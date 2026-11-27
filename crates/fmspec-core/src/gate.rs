@@ -254,14 +254,14 @@ fn bools_eq(a: &Vec<bool>, b: &Vec<bool>) -> (r: bool)
     true
 }
 
-fn conditions_eq(a: &Conditions, b: &Conditions) -> bool {
+pub(crate) fn conditions_eq(a: &Conditions, b: &Conditions) -> bool {
     bools_eq(&a.actions, &b.actions) && bools_eq(&a.invariants, &b.invariants) && bools_eq(
         &a.contracts,
         &b.contracts,
     ) && a.deadlock == b.deadlock
 }
 
-fn is_violation_exec(claim: &Claim) -> (r: bool)
+pub(crate) fn is_violation_exec(claim: &Claim) -> (r: bool)
     ensures
         r == is_violation(*claim),
 {

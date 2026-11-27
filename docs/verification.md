@@ -43,6 +43,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | State Equality | 状態は符号化列そのもので、等価性は列の一致である。`lemma_decode_injective`：型に属する符号は値と一対一に対応する | `step.rs` |
 | Certificate Soundness | `check_certificate` が受理したなら、証明書は帰納的で、`safe` が成り立つ | `cert.rs` |
 | Trace Validity | `check_trace` が受理したなら、トレースの開始状態は初期状態の1つで、`trace_ok` と `claim_holds` が成り立つ。`lemma_trace_reach`：初期状態から始まる有効なトレースの各状態は到達可能である | `trace.rs` |
+| Refinement（§14.1の表の外） | `check_refinement_certificate` が受理したなら、具体モデルの証明書は帰納的で、`refines`（初期状態が抽象モデルの初期状態に写り、到達可能な状態で写像の評価が成功し、到達可能な遷移が抽象モデルの遷移か状態の変わらないステップに写る）が成り立つ（`lemma_cert_refines`）。`check_refinement_trace` が受理したなら、トレースは有効で、末尾で主張どおりに詳細化が破れるか評価が失敗する。`find_move` が「移れない」と答えるのは、抽象モデルの遷移列挙の完全性による。`decide_refinement` は前提条件を持たず、判定は `refinement_sound` を満たす。`lemma_refines_invariants`：詳細化し、抽象モデルが安全なら、具体モデルの到達可能な状態を写した状態で、抽象モデルの不変条件が成り立つ。`lemma_refines_excludes_trace`：詳細化するモデルに、詳細化の破れる有効なトレースはない | `refine.rs` |
 | Verdict Gate | `decide` と `decide_raw` は前提条件を持たず、判定は `verdict_sound` を満たす。`CertCheck` は証明書の検査を区切って進め、検査し終えたときだけ `Verified` を返す。型不変条件として、検査を終えた状態が性質を満たして遷移で閉じていることを保つ | `gate.rs` |
 | MBT Candidate Soundness / Completeness | `mbt::Session` の型不変条件：候補の列は、初期観測とこれまでの応答のすべてと矛盾しない状態（`consistent`）の集合とちょうど一致し、空でない。`start` と `observe` はこの不変条件を保つ。`lemma_consistent_reach`：候補は、応答の数と同じ回数の遷移で初期状態から到達できる | `mbt.rs` |
 | MBT Input Soundness | `common_inputs` が返す入力と、`check_input` が有効とした入力は、どの候補にもその入力の有効な遷移がある。有効な入力を持つ候補がないと報告したなら、どの候補にも有効な遷移はない | `mbt.rs` |
@@ -288,6 +289,12 @@ Listの要素をたどる量化では、位置は添字で、スロットの式�
 これは比較テストとIR変換のテストで検査している。
 証明済みの定理は検証済みのIRについてのもので、利用者が書いたRubyの仕様についての主張ではない。
 生成されたIRは `Model#to_ir` で確認できる。
+
+詳細化の検査の写像は、`lower_model_map` が、具体モデルの状態の文脈で `lower_stored` を使って、抽象モデルの状態のスロットごとの式に下ろす。
+判定ゲートの定理（`refinement_sound`）は、下ろした中核の式と2つの中核のモデルについて述べる。
+写像の式について、値の意味論との対応（`lemma_safe` にあたるもの）はまだ証明していない。
+これは、写像の下ろしの誤りが、利用者の意図と違う写像を検査する結果になりうることを意味し、残存する信頼基盤に含まれる。
+`lower_stored` の式ごとの意味保存は証明済みなので、残っているのは、それを詳細化の定理と組み合わせる部分である。
 
 ## Nupurの写し
 

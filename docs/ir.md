@@ -467,6 +467,34 @@ JSONでは名前で並べる。
 結果の `original_steps` に、縮小前のステップ数を記録する。
 判定ゲートが受理しないトレースは縮小せず、`rejected` を返す。
 
+## 詳細化
+
+詳細化の検査（[dsl.md](dsl.md) の「詳細化の検査」）の文書は、2つのモデルと写像を持つ。
+
+```json
+{"ir_version": 1, "name": "counter_refines_atomic",
+ "concrete": {モデル}, "abstract": {モデル},
+ "mapping": [{"state": "count", "expr": 式}, {"state": "finished", "expr": 式}]}
+```
+
+`mapping` には、抽象モデルの状態変数ごとに1つ、`concrete` の状態の上の式を書く（不変条件と同じ文脈で、`var` だけを参照できる）。
+式の型は、その状態変数の型である。
+読み込むときは、両方のモデルの列挙型を、`concrete` の列挙型に `abstract` にしかないものを続けた列に揃える。
+同じ名前でラベルの違う列挙型は誤りである。
+
+CLIでは `fmspec refine 文書.json [--max-states N] [--actions A,B]` で検査する。
+結果は「検査の結果」と同じ形に、次のキーを加える。
+
+| キー | 内容 |
+|---|---|
+| `status` | `refines`、`not_refines`、`error`、`inconclusive`、`internal_error` |
+| `refinement`、`refinement_digest`、`concrete`、`abstract` | 文書と2つのモデルの名前 |
+| `property` | `not_refines` と `error` のとき。`violation` が `initial`、`step`（`action` は最後の遷移の操作）、`mapping`（`state` は失敗した抽象モデルの状態変数、`error` は失敗の種類）。具体モデルの評価エラーなら、トレースの主張と同じ形 |
+| `trace` | `initial`、`steps` は具体モデルのトレース。`initial_abstract` と各ステップの `abstract` は、写した抽象モデルの状態（写像が失敗すれば `null`） |
+| `reason` | `inconclusive` のとき。`max_states`、`interrupted`、`abstract_failed` |
+
+`max_check_cost` は、まだ詳細化の検査では使えない。
+
 ## 検査の結果
 
 | キー | 内容 |
