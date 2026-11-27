@@ -156,6 +156,13 @@ pub fn human(body: &Value) -> String {
         other => format!("{other}: {model}"),
     };
     let _ = writeln!(out, "{headline}");
+    if let Some(digest) = body.get("evidence_model_digest") {
+        let _ = writeln!(
+            out,
+            "  別のモデルに対する証拠を、指定によりこのモデルで扱いました（証拠のdigestは {}）",
+            plain(digest)
+        );
+    }
     if status == "valid" && !refinement {
         let _ = writeln!(
             out,

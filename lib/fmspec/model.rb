@@ -57,25 +57,31 @@ module Fmspec
     end
 
     # 証明書（Hash またはJSON文字列）を、指定の検査条件で検査する。`max_check_cost` は check と同じ。
-    def verify_certificate(certificate, max_check_cost: nil, **conditions)
+    #
+    #   allow_other_model  真なら、model_digest が違う（別のモデルに対する）証明書も、このモデルの名前と型で読んで検査する。
+    #                      偽（既定）なら、別のモデルに対する証明書は :rejected（読めない証拠）になる
+    def verify_certificate(certificate, max_check_cost: nil, allow_other_model: false, **conditions)
       certificate = JSON.generate(certificate) unless certificate.is_a?(String)
       options = condition_options(conditions)
       options["max_check_cost"] = max_check_cost if max_check_cost
+      options["allow_other_model"] = true if allow_other_model
       result(native.verify_certificate(certificate, JSON.generate(options)))
     end
 
     # トレース（Trace、Hash、またはJSON文字列）を、記録された検査条件で再生する。
-    def replay(trace)
-      trace = trace.to_h if trace.is_a?(Trace)
-      trace = JSON.generate(trace) unless trace.is_a?(String)
-      result(native.replay(trace))
+    # `allow_other_model` は verify_certificate と同じ。
+    def replay(trace, allow_other_model: false)
+      options = allow_other_model ? { "allow_other_model" => true } : {}
+      result(native.replay(trace_json(trace), JSON.generate(options)))
     end
 
     # モデル違反のトレースを、同じ違反を保ったまま短くする（仕様書 §10）。結果は局所最小である。
-    def shrink(trace, attempts: nil)
-      trace = trace.to_h if trace.is_a?(Trace)
-      trace = JSON.generate(trace) unless trace.is_a?(String)
-      result(native.shrink(trace, JSON.generate(attempts ? { "attempts" => attempts } : {})))
+    # `allow_other_model` は verify_certificate と同じ。
+    def shrink(trace, attempts: nil, allow_other_model: false)
+      options = {}
+      options["attempts"] = attempts if attempts
+      options["allow_other_model"] = true if allow_other_model
+      result(native.shrink(trace_json(trace), JSON.generate(options)))
     end
 
     # 定数を上書きして、仕様を作り直す。`Fmspec.define` のブロックをもう一度実行する。
@@ -189,6 +195,11 @@ module Fmspec
     end
 
     def describe = JSON.parse(native.describe)
+
+    def trace_json(trace)
+      trace = trace.to_h if trace.is_a?(Trace)
+      trace.is_a?(String) ? trace : JSON.generate(trace)
+    end
 
     def test_run(binding, cases: 0, steps: 0, seed: nil, shrink: true, shrink_runs: 200, actions: nil, max_candidates: nil)
       raise ArgumentError, "この仕様の binding ではありません" unless binding.is_a?(Binding) && binding.model.equal?(self)

@@ -22,8 +22,8 @@ mod value;
 
 pub use conditions::{conditions_from_json, conditions_to_json, default_conditions};
 pub use evidence::{
-    certificate_from_json, certificate_to_json, claim_to_json, error_to_json, trace_from_json, trace_to_json, Trace,
-    TraceError,
+    certificate_from_json, certificate_to_json, claim_to_json, error_to_json, read_certificate, read_trace,
+    trace_from_json, trace_to_json, Loaded, Trace, TraceError,
 };
 pub use model::{load, parse, ActionNames, EnumNames, LoadError, Model, Names, Source, UpdateSlot};
 pub use refinement::{load_refinement, Refinement};

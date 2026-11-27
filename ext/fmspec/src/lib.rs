@@ -152,12 +152,15 @@ fn model_test_paths(ruby: &Ruby, this: Value, options: Value) -> Result<Value, E
     })
 }
 
-/// `#replay(trace_json)`: 提示されたトレースを再生する。
-fn model_replay(ruby: &Ruby, this: Value, trace: Value) -> Result<Value, Error> {
+/// `#replay(trace_json, options_json)`: 提示されたトレースを再生する。
+fn model_replay(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Result<Value, Error> {
     let handle = MODEL.check(this)?;
     let trace = read(ruby, trace)?;
+    let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    let result = nupur::gvl::without_gvl(ruby, move || fmspec_api::replay(model, &trace).to_string())?;
+    let result = nupur::gvl::without_gvl(ruby, move || {
+        fmspec_api::to_text(fmspec_api::replay_with(model, &trace, &options))
+    })?;
     text(ruby, &result)
 }
 
@@ -295,7 +298,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     model.define_method("check", method!(model_check, 1))?;
     model.define_method("simulate", method!(model_simulate, 1))?;
     model.define_method("verify_certificate", method!(model_verify_certificate, 2))?;
-    model.define_method("replay", method!(model_replay, 1))?;
+    model.define_method("replay", method!(model_replay, 2))?;
     model.define_method("shrink", method!(model_shrink, 2))?;
     model.define_method("coverage", method!(model_coverage, 1))?;
     model.define_method("test_paths", method!(model_test_paths, 1))?;

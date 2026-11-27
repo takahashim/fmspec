@@ -425,7 +425,7 @@ JSONでは名前で並べる。
 読み込み時にスロットの列の辞書順（正規順）に整列し、重複を除くので、ファイル中の順序は問わない。
 
 `verify-certificate` は、証明書の検査条件が要求された検査条件と一致することを確かめてから、証明書を検査する。
-`model_digest` が違う証明書は、別のモデルに対するものとして拒否する。
+`model_digest` が違う証明書は、別のモデルに対するものとして拒否する（指定がある場合は「別のモデルに対する証拠」を参照）。
 
 証明書とトレースは、`certificate_version` または `trace_version`、`model_digest`（文字列）、`conditions` を必須とし、欠けていれば形式の誤りとする。
 `engine_version` は記録のためのもので、読み込み時には使わない。
@@ -487,6 +487,23 @@ seedは再生には使わない。
 結果は局所最小である（どの1ステップを除いても、どの1つの引数をより前の値に変えても受理されない）。試す順序と局所最小の意味は仕様書 §10 のとおりである。
 結果の `original_steps` に、縮小前のステップ数を記録する。
 判定ゲートが受理しないトレースは縮小せず、`rejected` を返す。
+
+## 別のモデルに対する証拠
+
+`verify-certificate`、`replay`、`shrink` は、オプション `allow_other_model`（真偽値、既定は偽）が真なら、`model_digest` が違う証拠も読む（仕様書 §10）。
+CLIでは `--allow-other-model` である。
+読み方は同じ証拠と変わらず、今のモデルの名前と型で読む。
+状態変数、操作、引数、内部選択、不変条件、遷移契約の名前や、値の形（JSONの種類、列挙子の名前など）が合わなければ、形式の誤りとして読めない証拠になる。
+整数の範囲外の値のように、読めても状態型やドメインに従わない値は、判定ゲートが拒否する。
+このときの `rejected.message` は、別のモデル（証拠のdigest）に対する証拠を、このモデルでは読めないことと、形式の誤りの内容を示す。
+検査条件も名前で読むので、`verify-certificate` では、証明書の検査条件が今のモデルで要求された検査条件と一致しなければ `condition_mismatch` で拒否する。
+読めた証拠は、今のモデルに対して判定ゲートが検査する。
+証拠のdigestは判定に使わないので、受理されたトレースは今のモデルの反例であり、受理された証明書は今のモデルの証明書である。
+
+digest が違う証拠を指定により扱った結果には、証拠の `model_digest` を `evidence_model_digest` として加える（読めなかった場合も加える）。
+結果の `model_digest` と、結果の `trace` の `model_digest` は今のモデルのものなので、`shrink --trace-out` で書き出したトレースは、指定なしで再生できる。
+digest が同じ証拠には、指定があっても `evidence_model_digest` を付けない。
+JSONとして読めない証拠と、版（`certificate_version`、`trace_version`）や `model_digest` の欠けた証拠は、digest を比べる前の誤りなので、指定があっても `evidence_model_digest` を付けない。
 
 ## 対称性
 
@@ -561,8 +578,9 @@ CLIでは `fmspec refine 文書.json [--max-states N] [--actions A,B]` で検査
 
 `verify-certificate`、`replay`、`shrink` の結果は同じ形で、`search`、`gate`、`strategy` を持たない。
 `shrink` の結果は、縮小したときに `original_steps` を加える。
+`allow_other_model` で別のモデルに対する証拠を扱った結果は、`evidence_model_digest` を加える（「別のモデルに対する証拠」を参照）。
 提示された証拠を判定ゲートが拒否した場合の `status` は `rejected` で、`rejected` に拒否の理由（`reason` と `message`）を持つ。
-証拠を読めなかった場合（形式の誤りか、`model_digest` の不一致）も `status` は `rejected` で、`rejected` の `reason` は `unreadable` である。
+証拠を読めなかった場合（形式の誤りか、`allow_other_model` がない場合の `model_digest` の不一致）も `status` は `rejected` で、`rejected` の `reason` は `unreadable` である。
 このときは検査条件を読めていないので、`ir_version` と `conditions` を付けない。
 
 CLIの `validate` の結果の `status` は `valid` で、モデルの名前と digest、状態変数、操作、不変条件、遷移契約の数を持つ。

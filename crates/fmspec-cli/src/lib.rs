@@ -45,9 +45,9 @@ const USAGE: &str = "\
   fmspec validate MODEL.json
   fmspec check MODEL.json [--strategy bfs] [--max-states N] [--max-check-cost N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
   fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [検査条件] [--trace-out FILE]
-  fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [検査条件]
-  fmspec replay MODEL.json TRACE.json
-  fmspec shrink MODEL.json TRACE.json [--trace-out FILE]
+  fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [検査条件] [--allow-other-model]
+  fmspec replay MODEL.json TRACE.json [--allow-other-model]
+  fmspec shrink MODEL.json TRACE.json [--trace-out FILE] [--allow-other-model]
   fmspec refine REFINEMENT.json [--max-states N] [--actions A,B,...]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
@@ -55,6 +55,9 @@ const USAGE: &str = "\
   --invariants A,B,...   対象の不変条件
   --contracts A,B,...    対象の遷移契約
   --deadlock             非終端のデッドロックを検査する
+
+証拠（verify-certificate、replay、shrink）:
+  --allow-other-model    model_digest が違う証拠も、このモデルの名前と型で読んで検査する
 
 共通:
   --json                 結果を機械可読のJSONで出力する
@@ -121,6 +124,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--json" => parsed.json = true,
             "--deadlock" => {
                 parsed.options.insert("deadlock".to_string(), json!(true));
+            }
+            "--allow-other-model" => {
+                parsed.options.insert("allow_other_model".to_string(), json!(true));
             }
             "--strategy" => parsed.strategy = Some(value()?),
             "--certificate-out" => parsed.certificate_out = Some(value()?),
@@ -226,12 +232,12 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
     ),
     (
         "verify-certificate",
-        &["--max-check-cost"],
+        &["--max-check-cost", "--allow-other-model"],
         true,
         cmd_verify_certificate,
     ),
-    ("replay", &[], false, cmd_replay),
-    ("shrink", &["--trace-out"], false, cmd_shrink),
+    ("replay", &["--allow-other-model"], false, cmd_replay),
+    ("shrink", &["--trace-out", "--allow-other-model"], false, cmd_shrink),
     ("refine", &["--max-states", "--actions"], false, cmd_refine),
 ];
 
@@ -314,7 +320,9 @@ fn cmd_replay(io: &Io, a: &Args) -> Result<Run, Run> {
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
-    Ok(finish(a.json, fmspec_api::replay(&model, &trace)))
+    let body =
+        fmspec_api::replay_with(&model, &trace, &Value::Object(a.options.clone())).map_err(|e| usage(a.json, e))?;
+    Ok(finish(a.json, body))
 }
 
 fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
@@ -323,7 +331,7 @@ fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
-    let body = fmspec_api::shrink(&model, &trace, &json!({})).map_err(|e| usage(a.json, e))?;
+    let body = fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone())).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
     Ok(finish(a.json, body))
 }
