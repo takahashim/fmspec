@@ -22,17 +22,17 @@ use crate::encoding::{models_seq, sty, wf_stype, wf_stypes, width, xty, xwidth, 
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{and_s, bool_lit, ite_s, join_s, lits, or_s, tree_s, xoff, Join};
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, ite_s, join_s, lits, or_s, Join};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{pure_below, tree_s, xoff};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{fits_all_s, fits_s, small, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{extends, Block, Bound, Layout, LowerCtx};
+use crate::lower_ctx::{added, extends, Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{added, all_pure, concat, has_ty, in_slots, pure_below, slot_tys, typed};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{xetys, xetys_seq};
+use crate::lower_types::{has_ty, in_slots, slot_tys, typed, xetys, xetys_seq};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};

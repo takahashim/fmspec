@@ -5,30 +5,32 @@
 //! 初期状態は、状態変数ごとの候補の符号を整列して重複を除き、その直積から初期条件を満たすものを残す。
 //! 下ろしが成功すれば、中核のモデルの安全性は値の上のモデルの安全性と一致する（[`lowers_model`]）。
 
+use crate::action_lower::lower_action;
 use crate::canon::{slot_types, slot_types_list};
-use crate::encoding::{copy_stype, wf_stype_exec, SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, lemma_stys, lemma_width_pos, member, members, sty, stys, STy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xty, wf_stype, wf_stypes, width_sum, XTy};
+use crate::encoding::{SType, SVal};
 use crate::equality::small_stype;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{code_of, eval_l, eval_spec, prop_spec, Env, ErrKind};
 use crate::eval::{eval, eval_prop, Ctx};
-use crate::expr_build::stype_width;
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lemma_width_sum_prefix, small, smalls};
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{layout_at, layouts_at};
 use crate::lower_ctx::{Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{layout_at, layouts_at, lemma_slot_tys_len, slot_tys, slot_tys_seq};
+use crate::lower_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 use crate::lowering::{lower_prop, lower_stored};
 use crate::model::{Action, Contract, Expr, RawModel, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::model_safe::*;
+use crate::model_total::check_model;
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, const_ctx, consts_match, lemma_const_ctx, lemma_sa_typed};
-use crate::model_total::{check_model, lower_action};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{lemma_state_ctx, model_typed, out_sty, st_ctx, tys_ok};
 #[cfg(verus_keep_ghost)]
@@ -49,6 +51,7 @@ use crate::source::{eval_src, SEnv};
 #[cfg(verus_keep_ghost)]
 use crate::step::encode_spec;
 use crate::step::{copy_vec, encode, vec_eq};
+use crate::stype_exec::{copy_stype, stype_width, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
 use crate::total::{cx_wf, ok_s, sctx};
 use vstd::prelude::*;

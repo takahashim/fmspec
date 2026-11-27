@@ -20,17 +20,16 @@ use crate::encoding::{lemma_to_xtys, lemma_xtys, lemma_xwidth_of, lemma_xwidths_
 use crate::encoding::{list_items_member, map_rows_member, member, members, models, models_seq, STy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{sty, stys, to_xty, to_xtys, wf_stype, wf_stypes, width, width_sum, SVal, XTy};
-use crate::encoding::{to_xtype, SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
+use crate::expr_build::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, split, sub_exprs};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::xoff;
-use crate::expr_build::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, keys_or_zero_exec};
+use crate::expr_build::{all_pure, bool_lit, concat, int_lit, ite_s, lemma_xoff_step, lits, Join};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{bool_lit, int_lit, ite_s, lemma_xoff_step, lits, split_ok, tree_s, Join};
-use crate::expr_build::{split, sub_exprs};
+use crate::expr_build::{pure_below, split_ok, tree_s, xoff};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
@@ -49,6 +48,9 @@ use crate::model::Value;
 use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
+#[cfg(verus_keep_ghost)]
+use crate::rows::{flat, mparts_ok, mrow_at, parts_ok, row_at};
+use crate::stype_exec::{keys_or_zero_exec, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;

@@ -13,9 +13,9 @@ use crate::eval::{decode, eval_l, prop_spec, Env};
 #[cfg(verus_keep_ghost)]
 use crate::limits::smalls;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Constant, Layout, LowerCtx};
+use crate::lower_ctx::{layout_at, layouts_at, Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{layout_at, layouts_at, slot_tys_seq};
+use crate::lower_types::slot_tys_seq;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, RawModel, Type};
 #[cfg(verus_keep_ghost)]

@@ -9,11 +9,9 @@ use crate::encoding::{sty, stys, wf_stype, wf_stypes, width, width_sum, STy, SVa
 #[cfg(verus_keep_ghost)]
 use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Layout, LowerCtx};
+use crate::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::ty_repeat;
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{layout_at, layouts_at, lemma_slot_tys_seq_len, slot_tys, slot_tys_seq};
+use crate::lower_types::{lemma_slot_tys_seq_len, slot_tys, slot_tys_seq, ty_repeat};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Action, Contract, RawModel, Type, Update};
 #[cfg(verus_keep_ghost)]

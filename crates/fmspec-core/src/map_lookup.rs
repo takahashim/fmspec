@@ -2,9 +2,11 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{all_pure, all_ty, col_ty, has_ty, pure_below, typed};
+use crate::lower_types::{all_ty, col_ty, has_ty, typed};
 use crate::model::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{eval_bindings, eval_bound_body};

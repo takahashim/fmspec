@@ -5,6 +5,7 @@
 //!
 //! - [`model`]：IR検証前のモデル、値、型、式
 //! - [`encoding`]：IRの複合型と値の意味、スロットの列への符号化（仕様）
+//! - [`stype_exec`]：型（`SType`、`XType`）の上の実行関数（複製、比較、値の数、整形式性、幅）
 //! - [`keys`]：キーの型の値の正規順と番号（仕様）
 //! - [`ranking`]：Setの要素とMapのキーに付ける番号（rank）の計算
 //! - [`map_encoding`]：キーに番号を付けたあとの、Mapの符号化
@@ -13,6 +14,7 @@
 //! - [`slots`]：下ろしで使う、スロットの式の組み立て
 //! - [`lower_ctx`]：下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）
 //! - [`expr_build`]：中核の式の組み立て（spec の構築子と、対応する exec の構築子）
+//! - [`rows`]：ListとMapのスロットの、行への区切りの仕様
 //! - [`bindings`]：評価の順に並べた束縛の列を、中核の `let` の入れ子にする
 //! - [`expr_copy`]：中核の式の複製
 //! - [`canon`]：スロットの型と、正規形の判定
@@ -23,10 +25,12 @@
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
 //! - [`preserve_ops`]、[`preserve_tuple`]、[`preserve_list`]、[`preserve_set`]、[`preserve_map`]、[`preserve_quant`]：
 //!   演算子と `let` と条件式、Tuple と Record と Option、List、Set と大きさ、Map、量化の下ろしが意味を保存することの補題
+//! - [`preserve_elem`]：要素とキーの下ろしが意味を保存することの補題
 //! - [`limits`]：下ろしが大きさの理由で失敗しないための条件（仕様）
 //! - [`total`]：下ろしの全域性の仕様
 //! - [`total_check`]：下ろしの全域性の前提を、実行時に確かめる検査
 //! - [`smodel`]：名前を解決したIRのモデルと、値の上の意味論
+//! - [`action_lower`]：操作の下ろし
 //! - [`model_lower`]：モデル全体の下ろし
 //! - [`model_safe`]：モデル全体の下ろしが安全性を保存することの証明
 //! - [`model_total`]：モデル全体の型付けと大きさの条件
@@ -42,6 +46,7 @@
 //! - [`gate`]：判定ゲートと、未検証コード向けの公開API
 //! - [`mbt`]：Model-Based Testing の候補集合
 
+pub mod action_lower;
 pub mod bindings;
 pub mod canon;
 pub mod cert;
@@ -72,6 +77,7 @@ pub mod model_safe;
 pub mod model_total;
 pub mod model_wf;
 pub mod preserve;
+pub mod preserve_elem;
 pub mod preserve_list;
 pub mod preserve_map;
 pub mod preserve_ops;
@@ -81,11 +87,13 @@ pub mod preserve_tuple;
 pub mod quant;
 pub mod ranking;
 pub mod refine;
+pub mod rows;
 pub mod semantics;
 pub mod slots;
 pub mod smodel;
 pub mod source;
 pub mod step;
+pub mod stype_exec;
 pub mod sym;
 pub mod total;
 pub mod total_check;

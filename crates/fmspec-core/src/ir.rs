@@ -20,9 +20,7 @@
 //! JSONに書かれないので制約しない。注釈は中核の型付け（[`crate::infer::type_of`]）が検査する。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::SType;
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{stys, width_sum};
+use crate::encoding::{stys, width_sum, SType};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Value};
 #[cfg(verus_keep_ghost)]

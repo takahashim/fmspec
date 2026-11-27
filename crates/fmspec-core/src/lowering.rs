@@ -19,7 +19,6 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::{lemma_defaults_typed, lemma_in_member, lemma_models_has, lemma_shaped_len};
-use crate::encoding::{copy_stype, copy_xtype, keys_exec, stype_eq, to_xtype, usizes_eq, SType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_repeat, keys, keys_or_zero, lemma_default_len};
 #[cfg(verus_keep_ghost)]
@@ -28,13 +27,15 @@ use crate::encoding::{lemma_enc_len, lemma_models_enc, lemma_stys, lemma_xtys, l
 use crate::encoding::{lemma_xwidth_pos, member, sty, stys, to_xty, wf_stype, wf_xtype, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{wf_xtypes, width, xty, xtys, xwidth, xwidth_sum, XTy};
-use crate::encoding::{xtype_eq, XType};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
 use crate::expr_build::{all_of, and, bin, cb, ci, defaults, eq, extend, implies, is_bool_lit, ite};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{bool_lit, int_lit, ite_s, lits, split_ok, tree_s, xoff};
-use crate::expr_build::{keys_or_zero_exec, or, split, stype_width, sub_exprs, tree, Join};
+use crate::expr_build::{all_pure, bool_lit, int_lit, ite_s, kind_expr, lits, pure_below, split_ok};
+use crate::expr_build::{or, split, sub_exprs, tree, Join};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{tree_s, xoff};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::types_of;
@@ -48,7 +49,7 @@ use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{lemma_select_typed, picks, rows_view};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::extends;
+use crate::lower_ctx::{added, extends};
 use crate::lower_ctx::{Block, Bound, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
@@ -58,6 +59,8 @@ use crate::model::{BinOp, Expr, Type, Value};
 use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
+#[cfg(verus_keep_ghost)]
+use crate::preserve_elem::{elem_lowers, elem_rank_lowers, lemma_elem_rank, lemma_element};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_list::*;
 #[cfg(verus_keep_ghost)]
@@ -73,11 +76,15 @@ use crate::preserve_tuple::*;
 #[cfg(verus_keep_ghost)]
 use crate::quant::unrank_ok;
 use crate::quant::{pick_slot, unrank};
+#[cfg(verus_keep_ghost)]
+use crate::rows::flat;
 use crate::slots::*;
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, Item, SEnv};
 use crate::source::{Over, SetOp, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
+use crate::stype_exec::{copy_stype, copy_xtype, keys_exec, keys_or_zero_exec, stype_eq};
+use crate::stype_exec::{stype_width, to_xtype, usizes_eq, xtype_eq};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;
 use crate::typing::ETy;
@@ -2399,7 +2406,7 @@ fn xdefaults_seq(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Vec<
             assert(xt.take(i + 1).drop_last() =~= xt.take(i as int));
             assert(xt.take(i + 1).last() == xty(ts@[i as int]));
             if ok {
-                crate::total_check::lemma_wf_xtypes_at(xt, enums@, i as int);
+                crate::stype_exec::lemma_wf_xtypes_at(xt, enums@, i as int);
                 lemma_lim_xs_at(xt, enums@, i as int);
                 assert(ok_x(xty(ts@[i as int]), enums@));
                 assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ implies #[trigger] typed(

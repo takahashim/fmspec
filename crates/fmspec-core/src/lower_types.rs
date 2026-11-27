@@ -9,13 +9,13 @@ use crate::encoding::{keys_or_zero, sty, to_xty, to_xtys, wf_xtype, width, width
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xwidth, xwidth_sum};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::ite_s;
+use crate::expr_build::{all_pure, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_x;
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::model::{BinOp, Expr, Type, Value};
+use crate::model::{Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ety_of, type_l, ETy, TyEnv};
 use vstd::prelude::*;
@@ -262,7 +262,7 @@ pub proof fn lemma_concat_typed(xss: Seq<Seq<Expr>>, yss: Seq<Seq<ETy>>, t: TyEn
         xss.len() == yss.len(),
         forall|k: int| 0 <= k < xss.len() ==> #[trigger] typed(xss[k], yss[k], t, lt),
     ensures
-        typed(crate::lower_types::concat(xss), econcat(yss), t, lt),
+        typed(crate::expr_build::concat(xss), econcat(yss), t, lt),
     decreases xss.len(),
 {
     if xss.len() > 0 {
@@ -273,7 +273,7 @@ pub proof fn lemma_concat_typed(xss: Seq<Seq<Expr>>, yss: Seq<Seq<ETy>>, t: TyEn
         }
         lemma_concat_typed(a, b, t, lt);
         assert(typed(xss[xss.len() - 1], yss[yss.len() - 1], t, lt));
-        lemma_typed_concat(crate::lower_types::concat(a), econcat(b), xss.last(), yss.last(), t, lt);
+        lemma_typed_concat(crate::expr_build::concat(a), econcat(b), xss.last(), yss.last(), t, lt);
     }
 }
 
@@ -589,8 +589,8 @@ pub open spec fn tok(cx: LowerCtx, sc: Seq<crate::lower_ctx::Bound>, b: Block) -
 
 /// 下ろしの文脈の前提のうち型についてのもの。状態と引数の位置は型の列の位置で、定数に型が付く。
 pub open spec fn cx_tok(cx: LowerCtx) -> bool {
-    &&& cx.states matches Some(st) ==> crate::lower_types::layouts_at(st@, layout_tys(st@), cx.enums@)
-    &&& crate::lower_types::layouts_at(cx.args@, layout_tys(cx.args@), cx.enums@)
+    &&& cx.states matches Some(st) ==> crate::lower_ctx::layouts_at(st@, layout_tys(st@), cx.enums@)
+    &&& crate::lower_ctx::layouts_at(cx.args@, layout_tys(cx.args@), cx.enums@)
     &&& consts_typed(cx)
 }
 
@@ -611,7 +611,7 @@ pub open spec fn ty_post(cx: LowerCtx, b: Block, r: Result<(crate::encoding::XTy
 pub proof fn lemma_typed_blk(xs: Seq<Expr>, ys: Seq<ETy>, cx: LowerCtx, b0: Block, b1: Block)
     requires
         typed(xs, ys, lenv(cx), blt(b0, cx)),
-        crate::lower_types::all_pure(xs, b0.depth_s()),
+        crate::expr_build::all_pure(xs, b0.depth_s()),
         crate::lower_ctx::extends(b0, b1),
         b0.outer@.len() == b0.base,
     ensures
@@ -623,7 +623,7 @@ pub proof fn lemma_typed_blk(xs: Seq<Expr>, ys: Seq<ETy>, cx: LowerCtx, b0: Bloc
     lemma_lts_prefix(b1.outer@, b1.binds@, lenv(cx), b0.binds@.len() as int);
     assert(b1.binds@.take(b0.binds@.len() as int) =~= b0.binds@);
     assert(blt(b0, cx).take(n as int) =~= blt(b0, cx));
-    assert forall|i: int| 0 <= i < xs.len() implies crate::lower_types::pure_below(#[trigger] xs[i], n) by {}
+    assert forall|i: int| 0 <= i < xs.len() implies crate::expr_build::pure_below(#[trigger] xs[i], n) by {}
     lemma_typed_ext(xs, ys, lenv(cx), blt(b0, cx), blt(b1, cx), n);
 }
 
@@ -649,10 +649,10 @@ pub proof fn lemma_tok_ext(cx: LowerCtx, sc: Seq<crate::lower_ctx::Bound>, b0: B
     }
 }
 
-/// 型の付く式を [`crate::lower_types::added`] で加えると、束縛の列は型が付き、`x` は同じ型を持つ。
+/// 型の付く式を [`crate::lower_ctx::added`] で加えると、束縛の列は型が付き、`x` は同じ型を持つ。
 pub proof fn lemma_added_typed(b0: Block, b1: Block, e: Expr, x: Expr, cx: LowerCtx, y: ETy)
     requires
-        crate::lower_types::added(b0, b1, e, x),
+        crate::lower_ctx::added(b0, b1, e, x),
         crate::lower_ctx::extends(b0, b1),
         b0.outer@.len() == b0.base,
         binds_typed(b0.outer@, b0.binds@, lenv(cx)),
@@ -685,10 +685,10 @@ pub proof fn lemma_kind_typed(
     lt: Seq<ETy>,
 )
     requires
-        crate::lower_types::layouts_at(ls, layout_tys(ls), t.enums),
+        crate::lower_ctx::layouts_at(ls, layout_tys(ls), t.enums),
         0 <= i < ls.len(),
         out.len() == crate::encoding::width(crate::encoding::sty(ls[i].ty), t.enums),
-        forall|j: int| 0 <= j < out.len() ==> #[trigger] out[j] == crate::lower_types::kind_expr(kind, (ls[i].offset + j) as usize),
+        forall|j: int| 0 <= j < out.len() ==> #[trigger] out[j] == crate::expr_build::kind_expr(kind, (ls[i].offset + j) as usize),
         kind <= 2,
         kind == 2 ==> t.arg_tys == slot_tys_seq(layout_tys(ls), t.enums),
         kind != 2 ==> t.st_tys == slot_tys_seq(layout_tys(ls), t.enums),
@@ -698,7 +698,7 @@ pub proof fn lemma_kind_typed(
 {
     let ts = layout_tys(ls);
     let st = crate::encoding::sty(ls[i].ty);
-    assert(crate::lower_types::layout_at(ls[i], ts, i, t.enums));
+    assert(crate::lower_ctx::layout_at(ls[i], ts, i, t.enums));
     crate::lower_types::lemma_slot_tys_seq_sub(ts, i, t.enums);
     lemma_xetys_of(st, t.enums);
     lemma_slot_tys_len(st, t.enums);
@@ -714,7 +714,7 @@ pub proof fn lemma_kind_typed(
         assert(((ls[i].offset + j) as usize) as int == off + j);
         assert(xetys(to_xty(st), t.enums)[j] == ety_of(slot_tys(st, t.enums)[j]));
         let k = ((ls[i].offset + j) as usize);
-        assert(out[j] == crate::lower_types::kind_expr(kind, k));
+        assert(out[j] == crate::expr_build::kind_expr(kind, k));
         assert(kind != 2 ==> (k as int) < t.st_tys.len());
         assert(kind == 2 ==> (k as int) < t.arg_tys.len());
         assert(kind != 2 ==> t.st_tys[k as int] == slot_tys(st, t.enums)[j]);
@@ -741,14 +741,14 @@ pub proof fn lemma_kind_typed(
 pub proof fn lemma_has_ty_blk(x: Expr, y: ETy, cx: LowerCtx, b0: Block, b1: Block)
     requires
         has_ty(x, lenv(cx), blt(b0, cx), y),
-        crate::lower_types::pure_below(x, b0.depth_s()),
+        crate::expr_build::pure_below(x, b0.depth_s()),
         crate::lower_ctx::extends(b0, b1),
         b0.outer@.len() == b0.base,
     ensures
         has_ty(x, lenv(cx), blt(b1, cx), y),
 {
     assert(typed(seq![x], seq![y], lenv(cx), blt(b0, cx)));
-    assert(crate::lower_types::all_pure(seq![x], b0.depth_s()));
+    assert(crate::expr_build::all_pure(seq![x], b0.depth_s()));
     lemma_typed_blk(seq![x], seq![y], cx, b0, b1);
     assert(has_ty(seq![x][0], lenv(cx), blt(b1, cx), seq![y][0]));
 }
@@ -836,14 +836,14 @@ pub proof fn lemma_check_typed(b0: Block, b1: Block, cond: Expr, code: i64, cx: 
 /// Mapのスロットの各行は、行の型を持つ。
 pub proof fn lemma_mrows_typed(slots: Seq<Expr>, rows: Seq<Seq<Expr>>, rt: Seq<Type>, n: nat, t: TyEnv, lt: Seq<ETy>)
     requires
-        crate::lower_types::mparts_ok(slots, rows, rt.len(), n),
+        crate::rows::mparts_ok(slots, rows, rt.len(), n),
         typed(slots, etys(crate::lower_types::ty_repeat(rt, n)), t, lt),
     ensures
         forall|p: int| 0 <= p < n ==> #[trigger] typed(rows[p], etys(rt), t, lt),
 {
     assert forall|p: int| 0 <= p < n implies #[trigger] typed(rows[p], etys(rt), t, lt) by {
         let w = rt.len();
-        assert(crate::lower_types::mrow_at(rows[p], slots, p, w));
+        assert(crate::rows::mrow_at(rows[p], slots, p, w));
         crate::lower_types::lemma_ty_repeat_sub(rt, n, p);
         crate::lower_types::lemma_etys_sub(crate::lower_types::ty_repeat(rt, n), p * w, p * w + w);
         lemma_typed_sub(slots, etys(crate::lower_types::ty_repeat(rt, n)), t, lt, p * w, p * w + w);
@@ -861,7 +861,7 @@ pub proof fn lemma_lrows_typed(
     lt: Seq<ETy>,
 )
     requires
-        crate::lower_types::parts_ok(slots, len, rows, et.len(), max),
+        crate::rows::parts_ok(slots, len, rows, et.len(), max),
         max <= i64::MAX,
         typed(slots, etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max)), t, lt),
     ensures
@@ -874,7 +874,7 @@ pub proof fn lemma_lrows_typed(
     assert(has_ty(slots[0], t, lt, all[0]));
     assert forall|p: int| 0 <= p < max implies #[trigger] typed(rows[p], etys(et), t, lt) by {
         let w = et.len();
-        assert(crate::lower_types::row_at(rows[p], slots, p, w));
+        assert(crate::rows::row_at(rows[p], slots, p, w));
         crate::lower_types::lemma_ty_repeat_sub(et, max, p);
         crate::lower_types::lemma_etys_sub(crate::lower_types::ty_repeat(et, max), p * w, p * w + w);
         lemma_typed_sub(slots, all, t, lt, 1 + p * w, 1 + p * w + w);
@@ -887,7 +887,7 @@ pub proof fn lemma_flat_typed(rows: Seq<Seq<Expr>>, rt: Seq<Type>, t: TyEnv, lt:
     requires
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], etys(rt), t, lt),
     ensures
-        typed(crate::lower_types::flat(rows), etys(crate::lower_types::ty_repeat(rt, rows.len())), t, lt),
+        typed(crate::rows::flat(rows), etys(crate::lower_types::ty_repeat(rt, rows.len())), t, lt),
     decreases rows.len(),
 {
     if rows.len() == 0 {
@@ -899,7 +899,7 @@ pub proof fn lemma_flat_typed(rows: Seq<Seq<Expr>>, rt: Seq<Type>, t: TyEnv, lt:
         }
         lemma_flat_typed(a, rt, t, lt);
         assert(typed(rows[rows.len() - 1], etys(rt), t, lt));
-        lemma_typed_concat(crate::lower_types::flat(a), etys(crate::lower_types::ty_repeat(rt, a.len())), rows.last(), etys(rt), t, lt);
+        lemma_typed_concat(crate::rows::flat(a), etys(crate::lower_types::ty_repeat(rt, a.len())), rows.last(), etys(rt), t, lt);
         lemma_etys_concat(crate::lower_types::ty_repeat(rt, a.len()), rt);
     }
 }
@@ -915,7 +915,7 @@ pub proof fn lemma_ite_rows_typed(
     lt: Seq<ETy>,
 )
     requires
-        crate::lower_types::ite_rows_ok(out, rows, k, alt),
+        crate::rows::ite_rows_ok(out, rows, k, alt),
         has_ty(k, t, lt, ETy::Int),
         typed(alt, rt, t, lt),
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], rt, t, lt),
@@ -923,7 +923,7 @@ pub proof fn lemma_ite_rows_typed(
         forall|p: int| 0 <= p < out.len() ==> #[trigger] typed(out[p], rt, t, lt),
 {
     assert forall|p: int| 0 <= p < out.len() implies #[trigger] typed(out[p], rt, t, lt) by {
-        assert(crate::lower_types::ite_row(out[p], rows[p], k, alt, p));
+        assert(crate::rows::ite_row(out[p], rows[p], k, alt, p));
         assert(typed(rows[p], rt, t, lt));
         assert forall|j: int| 0 <= j < out[p].len() implies #[trigger] has_ty(out[p][j], t, lt, rt[j]) by {
             let q = Expr::Bin(crate::model::BinOp::Eq, Box::new(k), Box::new(Expr::Const(Value::Int(p as i64))));
@@ -1069,7 +1069,7 @@ pub proof fn lemma_map_rows_typed(
     lt: Seq<ETy>,
 )
     requires
-        crate::lower_types::mparts_ok(
+        crate::rows::mparts_ok(
             ms,
             rows,
             (1 + crate::encoding::width(v, t.enums)) as nat,
@@ -1079,7 +1079,7 @@ pub proof fn lemma_map_rows_typed(
     ensures
         rows.len() == crate::encoding::keys_or_zero(k, t.enums),
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], etys(seq![Type::Bool] + slot_tys(v, t.enums)), t, lt),
-        forall|h: Seq<Expr>| #[trigger] crate::expr_build::heads_ok(h, rows) ==> all_ty(h, ETy::Bool, t, lt),
+        forall|h: Seq<Expr>| #[trigger] crate::rows::heads_ok(h, rows) ==> all_ty(h, ETy::Bool, t, lt),
 {
     let mt = STy::Map(Box::new(k), Box::new(v));
     let row = seq![Type::Bool] + slot_tys(v, t.enums);
@@ -1089,9 +1089,9 @@ pub proof fn lemma_map_rows_typed(
     assert(to_xty(mt) == XTy::Map(Box::new(k), Box::new(v)));
     assert(slot_tys(mt, t.enums) == crate::lower_types::ty_repeat(row, n));
     lemma_mrows_typed(ms, rows, row, n, t, lt);
-    assert forall|h: Seq<Expr>| #[trigger] crate::expr_build::heads_ok(h, rows) implies all_ty(h, ETy::Bool, t, lt) by {
+    assert forall|h: Seq<Expr>| #[trigger] crate::rows::heads_ok(h, rows) implies all_ty(h, ETy::Bool, t, lt) by {
         assert forall|q: int| 0 <= q < h.len() implies #[trigger] has_ty(h[q], t, lt, ETy::Bool) by {
-            assert(crate::expr_build::head_at(h[q], rows[q]));
+            assert(crate::rows::head_at(h[q], rows[q]));
             assert(typed(rows[q], etys(row), t, lt));
             assert(etys(row)[0] == ETy::Bool);
             assert(has_ty(rows[q][0], t, lt, etys(row)[0]));
@@ -1137,14 +1137,14 @@ pub proof fn lemma_list_join_typed(len: Expr, rows: Seq<Seq<Expr>>, et: Seq<Type
         max <= i64::MAX,
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], etys(et), t, lt),
     ensures
-        typed(seq![len] + crate::lower_types::flat(rows), etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max)), t, lt),
+        typed(seq![len] + crate::rows::flat(rows), etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max)), t, lt),
 {
     lemma_flat_typed(rows, et, t, lt);
     assert(typed(seq![len], etys(seq![Type::Int(0, max as i64)]), t, lt)) by {
         assert(etys(seq![Type::Int(0, max as i64)]) =~= seq![ETy::Int]);
         assert(seq![len][0] == len);
     }
-    lemma_typed_concat(seq![len], etys(seq![Type::Int(0, max as i64)]), crate::lower_types::flat(rows), etys(crate::lower_types::ty_repeat(et, max)), t, lt);
+    lemma_typed_concat(seq![len], etys(seq![Type::Int(0, max as i64)]), crate::rows::flat(rows), etys(crate::lower_types::ty_repeat(et, max)), t, lt);
     lemma_etys_concat(seq![Type::Int(0, max as i64)], crate::lower_types::ty_repeat(et, max));
 }
 
@@ -1199,7 +1199,7 @@ pub proof fn lemma_top_typed(b: Block, cx: LowerCtx)
 pub proof fn lemma_all_ty_push(xs: Seq<Expr>, y: ETy, t: TyEnv, lt: Seq<ETy>, z: ETy)
     requires
         all_ty(xs, y, t, lt),
-        crate::lower_types::all_pure(xs, lt.len()),
+        crate::expr_build::all_pure(xs, lt.len()),
     ensures
         all_ty(xs, y, t, lt.push(z)),
 {
@@ -1212,7 +1212,7 @@ pub proof fn lemma_all_ty_push(xs: Seq<Expr>, y: ETy, t: TyEnv, lt: Seq<ETy>, z:
 /// 位置の列の `i` 番目の型の `k` 番目のスロットの型。
 pub proof fn lemma_layout_slot(ls: Seq<crate::lower_ctx::Layout>, i: int, k: int, enums: Seq<i64>)
     requires
-        crate::lower_types::layouts_at(ls, layout_tys(ls), enums),
+        crate::lower_ctx::layouts_at(ls, layout_tys(ls), enums),
         0 <= i < ls.len(),
         0 <= k < crate::encoding::width(crate::encoding::sty(ls[i].ty), enums),
     ensures
@@ -1221,7 +1221,7 @@ pub proof fn lemma_layout_slot(ls: Seq<crate::lower_ctx::Layout>, i: int, k: int
 {
     let ts = layout_tys(ls);
     let st = crate::encoding::sty(ls[i].ty);
-    assert(crate::lower_types::layout_at(ls[i], ts, i, enums));
+    assert(crate::lower_ctx::layout_at(ls[i], ts, i, enums));
     crate::lower_types::lemma_slot_tys_seq_sub(ts, i, enums);
     lemma_slot_tys_len(st, enums);
     crate::lower_types::lemma_slot_tys_seq_len(ts, enums);
@@ -1424,134 +1424,9 @@ pub proof fn lemma_etys_sub(xs: Seq<Type>, lo: int, hi: int)
     assert(etys(xs.subrange(lo, hi)) =~= etys(xs).subrange(lo, hi));
 }
 
-/// `rows` は、Listのスロット `slots` を、長さのスロット `len` と幅 `w` の `max` 個の行に区切ったものである。
-pub open spec fn parts_ok(slots: Seq<Expr>, len: Expr, rows: Seq<Seq<Expr>>, w: nat, max: nat) -> bool {
-    &&& slots.len() > 0
-    &&& len == slots[0]
-    &&& rows.len() == max
-    &&& forall|p: int| 0 <= p < max ==> #[trigger] row_at(rows[p], slots, p, w)
-}
-
-/// `row` は、スロット `slots` の `p` 番目の行である。
-pub open spec fn row_at(row: Seq<Expr>, slots: Seq<Expr>, p: int, w: nat) -> bool {
-    1 + p * w + w <= slots.len() && row == slots.subrange(1 + p * w, 1 + p * w + w)
-}
-
-/// 行をつなげた列。
-pub open spec fn flat(rows: Seq<Seq<Expr>>) -> Seq<Expr>
-    decreases rows.len(),
-{
-    if rows.len() == 0 {
-        Seq::empty()
-    } else {
-        flat(rows.drop_last()) + rows.last()
-    }
-}
-
-/// `o` は、行 `r` の各スロットを、`k` が `p` なら `alt` のスロットに置き換える式の列である。
-pub open spec fn ite_row(o: Seq<Expr>, r: Seq<Expr>, k: Expr, alt: Seq<Expr>, p: int) -> bool {
-    &&& o.len() == alt.len()
-    &&& r.len() == alt.len()
-    &&& forall|j: int|
-        0 <= j < o.len() ==> #[trigger] o[j] == ite_s(
-            Expr::Bin(BinOp::Eq, Box::new(k), Box::new(Expr::Const(Value::Int(p as i64)))),
-            alt[j],
-            r[j],
-        )
-}
-
-pub open spec fn ite_rows_ok(out: Seq<Seq<Expr>>, rows: Seq<Seq<Expr>>, k: Expr, alt: Seq<Expr>) -> bool {
-    &&& out.len() == rows.len()
-    &&& forall|p: int| 0 <= p < rows.len() ==> #[trigger] ite_row(out[p], rows[p], k, alt, p)
-}
-
-/// 各行の `j` 番目のスロットの列。
-pub open spec fn col(rows: Seq<Seq<Expr>>, j: int) -> Seq<Expr> {
-    Seq::new(rows.len(), |t: int| rows[t][j])
-}
-
 /// 行の列 `flat` の各行の列 `column` の式は、型 `y` を持つ。
 pub open spec fn col_ty(flat: Seq<Expr>, rows: usize, width: usize, column: int, y: ETy, tv: TyEnv, lt: Seq<ETy>) -> bool {
     forall|j: int| 0 <= j < rows ==> #[trigger] has_ty(flat[j * (1 + width as int) + column], tv, lt, y)
-}
-
-/// `rows` は、Mapのスロット `slots` を、幅 `w` の `n` 個の行に区切ったものである。
-pub open spec fn mparts_ok(slots: Seq<Expr>, rows: Seq<Seq<Expr>>, w: nat, n: nat) -> bool {
-    &&& slots.len() == n * w
-    &&& rows.len() == n
-    &&& forall|p: int| 0 <= p < n ==> #[trigger] mrow_at(rows[p], slots, p, w)
-}
-
-/// `row` は、スロット `slots` の `p` 番目の行である。
-pub open spec fn mrow_at(row: Seq<Expr>, slots: Seq<Expr>, p: int, w: nat) -> bool {
-    0 <= p * w && p * w + w <= slots.len() && row == slots.subrange(p * w, p * w + w)
-}
-
-/// 束縛子（`let`、量化）を含まず、局所変数は `n` 未満だけを参照する。
-pub open spec fn pure_below(e: Expr, n: nat) -> bool
-    decreases e,
-{
-    match e {
-        Expr::Local(i) => i < n,
-        Expr::Bin(_, a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::And(a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::Or(a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::Implies(a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::Not(a) => pure_below(*a, n),
-        Expr::Code(a) => pure_below(*a, n),
-        Expr::Ite(c, a, b) => pure_below(*c, n) && pure_below(*a, n) && pure_below(*b, n),
-        Expr::Let(_, _) => false,
-        Expr::Forall(_, _, _, _) => false,
-        Expr::Exists(_, _, _, _) => false,
-        _ => true,
-    }
-}
-
-/// `b1` は、`b0` に `e` を束縛して `x` で指すか、`e` をそのまま `x` とするかである。
-pub open spec fn added(b0: Block, b1: Block, e: Expr, x: Expr) -> bool {
-    ||| x == e && b1.binds@ == b0.binds@
-    ||| x == Expr::Local(b0.depth_s() as usize) && b1.binds@ == b0.binds@.push(e)
-}
-
-pub open spec fn all_pure(s: Seq<Expr>, n: nat) -> bool {
-    forall|j: int| 0 <= j < s.len() ==> pure_below(#[trigger] s[j], n)
-}
-
-/// 式の列の列をつなげる。
-pub open spec fn concat(xss: Seq<Seq<Expr>>) -> Seq<Expr>
-    decreases xss.len(),
-{
-    if xss.len() == 0 {
-        Seq::empty()
-    } else {
-        concat(xss.drop_last()) + xss.last()
-    }
-}
-
-/// 状態変数、遷移後の状態変数、引数の参照。
-pub open spec fn kind_expr(kind: u8, i: usize) -> Expr {
-    if kind == 0 {
-        Expr::Var(i)
-    } else if kind == 1 {
-        Expr::Next(i)
-    } else {
-        Expr::Arg(i)
-    }
-}
-
-/// `l` は、型の列 `ts` の `i` 番目の位置である。位置は、それより前の型の幅の和である。
-pub open spec fn layout_at(l: Layout, ts: Seq<STy>, i: int, enums: Seq<i64>) -> bool {
-    sty(l.ty) == ts[i] && l.offset == width_sum(ts.take(i), enums)
-}
-
-pub open spec fn layouts_at(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>) -> bool {
-    &&& ls.len() == ts.len()
-    &&& width_sum(ts, enums) <= usize::MAX
-    &&& forall|i: int| 0 <= i < ls.len() ==> #[trigger] layout_at(ls[i], ts, i, enums)
-}
-
-pub open spec fn layout_tys(ls: Seq<Layout>) -> Seq<STy> {
-    Seq::new(ls.len(), |i: int| sty(ls[i].ty))
 }
 
 /// 式の型が整形式で、大きさの条件を満たす。
@@ -1562,6 +1437,10 @@ pub open spec fn ok_x(t: XTy, enums: Seq<i64>) -> bool {
 /// スロットの列は型 `t` の幅だけあり、深さ `n` 未満の局所変数だけを参照する純粋な式である。
 pub open spec fn shaped(slots: Seq<Expr>, t: XTy, n: nat, enums: Seq<i64>) -> bool {
     slots.len() == xwidth(t, enums) && all_pure(slots, n)
+}
+
+pub open spec fn layout_tys(ls: Seq<Layout>) -> Seq<STy> {
+    Seq::new(ls.len(), |i: int| sty(ls[i].ty))
 }
 
 /// 局所変数の束縛が整形式である。

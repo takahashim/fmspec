@@ -2,9 +2,11 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::pure_below;
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{has_ty, pure_below};
+use crate::lower_types::has_ty;
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{mixed_rank_eval, ranks_pure};

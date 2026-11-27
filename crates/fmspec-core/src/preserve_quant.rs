@@ -11,15 +11,13 @@ use crate::encoding::{member, sty, to_xty, width, xty, STy, SType, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::bool_lit;
+use crate::expr_build::{all_pure, bool_lit, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_domain_rank};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{at_rank, lemma_items_member, picks, vals_at};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{all_pure, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]

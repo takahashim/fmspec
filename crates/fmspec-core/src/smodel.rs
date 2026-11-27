@@ -20,7 +20,8 @@ use crate::encoding::{STy, SType, SVal};
 use crate::eval::ErrKind;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, code_of, decode, eval_l, eval_spec, lookup, prop_spec, Env};
-use crate::expr_build::stype_width;
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::pure_below;
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{type_of, SCtx};
@@ -28,13 +29,11 @@ use crate::infer::{type_of, SCtx};
 use crate::limits::{lemma_width_sum_prefix, lim_s, smalls};
 use crate::lower_ctx::Layout;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::LowerCtx;
+use crate::lower_ctx::{layout_at, layouts_at, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{has_ty, in_slot, in_slots, layout_at, layout_tys, layouts_at};
+use crate::lower_types::{has_ty, in_slot, in_slots, layout_tys, lemma_slot_tys_len};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_slot_tys_len, lemma_slot_tys_seq_len, lemma_slot_tys_seq_sub};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{pure_below, slot_tys, slot_tys_seq};
+use crate::lower_types::{lemma_slot_tys_seq_len, lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Action, Output, RawModel, Type, Value};
 use crate::model::{Expr, Update};
@@ -51,6 +50,7 @@ use crate::source::{eval_src, src_bool, SEnv};
 use crate::step::vals_ok;
 #[cfg(verus_keep_ghost)]
 use crate::step::{act_env, apply_updates, encode_spec, in_type, output_spec, step_spec, Step};
+use crate::stype_exec::stype_width;
 #[cfg(verus_keep_ghost)]
 use crate::total::lim_ok;
 #[cfg(verus_keep_ghost)]
@@ -800,7 +800,7 @@ pub(crate) fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Exp
                 let ki = k as int;
                 lemma_wf_index(ts, ki, enums@);
                 assert(layout_at(la@[ki], ts, ki, enums@));
-                assert forall|j: int| 0 <= j < slots@.len() implies #[trigger] slots@[j] == crate::lower_types::kind_expr(2, (la@[ki].offset + j) as usize) by {
+                assert forall|j: int| 0 <= j < slots@.len() implies #[trigger] slots@[j] == crate::expr_build::kind_expr(2, (la@[ki].offset + j) as usize) by {
                 }
                 crate::lower_types::lemma_kind_typed(la@, ki, 2, slots@, tv, Seq::empty());
                 crate::lower_types::lemma_xetys_of(ts[ki], enums@);

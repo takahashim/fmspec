@@ -1,5 +1,7 @@
 //! 下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）。下ろしの各モジュールと、その証明が共有する型。
 
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{sty, width_sum, STy};
 use crate::encoding::{SType, XType};
 use crate::model::{Expr, Value};
 use crate::typing::ETy;
@@ -108,6 +110,23 @@ pub enum Fail {
     Type,
     /// 束縛の深さが `usize::MAX` に達した。
     Depth,
+}
+
+/// `b1` は、`b0` に `e` を束縛して `x` で指すか、`e` をそのまま `x` とするかである。
+pub open spec fn added(b0: Block, b1: Block, e: Expr, x: Expr) -> bool {
+    ||| x == e && b1.binds@ == b0.binds@
+    ||| x == Expr::Local(b0.depth_s() as usize) && b1.binds@ == b0.binds@.push(e)
+}
+
+/// `l` は、型の列 `ts` の `i` 番目の位置である。位置は、それより前の型の幅の和である。
+pub open spec fn layout_at(l: Layout, ts: Seq<STy>, i: int, enums: Seq<i64>) -> bool {
+    sty(l.ty) == ts[i] && l.offset == width_sum(ts.take(i), enums)
+}
+
+pub open spec fn layouts_at(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>) -> bool {
+    &&& ls.len() == ts.len()
+    &&& width_sum(ts, enums) <= usize::MAX
+    &&& forall|i: int| 0 <= i < ls.len() ==> #[trigger] layout_at(ls[i], ts, i, enums)
 }
 
 } // verus!

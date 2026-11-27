@@ -9,7 +9,7 @@ use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, XTy, XType};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{head_at, heads_ok, ite_s};
+use crate::expr_build::{all_pure, ite_s, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{items_typed, lemma_items_typed_iff, type_of, SCtx};
 #[cfg(verus_keep_ghost)]
@@ -19,15 +19,17 @@ use crate::lists::{picks, select_ok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{Bound, Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{all_pure, col, flat, ite_row, ite_rows_ok, layout_tys, mparts_ok, mrow_at};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{ok_x, parts_ok, pure_below, row_at, sc_wf, shaped};
+use crate::lower_types::{layout_tys, ok_x, sc_wf, shaped};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{mark_s, setop_s};
+#[cfg(verus_keep_ghost)]
+use crate::rows::row_at;
+#[cfg(verus_keep_ghost)]
+use crate::rows::{col, flat, head_at, heads_ok, ite_row, ite_rows_ok, mparts_ok, mrow_at, parts_ok};
 #[cfg(verus_keep_ghost)]
 use crate::source::{Item, Over, SetOp, TExpr};
 use vstd::prelude::*;
@@ -104,7 +106,7 @@ pub proof fn lemma_all_pure_mono(s: Seq<Expr>, n: nat, m: nat)
     ensures
         all_pure(s, m),
 {
-    assert forall|j: int| 0 <= j < s.len() implies crate::lower_types::pure_below(#[trigger] s[j], m) by {
+    assert forall|j: int| 0 <= j < s.len() implies crate::expr_build::pure_below(#[trigger] s[j], m) by {
         lemma_pure_mono(s[j], n, m);
     }
 }

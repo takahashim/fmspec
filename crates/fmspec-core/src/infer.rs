@@ -10,12 +10,13 @@
 //! 下ろしの前に、[`crate::model_total::check_model`] がモデル全体の式でこれと大きさの条件を確かめる。
 //! 型が付く式の下ろしが型の誤りで失敗しないこと（全域性）は [`crate::total`] の仕様で述べる。
 
-use crate::encoding::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, STy, SType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys, lemma_stys, lemma_xtys, sty, stys, to_xty, wf_stype, xty, xtys, XTy};
-use crate::encoding::{to_xtype, wf_stype_exec, xtype_eq, XType};
+use crate::encoding::{STy, SType, XType};
 use crate::model::{BinOp, Value};
 use crate::source::{Item, Over, SetOp, TExpr};
+use crate::stype_exec::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, to_xtype};
+use crate::stype_exec::{wf_stype_exec, xtype_eq};
 use vstd::prelude::*;
 
 verus! {

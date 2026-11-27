@@ -8,18 +8,18 @@
 use crate::canon::lemma_defaults_typed;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::width_sum;
+use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, lemma_default_len};
-use crate::encoding::{keys_exec, SType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_keys_pos, lemma_stys};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{list_items_member, member, sty, stys, wf_stype, wf_stypes, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, decode, eval_l, quant_l, Env, ErrKind};
-use crate::expr_build::{bin, cb, ci, defaults, eq, ite};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{ite_s, lits};
+use crate::expr_build::{all_pure, ite_s, lits, pure_below};
+use crate::expr_build::{bin, cb, ci, defaults, eq, ite};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_product_len, product};
@@ -36,6 +36,7 @@ use crate::model::{BinOp, Expr, Value};
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_qstate, eval_src, qresult, select_bits, src_bool, QState, SEnv, TExpr};
+use crate::stype_exec::keys_exec;
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 #[cfg(verus_keep_ghost)]

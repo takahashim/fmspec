@@ -9,11 +9,11 @@ use crate::bindings::wrap_bindings;
 use crate::canon::lemma_defaults_typed;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_seq, keys, keys_product, lemma_default_len, lemma_stys};
-use crate::encoding::{keys_exec, SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_xtys, member, members, models_seq, sty, stys, wf_stype, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{wf_stypes, width, width_sum, xty, xtys, xwidth, xwidth_sum, XTy};
+use crate::encoding::{SType, XType};
 use crate::equality::small_stype;
 #[cfg(verus_keep_ghost)]
 use crate::equality::{eq_ok, eq_seq_ok, lemma_eq_coll, lemma_eq_option, lemma_eq_parts};
@@ -23,8 +23,10 @@ use crate::equality::{lemma_eq_scalar, lemma_eq_tuple};
 use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_build::{all_of, and, bin, cb, ci, defaults, eq, extend, implies, is_bool_lit, ite};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{and_s, bool_lit, head_at, heads_ok, int_lit, ite_s, split_ok, tree_s, xoff};
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, int_lit, ite_s, pure_below, split_ok};
 use crate::expr_build::{split, sub_exprs, tree, Join};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{tree_s, xoff};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
@@ -33,7 +35,7 @@ use crate::limits::*;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{picks, rows_view, select_ok};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::extends;
+use crate::lower_ctx::{added, extends};
 use crate::lower_ctx::{binds, Block, Fail};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
@@ -44,6 +46,9 @@ use crate::model::{BinOp, Expr, Type};
 use crate::preserve::*;
 use crate::quant::pick_slot;
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
+#[cfg(verus_keep_ghost)]
+use crate::rows::{col, flat, head_at, heads_ok, ite_row, ite_rows_ok};
+use crate::stype_exec::keys_exec;
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
 use crate::typing::TyEnv;

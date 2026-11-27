@@ -9,13 +9,11 @@ use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{bool_lit, ite_s, tree_s};
+use crate::expr_build::{all_pure, bool_lit, ite_s, pure_below, tree_s};
 #[cfg(verus_keep_ghost)]
 use crate::infer::type_of;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{added, all_pure, pure_below};
+use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]

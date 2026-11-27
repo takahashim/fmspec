@@ -11,18 +11,19 @@ use crate::encoding::XTy;
 use crate::encoding::{enc_rows, keys, keys_or_zero, map_rows_member, member, sty, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::Env;
-use crate::expr_build::{keys_or_zero_exec, stype_width, sub_exprs};
+use crate::expr_build::sub_exprs;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_s;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{rows_at, rows_view};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{flat, mparts_ok, mrow_at};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
+#[cfg(verus_keep_ghost)]
+use crate::rows::{flat, mparts_ok, mrow_at};
+use crate::stype_exec::{keys_or_zero_exec, stype_width};
 use vstd::prelude::*;
 
 verus! {
