@@ -7,6 +7,7 @@ require "fileutils"
 #
 # - tlc:fetch  固定したリリースの tla2tools.jar を取得し、SHA-256 を確かめる。
 # - test:tlc   fmspec の結果を、TLA+ に変換したモデルを TLC で検査した結果と突き合わせる。
+#              第三者が書いた TLA+ の仕様と、同じモデルを DSL で書いたものも比べる（examples/tlaplus）。
 #
 # tla2tools.jar は環境変数 TLA2TOOLS で指定できる。指定がなければ tmp/tlc に取得したものを使う。
 # 実行には Java 11 以上が要る。
@@ -44,5 +45,7 @@ namespace :test do
     Rake::Task["tlc:fetch"].invoke unless ENV["TLA2TOOLS"]
     cargo "build", "--quiet", "-p", "fmspec-cli"
     sh({ "TLA2TOOLS" => tla2tools_jar }, "ruby", File.join(ROOT, "reference/test/tlc_test.rb"))
+    # 第三者が書いた TLA+ の仕様と、同じモデルを DSL で書いたものの比較（examples/tlaplus）。
+    sh({ "TLA2TOOLS" => tla2tools_jar }, "ruby", File.join(ROOT, "test/tlaplus_examples_test.rb"))
   end
 end

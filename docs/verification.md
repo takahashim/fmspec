@@ -141,6 +141,19 @@ TLCの整数は32ビットなので、中間の値を含めて絶対値が2^30�
 
 TLCは、`rakelib/tlc.rake` の `TLA2TOOLS_VERSION` のリリースの tla2tools.jar を、SHA-256を確かめて使う。
 
+### 第三者が書いたTLA+の仕様との比較
+
+上の比較は、変換も比較も同じ作者が書いたので、IRの意味を変換で取り違えると見つからない。
+そこで、[tlaplus/Examples](https://github.com/tlaplus/Examples) の仕様を他人が書いたまま写し（`examples/tlaplus/vendor`）、同じモデルをDSLで書いたもの（`examples/tlaplus/models`）と比べる（`test/tlaplus_examples_test.rb`、`rake test:tlc`）。
+この比較は、DSLからIRへの変換、エンジンの意味論と探索を、まとめて独立の仕様と突き合わせる。
+
+対象は DieHard、TCommit、TwoPhase、EWD840、MissionariesAndCannibals、DiningPhilosophers である。
+DSLの状態変数は、TLA+の状態変数と一対一に対応させてある。
+TLA+の側は、元の設定の定数、仕様、デッドロック検査の有無でTLCにかけ、活性の性質は除く。
+仕様ごとに、判定（違反した不変条件。TLA+の `ENABLED Next` はfmspecのデッドロック検査にあたる）、反例の長さ、違反で止まるまでに見つけた状態の数、不変条件を外したときの到達できる状態の数を比べる。
+到達できる状態の数は、tlaplus/Examples の manifest.json の記録とも比べる。
+DSLに意図的な誤り（比較演算子、Setの `&`、`ne`、`min`、`put` の値、guardの否定、2つ目以降のguardの脱落）を入れると、この比較が失敗することを確かめている。
+
 ### DSLの具体的な実行との比較
 
 証明済みの定理は検証済みのIRについてのもので、利用者が書いたRubyの仕様についての主張ではない。
