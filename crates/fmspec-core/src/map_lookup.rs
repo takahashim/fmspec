@@ -1,15 +1,13 @@
 //! Mapの参照の下ろし。Mapとキーは評価済みで、Mapはスロットの式の列、キーは番号を束縛した局所変数で受け取る。
 
 #[cfg(verus_keep_ghost)]
-use crate::bindings::{eval_bindings, eval_bound_body};
-#[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{all_ty, has_ty, typed};
+use crate::lower_types::{all_pure, all_ty, col_ty, has_ty, pure_below, typed};
 use crate::model::*;
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{all_pure, pure_below};
+use crate::preserve::{eval_bindings, eval_bound_body};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -25,11 +23,6 @@ pub open spec fn selected(column: Seq<Expr>, rank: int, env: Env, locals: Seq<Va
 /// 番号の局所変数は Int の型を持つ。
 pub open spec fn rank_ty(lt: Seq<ETy>, rank_local: usize) -> bool {
     rank_local < lt.len() && lt[rank_local as int] == ETy::Int
-}
-
-/// 行の列 `flat` の各行の列 `column` の式は、型 `y` を持つ。
-pub open spec fn col_ty(flat: Seq<Expr>, rows: usize, width: usize, column: int, y: ETy, tv: TyEnv, lt: Seq<ETy>) -> bool {
-    forall|j: int| 0 <= j < rows ==> #[trigger] has_ty(flat[j * (1 + width as int) + column], tv, lt, y)
 }
 
 pub open spec fn key_rank(locals: Seq<Value>, index: usize) -> int {

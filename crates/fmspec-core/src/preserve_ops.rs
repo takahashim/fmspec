@@ -9,15 +9,17 @@ use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
+use crate::expr_build::{bool_lit, ite_s, tree_s};
+#[cfg(verus_keep_ghost)]
 use crate::infer::type_of;
 #[cfg(verus_keep_ghost)]
-use crate::lowering::*;
+use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{added, all_pure, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
-#[cfg(verus_keep_ghost)]
-use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_fold, eval_src, src_bool, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
@@ -426,6 +428,7 @@ pub proof fn lemma_ite_simple(
 }
 
 /// スロットごとの束縛の、先頭 `k` 個の評価。
+#[verifier::spinoff_prover]
 #[verifier::spinoff_prover]
 pub proof fn lemma_ite_prefix(
     br: TExpr,

@@ -6,13 +6,9 @@
 //! `fmspec-ir` の上限（幅が65536以下、Listの長さが1024以下）を満たす宣言の型は、この条件を満たす。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_fits_to;
+use crate::encoding::xwidth_sum;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_xwidth_of, to_xty, to_xtys, width, width_sum, xwidth, xwidth_sum, STy, XTy};
-#[cfg(verus_keep_ghost)]
-use crate::equality::{small, smalls};
-#[cfg(verus_keep_ghost)]
-use crate::preserve::{fits_all_s, fits_s};
+use crate::encoding::{lemma_xwidth_of, to_xty, to_xtys, width, width_sum, xwidth, STy, XTy};
 use vstd::prelude::*;
 
 verus! {
@@ -234,6 +230,90 @@ pub proof fn lemma_lim_smalls(ts: Seq<STy>, enums: Seq<i64>)
     if ts.len() > 0 {
         lemma_lim_smalls(ts.drop_last(), enums);
         lemma_lim_small(ts.last(), enums);
+    }
+}
+
+/// 式の型 `t` を格納の型 `st` の場所に置けるなら、`t` は `st` の式の型である。
+pub proof fn lemma_fits_to(t: XTy, st: STy)
+    requires
+        fits_s(t, st),
+    ensures
+        t == to_xty(st),
+    decreases t,
+{
+    match (t, st) {
+        (XTy::Tuple(xs), STy::Tuple(ts)) => lemma_fits_to_seq(xs, ts),
+        (XTy::Record(_, xs), STy::Record(_, ts)) => lemma_fits_to_seq(xs, ts),
+        (XTy::Option(x), STy::Option(u)) => lemma_fits_to(*x, *u),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_fits_to_seq(xs: Seq<XTy>, ts: Seq<STy>)
+    requires
+        fits_all_s(xs, ts),
+    ensures
+        xs == to_xtys(ts),
+    decreases xs,
+{
+    if xs.len() > 0 {
+        lemma_fits_to_seq(xs.drop_last(), ts.drop_last());
+        lemma_fits_to(xs.last(), ts.last());
+        assert(xs =~= xs.drop_last().push(xs.last()));
+    } else {
+        assert(xs =~= Seq::<XTy>::empty());
+    }
+}
+
+/// 型の中のどのListも、長さの上限が `0x7fff_ffff` 以下である。
+pub open spec fn small(t: STy) -> bool
+    decreases t,
+{
+    match t {
+        STy::Tuple(ts) => smalls(ts),
+        STy::Record(_, ts) => smalls(ts),
+        STy::Option(x) => small(*x),
+        STy::Map(_, x) => small(*x),
+        STy::List(e, max) => max <= 0x7fff_ffff && small(*e),
+        _ => true,
+    }
+}
+
+pub open spec fn smalls(ts: Seq<STy>) -> bool
+    decreases ts,
+{
+    if ts.len() == 0 {
+        true
+    } else {
+        smalls(ts.drop_last()) && small(ts.last())
+    }
+}
+
+/// 式の型 `x` の値を、格納の型 `s` の場所に置ける（整数の範囲は問わない）。
+pub open spec fn fits_s(x: XTy, s: STy) -> bool
+    decreases x,
+{
+    match (x, s) {
+        (XTy::Bool, STy::Bool) => true,
+        (XTy::Int, STy::Int(_, _)) => true,
+        (XTy::Enum(a), STy::Enum(b)) => a == b,
+        (XTy::Tuple(xs), STy::Tuple(ts)) => fits_all_s(xs, ts),
+        (XTy::Record(a, xs), STy::Record(b, ts)) => a == b && fits_all_s(xs, ts),
+        (XTy::Option(x), STy::Option(u)) => fits_s(*x, *u),
+        (XTy::Set(a), STy::Set(b)) => a == b,
+        (XTy::Map(ka, va), STy::Map(kb, vb)) => ka == kb && va == vb,
+        (XTy::List(a, n), STy::List(b, m)) => n == m && a == b,
+        _ => false,
+    }
+}
+
+pub open spec fn fits_all_s(xs: Seq<XTy>, ts: Seq<STy>) -> bool
+    decreases xs,
+{
+    if xs.len() == 0 {
+        ts.len() == 0
+    } else {
+        ts.len() == xs.len() && fits_all_s(xs.drop_last(), ts.drop_last()) && fits_s(xs.last(), ts.last())
     }
 }
 

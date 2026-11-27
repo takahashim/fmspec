@@ -5,33 +5,29 @@
 //! 下ろしは `Fail::Type` で失敗せず、型の幅だけの純粋なスロットを返す（[`tpost`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, wf_xtype};
+use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, STy, XTy, XType};
+use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, XTy, XType};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{head_at, heads_ok, ite_s};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{items_typed, lemma_items_typed_iff, type_of, SCtx};
 #[cfg(verus_keep_ghost)]
-use crate::limits::{lim_s, lim_ss, lim_x, lim_xs};
+use crate::limits::{lim_s, lim_ss, lim_xs};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at, select_ok};
+use crate::lists::{picks, select_ok};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::{Bound, Constant, Layout, LowerCtx};
+use crate::lower_ctx::{Bound, Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::maps::{mparts_ok, mrow_at};
+use crate::lower_types::{all_pure, col, flat, ite_row, ite_rows_ok, layout_tys, mparts_ok, mrow_at};
 #[cfg(verus_keep_ghost)]
-use crate::model::Expr;
+use crate::lower_types::{ok_x, parts_ok, pure_below, row_at, sc_wf, shaped};
 #[cfg(verus_keep_ghost)]
-use crate::model::{BinOp, Value};
+use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{all_pure, lemma_pure_mono, pure_below};
+use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{mark_s, setop_s};
-#[cfg(verus_keep_ghost)]
-use crate::quant::picks;
-#[cfg(verus_keep_ghost)]
-use crate::slots::Fail;
-#[cfg(verus_keep_ghost)]
-use crate::slots::{head_at, heads_ok, ite_s};
 #[cfg(verus_keep_ghost)]
 use crate::source::{Item, Over, SetOp, TExpr};
 use vstd::prelude::*;
@@ -39,10 +35,6 @@ use vstd::prelude::*;
 verus! {
 
 // ---- 文脈の対応 ----
-
-pub open spec fn layout_tys(ls: Seq<Layout>) -> Seq<STy> {
-    Seq::new(ls.len(), |i: int| sty(ls[i].ty))
-}
 
 pub open spec fn const_tys(cs: Seq<Constant>) -> Seq<STy> {
     Seq::new(cs.len(), |i: int| sty(cs[i].ty))
@@ -78,11 +70,6 @@ pub open spec fn ok_s(t: STy, enums: Seq<i64>) -> bool {
     wf_stype(t, enums) && lim_s(t, enums)
 }
 
-/// 式の型が整形式で、大きさの条件を満たす。
-pub open spec fn ok_x(t: XTy, enums: Seq<i64>) -> bool {
-    wf_xtype(t, enums) && lim_x(t, enums)
-}
-
 /// [`ok_s`] の不透明な形。ループの不変条件で、展開されないように使う。
 #[verifier::opaque]
 pub open spec fn ok_s_o(t: STy, enums: Seq<i64>) -> bool {
@@ -110,17 +97,6 @@ pub open spec fn cx_wf(cx: LowerCtx) -> bool {
             == width(sty(cx.consts@[i].ty), enums)
 }
 
-/// スロットの列は型 `t` の幅だけあり、深さ `n` 未満の局所変数だけを参照する純粋な式である。
-pub open spec fn shaped(slots: Seq<Expr>, t: XTy, n: nat, enums: Seq<i64>) -> bool {
-    slots.len() == xwidth(t, enums) && all_pure(slots, n)
-}
-
-/// 局所変数の束縛が整形式である。
-pub open spec fn sc_wf(sc: Seq<Bound>, n: nat, enums: Seq<i64>) -> bool {
-    forall|i: int|
-        0 <= i < sc.len() ==> ok_x(xty(#[trigger] sc[i].ty), enums) && shaped(sc[i].slots@, xty(sc[i].ty), n, enums)
-}
-
 pub proof fn lemma_all_pure_mono(s: Seq<Expr>, n: nat, m: nat)
     requires
         all_pure(s, n),
@@ -128,7 +104,7 @@ pub proof fn lemma_all_pure_mono(s: Seq<Expr>, n: nat, m: nat)
     ensures
         all_pure(s, m),
 {
-    assert forall|j: int| 0 <= j < s.len() implies crate::preserve::pure_below(#[trigger] s[j], m) by {
+    assert forall|j: int| 0 <= j < s.len() implies crate::lower_types::pure_below(#[trigger] s[j], m) by {
         lemma_pure_mono(s[j], n, m);
     }
 }

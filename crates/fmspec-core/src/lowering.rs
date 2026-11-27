@@ -18,32 +18,42 @@
 //! 下ろしが意味を保存することの補題は、[`crate::preserve`] と、式の種類ごとの `preserve_*.rs` にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::{in_slots, lemma_fits_to, lemma_in_member, lemma_models_has, lemma_shaped_len, slot_tys};
-use crate::encoding::{copy_stype, copy_xtype, keys_exec, stype_eq, to_xtype, usizes_eq, xtype_eq, SType, XType};
+use crate::canon::{lemma_defaults_typed, lemma_in_member, lemma_models_has, lemma_shaped_len};
+use crate::encoding::{copy_stype, copy_xtype, keys_exec, stype_eq, to_xtype, usizes_eq, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_repeat, keys, keys_or_zero, lemma_default_len, lemma_enc_len};
+use crate::encoding::{default_val, enc, enc_repeat, keys, keys_or_zero, lemma_default_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_models_enc, lemma_stys, lemma_xtys, lemma_xwidth_of, lemma_xwidth_pos, member, sty};
+use crate::encoding::{lemma_enc_len, lemma_models_enc, lemma_stys, lemma_xtys, lemma_xwidth_of};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{stys, to_xty, wf_xtype, width, xty, xtys, xwidth, xwidth_sum, STy, SVal, XTy};
+use crate::encoding::{lemma_xwidth_pos, member, sty, stys, to_xty, wf_stype, wf_xtype, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, wf_xtypes};
-#[cfg(verus_keep_ghost)]
-use crate::equality::small;
+use crate::encoding::{wf_xtypes, width, xty, xtys, xwidth, xwidth_sum, XTy};
+use crate::encoding::{xtype_eq, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
+use crate::expr_build::{all_of, and, bin, cb, ci, defaults, eq, extend, implies, is_bool_lit, ite};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{bool_lit, int_lit, ite_s, lits, split_ok, tree_s, xoff};
+use crate::expr_build::{keys_or_zero_exec, or, split, stype_width, sub_exprs, tree, Join};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::{lemma_all_typed_bool, lemma_all_typed_iff, lemma_types_of_iff, type_of, types_of};
+use crate::infer::types_of;
+#[cfg(verus_keep_ghost)]
+use crate::infer::{lemma_all_typed_bool, lemma_all_typed_iff, lemma_types_of_iff, type_of};
 #[cfg(verus_keep_ghost)]
 use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
+use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
-use crate::lists::{flat, rows_view};
+use crate::lists::{lemma_select_typed, picks, rows_view};
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
 use crate::map_lookup::select_flat_map_lookup;
+use crate::maps::map_rows;
 use crate::model::{BinOp, Expr, Type, Value};
 use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
@@ -60,13 +70,14 @@ use crate::preserve_quant::*;
 use crate::preserve_set::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_tuple::*;
-use crate::quant::{pick_slot, unrank};
 #[cfg(verus_keep_ghost)]
-use crate::quant::{picks, unrank_ok};
+use crate::quant::unrank_ok;
+use crate::quant::{pick_slot, unrank};
 use crate::slots::*;
+use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, Item, SEnv};
-use crate::source::{Over, SetOp, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
+use crate::source::{Over, SetOp, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;
 use crate::typing::ETy;
@@ -77,38 +88,6 @@ use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {
-
-/// 状態変数や引数の、スロットの列での位置。
-pub struct Layout {
-    pub ty: SType,
-    pub offset: usize,
-}
-
-/// 名前付きの定数。値はスロットごとの中核の値。
-pub struct Constant {
-    pub ty: SType,
-    pub slots: Vec<Value>,
-}
-
-/// 下ろしの文脈。
-pub struct LowerCtx {
-    /// 各列挙型のラベルの数。
-    pub enums: Vec<i64>,
-    /// 状態変数。`None` なら状態を参照できない（初期値と定数）。
-    pub states: Option<Vec<Layout>>,
-    /// 公開引数に続けて内部選択。
-    pub args: Vec<Layout>,
-    /// 遷移後の状態と出力を参照できる（遷移契約）。
-    pub next: bool,
-    pub out: Option<SType>,
-    pub consts: Vec<Constant>,
-}
-
-/// 局所変数（`let` と量化の束縛）。
-pub struct Bound {
-    pub ty: XType,
-    pub slots: Vec<Expr>,
-}
 
 /// 値を型 `st` の場所に置けるか。整数の範囲は問わない（値ごとに検査する）。
 pub fn fits(t: &XType, st: &SType) -> (r: bool)
@@ -945,8 +924,8 @@ fn put(
     proof {
         reveal(put_pre);
         if tq {
-            crate::canon::lemma_slot_tys_len(sty(*v), cx.enums@);
-            assert(xetys(XTy::Map(Box::new(sty(*k)), Box::new(sty(*v))), cx.enums@) == etys(crate::canon::ty_repeat(rowt, nk)));
+            crate::lower_types::lemma_slot_tys_len(sty(*v), cx.enums@);
+            assert(xetys(XTy::Map(Box::new(sty(*k)), Box::new(sty(*v))), cx.enums@) == etys(crate::lower_types::ty_repeat(rowt, nk)));
             assert(wf_stype(sty(*k), cx.enums@) && wf_stype(sty(*v), cx.enums@));
             lemma_lim_small(sty(*k), cx.enums@);
             lemma_lim_small(sty(*v), cx.enums@);
@@ -1237,7 +1216,7 @@ fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) -> (r: Resu
             proof {
                 if tp {
                     lemma_xetys_of(sty(*st), enums@);
-                    crate::canon::lemma_slot_tys_len(sty(*st), enums@);
+                    crate::lower_types::lemma_slot_tys_len(sty(*st), enums@);
                     assert(has_ty(out@[0], tv, lt, xetys(xty(t), enums@)[0]));
                 }
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
@@ -1318,7 +1297,7 @@ fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) -> (r: Resu
                     assert(ok_s(sty(cx.consts@[*i as int].ty), enums@));
                 }
                 if tp {
-                    assert(crate::canon::in_slots(c.slots@, slot_tys(sty(c.ty), enums@), enums@));
+                    assert(crate::lower_types::in_slots(c.slots@, slot_tys(sty(c.ty), enums@), enums@));
                     lemma_lits_typed(c.slots@, slot_tys(sty(c.ty), enums@), tv, lt);
                     lemma_xetys_of(sty(c.ty), enums@);
                 }
@@ -3553,10 +3532,10 @@ fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> 
                     lemma_lim_small(sty(*t), cx.enums@);
                     lemma_xetys_of(mt, cx.enums@);
                     assert(xty(ty) == to_xty(mt));
-                    crate::canon::lemma_slot_tys_len(sty(*vt), cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(sty(*vt), cx.enums@);
                     let row = seq![Type::Bool] + slot_tys(sty(*vt), cx.enums@);
                     assert(row[0] == Type::Bool);
-                    assert(slot_tys(mt, cx.enums@) == crate::canon::ty_repeat(row, keys_or_zero(sty(*kt), cx.enums@)));
+                    assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, keys_or_zero(sty(*kt), cx.enums@)));
                     lemma_map_flags_typed(cs@, fs@, row, keys_or_zero(sty(*kt), cx.enums@), stride as int, tv, lt);
                     lemma_all_ty_push(fs@, ETy::Bool, tv, lt, ETy::Int);
                     assert(typed(us@, etys(slot_tys(sty(*t), cx.enums@)), tv, lt.push(ETy::Int)));
@@ -3673,7 +3652,7 @@ fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
                     lemma_lim_small(sty(*u), cx.enums@);
                     lemma_xetys_of(lt0, cx.enums@);
                     assert(xty(ty) == to_xty(lt0));
-                    crate::canon::lemma_slot_tys_len(sty(*u), cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(sty(*u), cx.enums@);
                     lemma_defaults_typed(sty(*u), tv, lt1);
                 }
             }
@@ -3698,7 +3677,7 @@ fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
                     tv == lenv(*cx),
                     et == slot_tys(sty(*u), cx.enums@),
                     lt1 == blt(b1, *cx).push(ETy::Int),
-                    tp ==> et.len() == w && typed(cs@, etys(seq![Type::Int(0, max as i64)] + crate::canon::ty_repeat(et, max as nat)), tv, blt(b1, *cx)),
+                    tp ==> et.len() == w && typed(cs@, etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max as nat)), tv, blt(b1, *cx)),
                     tp ==> typed(dv@, etys(et), tv, lt1),
                     tp ==> forall|q: int| 0 <= q < j ==> #[trigger] has_ty(us@[q], tv, lt1, etys(et)[q]),
                     tp ==> blt(b1, *cx).len() == d,
@@ -3813,7 +3792,7 @@ fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
             proof {
                 if tp {
                     assert(has_ty(cs@[0], tv, blt(b1, *cx), ETy::Int)) by {
-                        assert(etys(seq![Type::Int(0, max as i64)] + crate::canon::ty_repeat(et, max as nat))[0] == ETy::Int);
+                        assert(etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max as nat))[0] == ETy::Int);
                     }
                     lemma_has_ty_push(cs@[0], ETy::Int, tv, blt(b1, *cx), ETy::Int);
                     lemma_lt_typed(Expr::Local(d), cs@[0], tv, lt1);
@@ -4315,8 +4294,8 @@ fn append_rows(
         final(out)@.len() == old(out)@.len() + n * dv.len(),
         forall|m: nat| #[trigger] all_pure(old(out)@, m) ==> all_pure(final(out)@, m),
         forall|tv: TyEnv, lt: Seq<ETy>|
-            typed(old(out)@, etys(hd + crate::canon::ty_repeat(et, k0)), tv, lt) && #[trigger] typed(defs@, etys(et), tv, lt)
-                ==> typed(final(out)@, etys(hd + crate::canon::ty_repeat(et, (k0 + n) as nat)), tv, lt),
+            typed(old(out)@, etys(hd + crate::lower_types::ty_repeat(et, k0)), tv, lt) && #[trigger] typed(defs@, etys(et), tv, lt)
+                ==> typed(final(out)@, etys(hd + crate::lower_types::ty_repeat(et, (k0 + n) as nat)), tv, lt),
 {
     let ghost o0 = out@;
     proof {
@@ -4331,8 +4310,8 @@ fn append_rows(
             out@.len() == o0.len() + p * dv.len(),
             forall|m: nat| #[trigger] all_pure(o0, m) ==> all_pure(out@, m),
             forall|tv: TyEnv, lt: Seq<ETy>|
-                typed(o0, etys(hd + crate::canon::ty_repeat(et, k0)), tv, lt) && #[trigger] typed(defs@, etys(et), tv, lt)
-                    ==> typed(out@, etys(hd + crate::canon::ty_repeat(et, (k0 + p) as nat)), tv, lt),
+                typed(o0, etys(hd + crate::lower_types::ty_repeat(et, k0)), tv, lt) && #[trigger] typed(defs@, etys(et), tv, lt)
+                    ==> typed(out@, etys(hd + crate::lower_types::ty_repeat(et, (k0 + p) as nat)), tv, lt),
         decreases n - p,
     {
         let ghost o3 = out@;
@@ -4353,12 +4332,12 @@ fn append_rows(
                 }
             }
             assert forall|tv: TyEnv, lt: Seq<ETy>|
-                typed(o0, etys(hd + crate::canon::ty_repeat(et, k0)), tv, lt) && #[trigger] typed(defs@, etys(et), tv, lt)
-                    implies typed(out@, etys(hd + crate::canon::ty_repeat(et, (k0 + p + 1) as nat)), tv, lt) by {
-                assert(typed(o3, etys(hd + crate::canon::ty_repeat(et, (k0 + p) as nat)), tv, lt));
-                lemma_typed_concat(o3, etys(hd + crate::canon::ty_repeat(et, (k0 + p) as nat)), defs@, etys(et), tv, lt);
-                lemma_etys_concat(hd + crate::canon::ty_repeat(et, (k0 + p) as nat), et);
-                assert(hd + crate::canon::ty_repeat(et, (k0 + p + 1) as nat) =~= (hd + crate::canon::ty_repeat(et, (k0 + p) as nat)) + et);
+                typed(o0, etys(hd + crate::lower_types::ty_repeat(et, k0)), tv, lt) && #[trigger] typed(defs@, etys(et), tv, lt)
+                    implies typed(out@, etys(hd + crate::lower_types::ty_repeat(et, (k0 + p + 1) as nat)), tv, lt) by {
+                assert(typed(o3, etys(hd + crate::lower_types::ty_repeat(et, (k0 + p) as nat)), tv, lt));
+                lemma_typed_concat(o3, etys(hd + crate::lower_types::ty_repeat(et, (k0 + p) as nat)), defs@, etys(et), tv, lt);
+                lemma_etys_concat(hd + crate::lower_types::ty_repeat(et, (k0 + p) as nat), et);
+                assert(hd + crate::lower_types::ty_repeat(et, (k0 + p + 1) as nat) =~= (hd + crate::lower_types::ty_repeat(et, (k0 + p) as nat)) + et);
             }
             let k = p as nat;
             assert(enc_repeat(dv, (k + 1) as nat) == enc_repeat(dv, k) + dv);
@@ -4423,11 +4402,11 @@ fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) 
                     assert(here_ok(*e, c, bt));
                     assert(wf_stype(st, enums@));
                     lemma_lim_small(st, enums@);
-                    lemma_etys_concat(seq![Type::Int(0, *max as i64)], crate::canon::ty_repeat(slot_tys(st, cx.enums@), 0));
+                    lemma_etys_concat(seq![Type::Int(0, *max as i64)], crate::lower_types::ty_repeat(slot_tys(st, cx.enums@), 0));
                     assert(etys(seq![Type::Int(0, *max as i64)]) =~= seq![ETy::Int]);
-                    assert(etys(crate::canon::ty_repeat(slot_tys(st, cx.enums@), 0)) =~= Seq::<ETy>::empty());
+                    assert(etys(crate::lower_types::ty_repeat(slot_tys(st, cx.enums@), 0)) =~= Seq::<ETy>::empty());
                     assert(has_ty(out@[0], tv, blt(*blk, *cx), ETy::Int));
-                    assert(typed(out@, etys(seq![Type::Int(0, *max as i64)] + crate::canon::ty_repeat(slot_tys(st, cx.enums@), 0)), tv, blt(*blk, *cx)));
+                    assert(typed(out@, etys(seq![Type::Int(0, *max as i64)] + crate::lower_types::ty_repeat(slot_tys(st, cx.enums@), 0)), tv, blt(*blk, *cx)));
                 }
             }
             let mut i = 0;
@@ -4452,7 +4431,7 @@ fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) 
                     tp == (pre && tok(*cx, sc0, b0)),
                     tv == lenv(*cx),
                     tp ==> wf_stype(st, cx.enums@) && small(st),
-                    tp ==> tok(*cx, sc0, *blk) && typed(out@, etys(seq![Type::Int(0, *max as i64)] + crate::canon::ty_repeat(slot_tys(st, cx.enums@), i as nat)), tv, blt(*blk, *cx)),
+                    tp ==> tok(*cx, sc0, *blk) && typed(out@, etys(seq![Type::Int(0, *max as i64)] + crate::lower_types::ty_repeat(slot_tys(st, cx.enums@), i as nat)), tv, blt(*blk, *cx)),
                 decreases es.len() - i,
             {
                 proof {
@@ -4486,11 +4465,11 @@ fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) 
                 proof {
                     if tp {
                         let et = slot_tys(st, cx.enums@);
-                        let ys = etys(seq![Type::Int(0, *max as i64)] + crate::canon::ty_repeat(et, i as nat));
+                        let ys = etys(seq![Type::Int(0, *max as i64)] + crate::lower_types::ty_repeat(et, i as nat));
                         lemma_typed_blk(o1, ys, *cx, b1, *blk);
                         lemma_typed_concat(o1, ys, x@, etys(et), tv, blt(*blk, *cx));
-                        lemma_etys_concat(seq![Type::Int(0, *max as i64)] + crate::canon::ty_repeat(et, i as nat), et);
-                        assert(seq![Type::Int(0, *max as i64)] + crate::canon::ty_repeat(et, (i + 1) as nat) =~= (seq![Type::Int(0, *max as i64)] + crate::canon::ty_repeat(et, i as nat)) + et);
+                        lemma_etys_concat(seq![Type::Int(0, *max as i64)] + crate::lower_types::ty_repeat(et, i as nat), et);
+                        assert(seq![Type::Int(0, *max as i64)] + crate::lower_types::ty_repeat(et, (i + 1) as nat) =~= (seq![Type::Int(0, *max as i64)] + crate::lower_types::ty_repeat(et, i as nat)) + et);
                         lemma_tok_ext(*cx, sc0, b1, *blk);
                     }
                     lemma_extends_trans(*old(blk), b1, *blk);
@@ -4643,7 +4622,7 @@ fn low_member(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
                 if pre {
                     lemma_all_pure_mono(cs@, b1.depth_s(), blk.depth_s());
                     crate::quant::lemma_hit_pure(rg, cs@, hg, blk.depth_s());
-                    assert(out@[0] == crate::slots::and_s(
+                    assert(out@[0] == crate::expr_build::and_s(
                         Expr::Bin(BinOp::Ge, Box::new(rg), Box::new(Expr::Const(Value::Int(0)))),
                         hg,
                     ));
@@ -4743,7 +4722,7 @@ fn low_list_contains(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Bl
                     lemma_typed_blk(cs@, xetys(xty(tc), cx.enums@), *cx, b1, b2);
                     lemma_xetys_of(lt, cx.enums@);
                     lemma_xetys_of(es, cx.enums@);
-                    crate::canon::lemma_slot_tys_len(es, cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(es, cx.enums@);
                     assert(xty(tc) == to_xty(lt));
                     lemma_lrows_typed(cs@, len, rows_view(rows@), slot_tys(es, cx.enums@), max as nat, tv, blt(b2, *cx));
                     assert(xetys(t, cx.enums@) == etys(slot_tys(es, cx.enums@)));
@@ -5194,11 +5173,11 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                             let mt = STy::Map(Box::new(sty(**k)), Box::new(sty(**v)));
                             lemma_xetys_of(mt, cx.enums@);
                             assert(xty(t) == to_xty(mt));
-                            crate::canon::lemma_slot_tys_len(sty(**v), cx.enums@);
+                            crate::lower_types::lemma_slot_tys_len(sty(**v), cx.enums@);
                             lemma_xwidth_of(sty(**v), cx.enums@);
                             let row = seq![Type::Bool] + slot_tys(sty(**v), cx.enums@);
                             assert(row[0] == Type::Bool);
-                            assert(slot_tys(mt, cx.enums@) == crate::canon::ty_repeat(row, keys_or_zero(sty(**k), cx.enums@)));
+                            assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, keys_or_zero(sty(**k), cx.enums@)));
                             lemma_map_flags_typed(s@, fs@, row, keys_or_zero(sty(**k), cx.enums@), stride as int, tv, blt(b1, *cx));
                         }
                     }
@@ -5487,10 +5466,10 @@ fn low_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r
             let mt = STy::Map(Box::new(sty(k)), Box::new(sv));
             lemma_xetys_of(mt, cx.enums@);
             assert(tmx == to_xty(mt));
-            crate::canon::lemma_slot_tys_len(sv, cx.enums@);
+            crate::lower_types::lemma_slot_tys_len(sv, cx.enums@);
             lemma_extends_trans(b1, b2, b3);
             lemma_typed_blk(ms@, xetys(tmx, cx.enums@), *cx, b1, b3);
-            assert(slot_tys(mt, cx.enums@) == crate::canon::ty_repeat(row, rows as nat));
+            assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, rows as nat));
             lemma_cols_typed(ms@, row, rows, width, tv, blt(b3, *cx));
             lemma_defaults_typed(sv, tv, blt(b3, *cx));
             assert(ys.subrange(1, 1 + width as int) =~= etys(slot_tys(sv, cx.enums@)));
@@ -5734,7 +5713,7 @@ fn low_has_key(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -
                             blt(*blk, *cx),
                         );
                     }
-                    assert(out@[0] == crate::slots::and_s(
+                    assert(out@[0] == crate::expr_build::and_s(
                         Expr::Bin(BinOp::Ge, Box::new(rg), Box::new(Expr::Const(Value::Int(0)))),
                         hg,
                     ));
@@ -5868,7 +5847,7 @@ fn low_delete(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
                     let mt = STy::Map(Box::new(sty(k)), Box::new(sv));
                     lemma_xetys_of(mt, cx.enums@);
                     assert(xty(tm) == to_xty(mt));
-                    assert(slot_tys(mt, cx.enums@) == crate::canon::ty_repeat(row, keys_or_zero(sty(k), cx.enums@)));
+                    assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, keys_or_zero(sty(k), cx.enums@)));
                 }
             }
             proof {
@@ -6063,7 +6042,7 @@ fn low_at(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r:
                     lemma_typed_blk(ls@, xetys(xty(tl), cx.enums@), *cx, b1, b3);
                     lemma_xetys_of(lt0, cx.enums@);
                     assert(xty(tl) == to_xty(lt0));
-                    crate::canon::lemma_slot_tys_len(st, cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(st, cx.enums@);
                     lemma_lrows_typed(ls@, len, rows_view(rows@), slot_tys(st, cx.enums@), max as nat, tv, blt(b3, *cx));
                     assert(has_ty(Expr::Const(Value::Int(0)), tv, blt(b3, *cx), ETy::Int));
                     lemma_ge0_typed(i, tv, blt(b3, *cx));
@@ -6191,7 +6170,7 @@ fn low_first_last(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block
                     lemma_lim_small(st, cx.enums@);
                     lemma_xetys_of(lt0, cx.enums@);
                     assert(xty(tl) == to_xty(lt0));
-                    crate::canon::lemma_slot_tys_len(st, cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(st, cx.enums@);
                     lemma_lrows_typed(ls@, len, rows_view(rows@), slot_tys(st, cx.enums@), max as nat, tv, blt(b1, *cx));
                     lemma_gt_typed(len, 0, tv, blt(b1, *cx));
                 }
@@ -6379,7 +6358,7 @@ fn low_push(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                     lemma_lim_small(st, cx.enums@);
                     lemma_xetys_of(lt0, cx.enums@);
                     assert(xty(tl) == to_xty(lt0));
-                    crate::canon::lemma_slot_tys_len(st, cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(st, cx.enums@);
                     lemma_typed_blk(ls@, xetys(xty(tl), cx.enums@), *cx, b1, b2);
                     lemma_lrows_typed(ls@, len, rows_view(rows@), slot_tys(st, cx.enums@), max as nat, tv, blt(b2, *cx));
                     assert(has_ty(Expr::Const(Value::Int(max as i64)), tv, blt(b2, *cx), ETy::Int));
@@ -6513,7 +6492,7 @@ fn low_pop_shift(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block)
                     lemma_lim_small(st, cx.enums@);
                     lemma_xetys_of(lt0, cx.enums@);
                     assert(xty(tl) == to_xty(lt0));
-                    crate::canon::lemma_slot_tys_len(st, cx.enums@);
+                    crate::lower_types::lemma_slot_tys_len(st, cx.enums@);
                     lemma_lrows_typed(ls@, len, rows_view(rows@), slot_tys(st, cx.enums@), max as nat, tv, blt(b1, *cx));
                     lemma_gt_typed(len, 0, tv, blt(b1, *cx));
                 }

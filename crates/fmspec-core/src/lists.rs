@@ -5,20 +5,30 @@
 //! 下ろしは、スロットの列を行に区切り（[`parts_ok`]）、行を選び（[`select_ok`]）、
 //! 行をつなぎ直す（[`flat`]）。
 
+use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, member, width, STy, SVal, XTy};
+use crate::encoding::{list_items_member, member, sty, width, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, Env, ErrKind};
+use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::model::{BinOp, Expr, Value};
+use crate::expr_build::ite_s;
+use crate::expr_build::{stype_width, sub_exprs};
+use crate::expr_copy::copy_expr;
+#[cfg(verus_keep_ghost)]
+use crate::limits::lim_s;
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{all_pure, all_ty, col, flat, has_ty, ite_row, ite_rows_ok, parts_ok};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{pure_below, row_at, typed};
+use crate::model::Expr;
+#[cfg(verus_keep_ghost)]
+use crate::model::{BinOp, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::quant::{at_rank, lemma_bin_const, lemma_items_member, picks, vals_at};
-#[cfg(verus_keep_ghost)]
-use crate::slots::ite_s;
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -164,19 +174,6 @@ pub proof fn lemma_items_slice(xs: Seq<SVal>, st: STy, enums: Seq<i64>, k: int)
 
 // ---- 行に区切ったスロット ----
 
-/// `rows` は、Listのスロット `slots` を、長さのスロット `len` と幅 `w` の `max` 個の行に区切ったものである。
-pub open spec fn parts_ok(slots: Seq<Expr>, len: Expr, rows: Seq<Seq<Expr>>, w: nat, max: nat) -> bool {
-    &&& slots.len() > 0
-    &&& len == slots[0]
-    &&& rows.len() == max
-    &&& forall|p: int| 0 <= p < max ==> #[trigger] row_at(rows[p], slots, p, w)
-}
-
-/// `row` は、スロット `slots` の `p` 番目の行である。
-pub open spec fn row_at(row: Seq<Expr>, slots: Seq<Expr>, p: int, w: nat) -> bool {
-    1 + p * w + w <= slots.len() && row == slots.subrange(1 + p * w, 1 + p * w + w)
-}
-
 /// 各行のスロットは純粋で、値は `vals` である。
 pub open spec fn rows_at(rows: Seq<Seq<Expr>>, vals: Seq<Seq<Value>>, env: Env, l: Seq<Value>) -> bool {
     &&& rows.len() == vals.len()
@@ -243,17 +240,6 @@ pub proof fn lemma_rows_weaken(rows: Seq<Seq<Expr>>, vals: Seq<Seq<Value>>, env:
 
 // ---- 行をつなぎ直したスロット ----
 
-/// 行をつなげた列。
-pub open spec fn flat(rows: Seq<Seq<Expr>>) -> Seq<Expr>
-    decreases rows.len(),
-{
-    if rows.len() == 0 {
-        Seq::empty()
-    } else {
-        flat(rows.drop_last()) + rows.last()
-    }
-}
-
 /// 行の列を、`Vec` の列から作る。
 pub open spec fn rows_view(rows: Seq<Vec<Expr>>) -> Seq<Seq<Expr>> {
     Seq::new(rows.len(), |i: int| rows[i]@)
@@ -316,23 +302,6 @@ pub proof fn lemma_list_join(
 
 // ---- 行を置き換える ----
 
-/// `o` は、行 `r` の各スロットを、`k` が `p` なら `alt` のスロットに置き換える式の列である。
-pub open spec fn ite_row(o: Seq<Expr>, r: Seq<Expr>, k: Expr, alt: Seq<Expr>, p: int) -> bool {
-    &&& o.len() == alt.len()
-    &&& r.len() == alt.len()
-    &&& forall|j: int|
-        0 <= j < o.len() ==> #[trigger] o[j] == ite_s(
-            Expr::Bin(BinOp::Eq, Box::new(k), Box::new(Expr::Const(Value::Int(p as i64)))),
-            alt[j],
-            r[j],
-        )
-}
-
-pub open spec fn ite_rows_ok(out: Seq<Seq<Expr>>, rows: Seq<Seq<Expr>>, k: Expr, alt: Seq<Expr>) -> bool {
-    &&& out.len() == rows.len()
-    &&& forall|p: int| 0 <= p < rows.len() ==> #[trigger] ite_row(out[p], rows[p], k, alt, p)
-}
-
 /// `k` が `n` なら、`n` 番目の行だけが `alt` の値になる。
 pub proof fn lemma_ite_rows(
     out: Seq<Seq<Expr>>,
@@ -379,11 +348,6 @@ pub proof fn lemma_ite_rows(
 }
 
 // ---- 行を選ぶ ----
-
-/// 各行の `j` 番目のスロットの列。
-pub open spec fn col(rows: Seq<Seq<Expr>>, j: int) -> Seq<Expr> {
-    Seq::new(rows.len(), |t: int| rows[t][j])
-}
 
 /// `out` は、添字 `idx` の行を選ぶスロットの列である。
 pub open spec fn select_ok(rows: Seq<Seq<Expr>>, idx: Expr, out: Seq<Expr>) -> bool {
@@ -432,6 +396,164 @@ pub proof fn lemma_select(
     assert(clean(r, env, l) && slot_vals(r, env, l) == vals[k as int]);
     assert(vals[k as int].len() == out.len());
     assert(slot_vals(out, env, l) =~= vals[k as int]);
+}
+
+/// 添字で選んだ行は、行の型を持つ。
+pub proof fn lemma_select_typed(rows: Seq<Seq<Expr>>, idx: Expr, out: Seq<Expr>, ys: Seq<ETy>, t: TyEnv, lt: Seq<ETy>)
+    requires
+        crate::lists::select_ok(rows, idx, out),
+        has_ty(idx, t, lt, ETy::Int),
+        forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], ys, t, lt),
+    ensures
+        typed(out, ys, t, lt),
+{
+    assert(typed(rows[0], ys, t, lt));
+    assert forall|j: int| 0 <= j < out.len() implies #[trigger] has_ty(out[j], t, lt, ys[j]) by {
+        let cl = crate::lower_types::col(rows, j);
+        assert(crate::lists::picks(out[j], cl, idx));
+        assert forall|q: int| 0 <= q < cl.len() implies #[trigger] has_ty(cl[q], t, lt, ys[j]) by {
+            assert(typed(rows[q], ys, t, lt));
+            assert(rows[q].len() == out.len());
+            assert(cl[q] == rows[q][j]);
+        }
+        assert(all_ty(cl, ys[j], t, lt));
+    }
+}
+
+/// 式 `r` が、局所変数 `l` のもとで整数 `i` になる。
+pub open spec fn at_rank(r: Expr, env: Env, l: Seq<Value>, i: i64) -> bool {
+    pure_below(r, l.len()) && eval_l(r, env, l) == Ok::<Value, ErrKind>(Value::Int(i))
+}
+
+/// 整数の定数との二項演算は、`r` と同じく純粋である。
+pub proof fn lemma_bin_const_pure(op: BinOp, r: Expr, k: i64, n: nat)
+    requires
+        pure_below(r, n),
+    ensures
+        pure_below(Expr::Bin(op, Box::new(r), Box::new(Expr::Const(Value::Int(k)))), n),
+{
+    assert(pure_below(Expr::Const(Value::Int(k)), n));
+}
+
+/// 整数の定数との二項演算の値。
+pub proof fn lemma_bin_const(op: BinOp, r: Expr, k: i64, env: Env, l: Seq<Value>, i: i64)
+    requires
+        at_rank(r, env, l, i),
+    ensures
+        pure_below(Expr::Bin(op, Box::new(r), Box::new(Expr::Const(Value::Int(k)))), l.len()),
+        eval_l(Expr::Bin(op, Box::new(r), Box::new(Expr::Const(Value::Int(k)))), env, l) == binop_spec(
+            op,
+            Value::Int(i),
+            Value::Int(k),
+        ),
+{
+    lemma_bin_const_pure(op, r, k, l.len());
+    assert(eval_l(Expr::Const(Value::Int(k)), env, l) == Ok::<Value, ErrKind>(Value::Int(k)));
+}
+
+/// 式の列 `fs` の各式は、局所変数 `l` のもとで純粋で、値は `vals` になる。
+pub open spec fn vals_at(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq<Value>) -> bool {
+    &&& fs.len() == vals.len()
+    &&& forall|j: int|
+        0 <= j < fs.len() ==> pure_below(#[trigger] fs[j], l.len()) && eval_l(fs[j], env, l) == Ok::<Value, ErrKind>(
+            vals[j],
+        )
+}
+
+/// `x` は、番号 `r` が `lo..hi` にあれば、その位置の式 `fs[r]` と同じ値になる。
+pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> bool {
+    &&& forall|m: nat| pure_below(r, m) && all_pure(fs, m) ==> #[trigger] pure_below(x, m)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+        lo < hi && has_ty(r, tv, lt, ETy::Int) && #[trigger] all_ty(fs, y, tv, lt) ==> has_ty(x, tv, lt, y)
+    &&& forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
+        #[trigger] at_rank(r, env, l, i) && #[trigger] vals_at(fs, vals, env, l) && lo <= i < hi ==> eval_l(x, env, l)
+            == Ok::<Value, ErrKind>(vals[i as int])
+}
+
+pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
+    picks_in(x, fs, r, 0, fs.len() as int)
+}
+
+/// Listの要素は、要素の型に属する。
+pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
+    requires
+        list_items_member(items, t, enums),
+        0 <= k < items.len(),
+    ensures
+        member(items[k], t, enums),
+    decreases items.len(),
+{
+    if k < items.len() - 1 {
+        lemma_items_member(items.drop_last(), t, enums, k);
+        assert(items.drop_last()[k] == items[k]);
+    }
+}
+
+/// List のスロットの、長さと要素。
+pub fn list_parts(t: &SType, max: usize, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<(Expr, Vec<Vec<Expr>>)>)
+    ensures
+        r matches Some((len, rows)) ==> parts_ok(slots@, len, rows_view(rows@), width(sty(*t), enums@), max as nat),
+        lim_s(STy::List(Box::new(sty(*t)), max), enums@) && slots@.len() == width(STy::List(Box::new(sty(*t)), max), enums@)
+            ==> r is Some,
+{
+    let ghost pre = lim_s(STy::List(Box::new(sty(*t)), max), enums@) && slots@.len() == width(
+        STy::List(Box::new(sty(*t)), max),
+        enums@,
+    );
+    proof {
+        if pre {
+            assert(lim_s(sty(*t), enums@));
+        }
+    }
+    let w = stype_width(t, enums)?;
+    if slots.len() == 0 {
+        return None;
+    }
+    let mut items: Vec<Vec<Expr>> = Vec::new();
+    let mut p = 0;
+    while p < max
+        invariant
+            w == width(sty(*t), enums@),
+            slots@.len() > 0,
+            p <= max,
+            items@.len() == p,
+            forall|q: int| 0 <= q < p ==> #[trigger] row_at(items@[q]@, slots@, q, w as nat),
+            pre == (lim_s(STy::List(Box::new(sty(*t)), max), enums@) && slots@.len() == width(
+                STy::List(Box::new(sty(*t)), max),
+                enums@,
+            )),
+            pre ==> slots@.len() == 1 + max * w && slots@.len() <= 0x7fff_ffff,
+        decreases max - p,
+    {
+        proof {
+            assert(p * w + w <= max * w) by (nonlinear_arith)
+                requires
+                    p < max,
+            ;
+            assert(usize::MAX >= 0xffff_ffff);
+        }
+        let start = p.checked_mul(w)?.checked_add(1)?;
+        let end = start.checked_add(w)?;
+        if end > slots.len() {
+            return None;
+        }
+        let ghost i0 = items@;
+        items.push(sub_exprs(slots, start, end));
+        proof {
+            assert(row_at(items@[p as int]@, slots@, p as int, w as nat));
+            assert forall|q: int| 0 <= q < p implies #[trigger] row_at(items@[q]@, slots@, q, w as nat) by {
+                assert(items@[q] == i0[q]);
+            }
+        }
+        p += 1;
+    }
+    proof {
+        let rv = rows_view(items@);
+        assert forall|q: int| 0 <= q < max implies #[trigger] row_at(rv[q], slots@, q, w as nat) by {
+            assert(rv[q] == items@[q]@);
+        }
+    }
+    Some((copy_expr(&slots[0]), items))
 }
 
 } // verus!

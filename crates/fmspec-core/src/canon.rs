@@ -7,46 +7,48 @@
 //! [`canonical`] は、それを判定する中核の式を作る。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq, keys, keys_or_zero};
+use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{has_xtype, has_xtypes, lemma_default_len, models, models_seq};
+use crate::encoding::{has_xtype, has_xtypes, keys, keys_or_zero, lemma_default_len};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len};
+use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_repeat_len, lemma_stys};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_repeat_len, lemma_stys, lemma_to_xtys, lemma_xtys, lemma_xwidth_of, lemma_xwidths_of};
+use crate::encoding::{lemma_to_xtys, lemma_xtys, lemma_xwidth_of, lemma_xwidths_of};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, map_rows_member, member, members, sty, stys};
+use crate::encoding::{list_items_member, map_rows_member, member, members, models, models_seq, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, to_xtys, width, width_sum};
+use crate::encoding::{sty, stys, to_xty, to_xtys, wf_stype, wf_stypes, width, width_sum, SVal, XTy};
 use crate::encoding::{to_xtype, SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, wf_stypes, xty, xtys, xwidth, xwidth_sum, STy, SVal, XTy};
-#[cfg(verus_keep_ghost)]
-use crate::equality::{small, smalls};
+use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::xoff;
+use crate::expr_build::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, keys_or_zero_exec};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{bool_lit, int_lit, ite_s, lemma_xoff_step, lits, split_ok, tree_s, Join};
+use crate::expr_build::{split, sub_exprs};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
+use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
-use crate::lists::{flat, lemma_list_join, lemma_list_parts, pad, pad_vals, parts_ok, row_at, rows_at, rows_view};
+use crate::lists::rows_view;
+#[cfg(verus_keep_ghost)]
+use crate::lists::{lemma_items_member, lemma_list_join, lemma_list_parts, pad, pad_vals, rows_at};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
+use crate::maps::map_rows;
 #[cfg(verus_keep_ghost)]
-use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, mparts_ok, mrow_at, row_vals};
+use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, row_vals};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
-#[cfg(verus_keep_ghost)]
-use crate::quant::lemma_items_member;
-use crate::slots::keys_or_zero_exec;
-use crate::slots::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, list_parts, map_rows, split, sub_exprs};
-#[cfg(verus_keep_ghost)]
-use crate::slots::{bool_lit, int_lit, ite_s, lits, split_ok, tree_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -55,122 +57,12 @@ verus! {
 
 // ---- スロットの型 ----
 
-/// 型の列 `xs` を `n` 回つなげた列。
-pub open spec fn ty_repeat(xs: Seq<Type>, n: nat) -> Seq<Type>
-    decreases n,
-{
-    if n == 0 {
-        Seq::empty()
-    } else {
-        ty_repeat(xs, (n - 1) as nat) + xs
-    }
-}
-
-/// 格納の型 `t` の各スロットの中核の型。
-/// Listの長さのスロットは `0..=max` の整数で、Setの要素とMapのキーの有無はBoolである。
-pub open spec fn slot_tys(t: STy, enums: Seq<i64>) -> Seq<Type>
-    decreases t,
-{
-    match t {
-        STy::Bool => seq![Type::Bool],
-        STy::Int(lo, hi) => seq![Type::Int(lo, hi)],
-        STy::Enum(id) => seq![Type::Enum(id)],
-        STy::Tuple(ts) => slot_tys_seq(ts, enums),
-        STy::Record(_, ts) => slot_tys_seq(ts, enums),
-        STy::Option(x) => seq![Type::Bool] + slot_tys(*x, enums),
-        STy::Set(e) => ty_repeat(seq![Type::Bool], keys_or_zero(*e, enums)),
-        STy::Map(k, v) => ty_repeat(seq![Type::Bool] + slot_tys(*v, enums), keys_or_zero(*k, enums)),
-        STy::List(e, max) => seq![Type::Int(0, max as i64)] + ty_repeat(slot_tys(*e, enums), max as nat),
-    }
-}
-
-/// 型の列の各型のスロットの型を、順につなげた列。
-pub open spec fn slot_tys_seq(ts: Seq<STy>, enums: Seq<i64>) -> Seq<Type>
-    decreases ts,
-{
-    if ts.len() == 0 {
-        Seq::empty()
-    } else {
-        slot_tys_seq(ts.drop_last(), enums) + slot_tys(ts.last(), enums)
-    }
-}
-
-/// 値 `x` は、スロットの型 `ty` の値である。
-pub open spec fn in_slot(ty: Type, x: Value, enums: Seq<i64>) -> bool {
-    match (ty, x) {
-        (Type::Bool, Value::Bool(_)) => true,
-        (Type::Int(lo, hi), Value::Int(k)) => lo <= k <= hi,
-        (Type::Enum(id), Value::Enum(j, k)) => j == id && id < enums.len() && 0 <= k < enums[id as int],
-        _ => false,
-    }
-}
-
-/// 値の列 `xs` の各値は、対応するスロットの型の値である。
-pub open spec fn in_slots(xs: Seq<Value>, tys: Seq<Type>, enums: Seq<i64>) -> bool {
-    &&& xs.len() == tys.len()
-    &&& forall|j: int| 0 <= j < xs.len() ==> #[trigger] in_slot(tys[j], xs[j], enums)
-}
-
 /// スロットの値の列 `xs` は、型 `t` のある値の正規形の符号化である。
 pub open spec fn canon_ok(xs: Seq<Value>, t: STy, enums: Seq<i64>) -> bool {
     exists|v: SVal| member(v, t, enums) && #[trigger] enc(v, t, enums) == xs
 }
 
 // ---- スロットの型の補題 ----
-
-pub proof fn lemma_ty_repeat_len(xs: Seq<Type>, n: nat)
-    ensures
-        ty_repeat(xs, n).len() == n * xs.len(),
-    decreases n,
-{
-    if n == 0 {
-        assert(0 * xs.len() == 0) by (nonlinear_arith);
-    } else {
-        let m = (n - 1) as nat;
-        lemma_ty_repeat_len(xs, m);
-        assert(m * xs.len() + xs.len() == n * xs.len()) by (nonlinear_arith)
-            requires
-                m + 1 == n,
-        ;
-    }
-}
-
-/// `n` 回つなげた列の `p` 番目の部分は、もとの列である。
-pub proof fn lemma_ty_repeat_sub(xs: Seq<Type>, n: nat, p: int)
-    requires
-        0 <= p < n,
-    ensures
-        0 <= p * xs.len(),
-        p * xs.len() + xs.len() <= n * xs.len(),
-        ty_repeat(xs, n).len() == n * xs.len(),
-        ty_repeat(xs, n).subrange(p * xs.len(), p * xs.len() + xs.len()) == xs,
-    decreases n,
-{
-    let w = xs.len();
-    let m = (n - 1) as nat;
-    lemma_ty_repeat_len(xs, n);
-    lemma_ty_repeat_len(xs, m);
-    assert(0 <= p * w) by (nonlinear_arith)
-        requires
-            0 <= p,
-    ;
-    assert(p * w + w <= n * w) by (nonlinear_arith)
-        requires
-            0 <= p < n,
-    ;
-    let s = ty_repeat(xs, n);
-    assert(s == ty_repeat(xs, m) + xs);
-    if p == m {
-        assert(s.subrange(p * w, p * w + w) =~= xs);
-    } else {
-        lemma_ty_repeat_sub(xs, m, p);
-        assert(p * w + w <= m * w) by (nonlinear_arith)
-            requires
-                0 <= p < m,
-        ;
-        assert(s.subrange(p * w, p * w + w) =~= ty_repeat(xs, m).subrange(p * w, p * w + w));
-    }
-}
 
 pub proof fn lemma_ty_repeat_add(xs: Seq<Type>, a: nat, b: nat)
     ensures
@@ -184,80 +76,6 @@ pub proof fn lemma_ty_repeat_add(xs: Seq<Type>, a: nat, b: nat)
         lemma_ty_repeat_add(xs, a, c);
         assert(ty_repeat(xs, a + b) == ty_repeat(xs, a + c) + xs);
         assert(ty_repeat(xs, a) + ty_repeat(xs, c) + xs =~= ty_repeat(xs, a) + (ty_repeat(xs, c) + xs));
-    }
-}
-
-/// スロットの型の数は、型の幅である。
-pub proof fn lemma_slot_tys_len(t: STy, enums: Seq<i64>)
-    ensures
-        slot_tys(t, enums).len() == width(t, enums),
-    decreases t,
-{
-    match t {
-        STy::Tuple(ts) => lemma_slot_tys_seq_len(ts, enums),
-        STy::Record(_, ts) => lemma_slot_tys_seq_len(ts, enums),
-        STy::Option(x) => lemma_slot_tys_len(*x, enums),
-        STy::Set(e) => {
-            let n = keys_or_zero(*e, enums);
-            lemma_ty_repeat_len(seq![Type::Bool], n);
-            assert(n * 1 == n);
-        },
-        STy::Map(k, v) => {
-            let n = keys_or_zero(*k, enums);
-            let row = seq![Type::Bool] + slot_tys(*v, enums);
-            lemma_slot_tys_len(*v, enums);
-            lemma_ty_repeat_len(row, n);
-            assert(row.len() == 1 + width(*v, enums));
-            assert(ty_repeat(row, n).len() == n * (1 + width(*v, enums)));
-        },
-        STy::List(e, max) => {
-            lemma_slot_tys_len(*e, enums);
-            lemma_ty_repeat_len(slot_tys(*e, enums), max as nat);
-        },
-        _ => {},
-    }
-}
-
-pub proof fn lemma_slot_tys_seq_len(ts: Seq<STy>, enums: Seq<i64>)
-    ensures
-        slot_tys_seq(ts, enums).len() == width_sum(ts, enums),
-    decreases ts,
-{
-    if ts.len() > 0 {
-        lemma_slot_tys_seq_len(ts.drop_last(), enums);
-        lemma_slot_tys_len(ts.last(), enums);
-    }
-}
-
-/// 列の `i` 番目の型のスロットの型は、つなげた列の部分である。
-pub proof fn lemma_slot_tys_seq_sub(ts: Seq<STy>, i: int, enums: Seq<i64>)
-    requires
-        0 <= i < ts.len(),
-    ensures
-        width_sum(ts.take(i), enums) + width(ts[i], enums) <= width_sum(ts, enums),
-        slot_tys_seq(ts, enums).subrange(
-            width_sum(ts.take(i), enums) as int,
-            (width_sum(ts.take(i), enums) + width(ts[i], enums)) as int,
-        ) == slot_tys(ts[i], enums),
-    decreases ts.len(),
-{
-    let n = ts.len() - 1;
-    let a = ts.drop_last();
-    lemma_slot_tys_seq_len(ts, enums);
-    lemma_slot_tys_seq_len(a, enums);
-    lemma_slot_tys_len(ts[i], enums);
-    let s = slot_tys_seq(ts, enums);
-    assert(s == slot_tys_seq(a, enums) + slot_tys(ts.last(), enums));
-    if i == n {
-        assert(ts.take(i) =~= a);
-        assert(s.subrange(width_sum(a, enums) as int, s.len() as int) =~= slot_tys(ts.last(), enums));
-    } else {
-        lemma_slot_tys_seq_sub(a, i, enums);
-        assert(a.take(i) =~= ts.take(i));
-        assert(a[i] == ts[i]);
-        let lo = width_sum(ts.take(i), enums) as int;
-        let hi = lo + width(ts[i], enums);
-        assert(s.subrange(lo, hi) =~= slot_tys_seq(a, enums).subrange(lo, hi));
     }
 }
 
@@ -560,38 +378,6 @@ pub proof fn lemma_lits_pure(vs: Seq<Value>, n: nat)
 }
 
 // ---- 型に属さない値の符号化 ----
-
-/// 式の型 `t` を格納の型 `st` の場所に置けるなら、`t` は `st` の式の型である。
-pub proof fn lemma_fits_to(t: XTy, st: STy)
-    requires
-        fits_s(t, st),
-    ensures
-        t == to_xty(st),
-    decreases t,
-{
-    match (t, st) {
-        (XTy::Tuple(xs), STy::Tuple(ts)) => lemma_fits_to_seq(xs, ts),
-        (XTy::Record(_, xs), STy::Record(_, ts)) => lemma_fits_to_seq(xs, ts),
-        (XTy::Option(x), STy::Option(u)) => lemma_fits_to(*x, *u),
-        _ => {},
-    }
-}
-
-pub proof fn lemma_fits_to_seq(xs: Seq<XTy>, ts: Seq<STy>)
-    requires
-        fits_all_s(xs, ts),
-    ensures
-        xs == to_xtys(ts),
-    decreases xs,
-{
-    if xs.len() > 0 {
-        lemma_fits_to_seq(xs.drop_last(), ts.drop_last());
-        lemma_fits_to(xs.last(), ts.last());
-        assert(xs =~= xs.drop_last().push(xs.last()));
-    } else {
-        assert(xs =~= Seq::<XTy>::empty());
-    }
-}
 
 /// スロットの値の列が値を表すなら、値はその式の型を持つ。
 pub proof fn lemma_models_has(s: Seq<Value>, v: SVal, t: XTy, enums: Seq<i64>)
@@ -1039,15 +825,6 @@ pub proof fn lemma_eq_default(xs: Seq<Expr>, t: STy, env: Env, ls: Seq<Value>, e
 }
 
 // ---- 正規形の判定 ----
-
-pub proof fn lemma_etys_sub(xs: Seq<Type>, lo: int, hi: int)
-    requires
-        0 <= lo <= hi <= xs.len(),
-    ensures
-        etys(xs.subrange(lo, hi)) == etys(xs).subrange(lo, hi),
-{
-    assert(etys(xs.subrange(lo, hi)) =~= etys(xs).subrange(lo, hi));
-}
 
 /// 同じ型のスロットの列の比較は Bool の型を持つ。
 pub proof fn lemma_eq_all_typed(xs: Seq<Expr>, ys: Seq<Expr>, es: Seq<ETy>, tv: TyEnv, lt: Seq<ETy>)
@@ -2409,6 +2186,24 @@ pub fn slot_types_list(ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Vec<Type>)
         assert(stys(ts@).take(ts@.len() as int) =~= stys(ts@));
     }
     out
+}
+
+/// 型の既定値のリテラルは、スロットの型の中核の型を持つ。
+pub proof fn lemma_defaults_typed(st: STy, t: TyEnv, lt: Seq<ETy>)
+    requires
+        crate::encoding::wf_stype(st, t.enums),
+        crate::limits::small(st),
+    ensures
+        typed(
+            crate::expr_build::lits(crate::encoding::enc(crate::encoding::default_val(st, t.enums), st, t.enums)),
+            etys(slot_tys(st, t.enums)),
+            t,
+            lt,
+        ),
+{
+    crate::canon::lemma_default_member(st, t.enums);
+    crate::canon::lemma_member_in(crate::encoding::default_val(st, t.enums), st, t.enums);
+    lemma_lits_typed(crate::encoding::enc(crate::encoding::default_val(st, t.enums), st, t.enums), slot_tys(st, t.enums), t, lt);
 }
 
 } // verus!

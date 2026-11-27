@@ -4,10 +4,10 @@
 use crate::eval::{as_bool, eval_l, int_result, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::has_ty;
+use crate::lower_types::{has_ty, pure_below};
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{pure_below, ranks_pure};
+use crate::preserve::{mixed_rank_eval, ranks_pure};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -74,33 +74,6 @@ pub fn extend_rank(prefix: Expr, radix: i64, component: Expr) -> (out: Expr)
         reveal_with_fuel(eval_l, 4);
     }
     out
-}
-
-pub open spec fn mixed_rank_eval(
-    parts: Seq<(Expr, i64)>, count: nat, env: Env, locals: Seq<Value>,
-) -> Result<Value, ErrKind>
-    recommends count <= parts.len(),
-    decreases count,
-{
-    if count == 0 {
-        Ok(Value::Int(0))
-    } else if count == 1 {
-        eval_l(parts[0].0, env, locals)
-    } else {
-        match mixed_rank_eval(parts, (count - 1) as nat, env, locals) {
-            Err(error) => Err(error),
-            Ok(Value::Int(high)) => match int_result((high as int) * (parts[count - 1].1 as int)) {
-                Err(error) => Err(error),
-                Ok(Value::Int(base)) => match eval_l(parts[count - 1].0, env, locals) {
-                    Err(error) => Err(error),
-                    Ok(Value::Int(low)) => int_result((base as int) + (low as int)),
-                    _ => Err(ErrKind::TypeMismatch),
-                },
-                _ => Err(ErrKind::TypeMismatch),
-            },
-            _ => Err(ErrKind::TypeMismatch),
-        }
-    }
 }
 
 /// 桁の番号の式が、どれも Int の型を持つ。

@@ -4,31 +4,28 @@
 //! 行は、有無のBoolと値のスロットである（[`row_slots`]）。
 //! 下ろしは、スロットの列を行に区切り（[`mparts_ok`]）、行を置き換え、行をつなぎ直す（[`flat`]）。
 
+use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc_rows, keys, map_rows_member, member, width, STy, SVal, XTy};
+use crate::encoding::XTy;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{enc_rows, keys, keys_or_zero, map_rows_member, member, sty, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::Env;
+use crate::expr_build::{keys_or_zero_exec, stype_width, sub_exprs};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{flat, rows_at};
+use crate::limits::lim_s;
 #[cfg(verus_keep_ghost)]
-use crate::model::{Expr, Value};
+use crate::lists::{rows_at, rows_view};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{flat, mparts_ok, mrow_at};
+use crate::model::Expr;
+#[cfg(verus_keep_ghost)]
+use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 use vstd::prelude::*;
 
 verus! {
-
-/// `rows` は、Mapのスロット `slots` を、幅 `w` の `n` 個の行に区切ったものである。
-pub open spec fn mparts_ok(slots: Seq<Expr>, rows: Seq<Seq<Expr>>, w: nat, n: nat) -> bool {
-    &&& slots.len() == n * w
-    &&& rows.len() == n
-    &&& forall|p: int| 0 <= p < n ==> #[trigger] mrow_at(rows[p], slots, p, w)
-}
-
-/// `row` は、スロット `slots` の `p` 番目の行である。
-pub open spec fn mrow_at(row: Seq<Expr>, slots: Seq<Expr>, p: int, w: nat) -> bool {
-    0 <= p * w && p * w + w <= slots.len() && row == slots.subrange(p * w, p * w + w)
-}
 
 /// Mapの各行の符号化。
 pub open spec fn row_vals(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>) -> Seq<Seq<Value>> {
@@ -153,6 +150,88 @@ pub proof fn lemma_rows_update(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>,
         assert(u.drop_last() =~= rows.drop_last());
         assert(u.last() == o);
     }
+}
+
+/// Mapのスロットの行。行は、有無のBoolと値のスロットである。
+pub fn map_rows(k: &SType, v: &SType, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<Vec<Vec<Expr>>>)
+    ensures
+        r matches Some(rows) ==> mparts_ok(
+            slots@,
+            rows_view(rows@),
+            (1 + width(sty(*v), enums@)) as nat,
+            keys_or_zero(sty(*k), enums@),
+        ),
+        lim_s(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@) && slots@.len() == width(
+            STy::Map(Box::new(sty(*k)), Box::new(sty(*v))),
+            enums@,
+        ) ==> r is Some,
+{
+    let ghost pre = lim_s(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@) && slots@.len() == width(
+        STy::Map(Box::new(sty(*k)), Box::new(sty(*v))),
+        enums@,
+    );
+    let n = keys_or_zero_exec(k, enums);
+    let w = stype_width(v, enums)?;
+    proof {
+        assert(usize::MAX >= 0xffff_ffff);
+        if pre {
+            assert(lim_s(sty(*v), enums@));
+            assert(n * (w + 1) == width(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@));
+        }
+    }
+    let stride = w.checked_add(1)?;
+    let size = n.checked_mul(stride)?;
+    if size != slots.len() {
+        return None;
+    }
+    let mut rows: Vec<Vec<Expr>> = Vec::new();
+    let mut i = 0;
+    while i < n
+        invariant
+            stride == w + 1,
+            size == n * stride,
+            size == slots@.len(),
+            i <= n,
+            rows@.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] mrow_at(rows@[q]@, slots@, q, stride as nat),
+            pre ==> size <= 0x7fff_ffff,
+            pre == (lim_s(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@) && slots@.len() == width(
+                STy::Map(Box::new(sty(*k)), Box::new(sty(*v))),
+                enums@,
+            )),
+        decreases n - i,
+    {
+        proof {
+            assert((i + 1) * stride <= n * stride) by (nonlinear_arith)
+                requires
+                    i < n,
+            ;
+            assert(i * stride + stride == (i + 1) * stride) by (nonlinear_arith);
+            assert(usize::MAX >= 0xffff_ffff);
+        }
+        let at = i.checked_mul(stride)?;
+        let end = at.checked_add(stride)?;
+        if end > slots.len() {
+            return None;
+        }
+        let ghost r1 = rows@;
+        rows.push(sub_exprs(slots, at, end));
+        proof {
+            assert forall|q: int| 0 <= q <= i implies #[trigger] mrow_at(rows@[q]@, slots@, q, stride as nat) by {
+                if q < i {
+                    assert(rows@[q] == r1[q]);
+                }
+            }
+        }
+        i += 1;
+    }
+    proof {
+        let rv = rows_view(rows@);
+        assert forall|q: int| 0 <= q < n implies #[trigger] mrow_at(rv[q], slots@, q, stride as nat) by {
+            assert(rv[q] == rows@[q]@);
+        }
+    }
+    Some(rows)
 }
 
 } // verus!

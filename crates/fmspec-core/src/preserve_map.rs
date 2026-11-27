@@ -3,31 +3,33 @@
 //! 下ろしの実装は [`crate::lowering`] にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_rows, keys, keys_or_zero, lemma_enc_len, lemma_models_enc, member, sty};
+use crate::encoding::{default_val, enc, enc_rows, keys, keys_or_zero, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, width, STy, SVal, XTy};
+use crate::encoding::{lemma_models_enc, member, sty, to_xty, width, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
+use crate::expr_build::{and_s, bool_lit, head_at, heads_ok, ite_s, lits};
+#[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{flat, ite_rows_ok, lemma_ite_rows, lemma_rows_weaken};
+use crate::limits::fits_s;
 #[cfg(verus_keep_ghost)]
-use crate::lowering::*;
+use crate::lists::{at_rank, lemma_ite_rows, lemma_rows_weaken, picks};
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{added, all_pure, flat, ite_rows_ok, mparts_ok, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::map_lookup::{flat_slot, flat_slot_int, key_rank, MISSING_KEY};
 #[cfg(verus_keep_ghost)]
-use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, lemma_rows_update, mparts_ok, row_vals};
+use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, lemma_rows_update, row_vals};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::*;
-#[cfg(verus_keep_ghost)]
-use crate::quant::{at_rank, picks};
-#[cfg(verus_keep_ghost)]
-use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_map_items, eval_src, put_row, Item, SEnv, TExpr, FAIL_NOT_IN_DOMAIN};
 use vstd::prelude::*;
@@ -138,28 +140,6 @@ pub proof fn lemma_element(
             }
         }
     }
-}
-
-/// 要素の番号の下ろしの正しさ。値が型に属さなければ `FAIL_NOT_IN_DOMAIN` で失敗する。
-pub open spec fn elem_rank_lowers(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, st: STy, x: Expr) -> bool {
-    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match eval_src(e, se, sls) {
-            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
-            Ok(v) => if member(v, st, se.enums) {
-                run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
-                    cx,
-                    sc,
-                    env,
-                    se,
-                    l,
-                    sls,
-                ) && pure_below(x, l.len()) && eval_l(x, env, l) == Ok::<Value, ErrKind>(
-                    Value::Int(rank(v, st, se.enums) as i64),
-                )
-            } else {
-                run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(FAIL_NOT_IN_DOMAIN))
-            },
-        }
 }
 
 pub proof fn lemma_elem_rank(

@@ -3,25 +3,22 @@
 //! 式の型の整形式性（[`wf_xtype_exec`]）、型の大きさの条件（[`lim_s_exec`]、[`lim_x_exec`]）、
 //! 式とその部分式の条件（[`check_lim`]）を、仕様と一致する実行関数として持つ。
 
-use crate::encoding::{distinct_names, keys_exec, wf_stype_exec, SType, XType};
+use crate::encoding::{distinct_names, keys_exec, stype_eq, to_xtype, wf_stype_exec, SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_stys, lemma_xtys, sty, stys};
-use crate::encoding::{stype_eq, to_xtype};
+use crate::encoding::{lemma_stys, lemma_xtys, sty, stys, wf_xtype, wf_xtypes, width, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_xtype, wf_xtypes, width, width_sum};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{xty, xtys, xwidth, xwidth_sum, STy, XTy};
+use crate::encoding::{width_sum, xty, xtys, xwidth, xwidth_sum, XTy};
+use crate::expr_build::keys_or_zero_exec;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{agrees, scope_view};
 use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
-use crate::slots::keys_or_zero_exec;
 use crate::source::{Item, Over, TExpr};
 #[cfg(verus_keep_ghost)]
-use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_seq_at, lim_ok};
+use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_seq_at, lim_ok, lim_ok_items};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok_items, lim_ok_seq, quant_bound};
+use crate::total::{lim_ok_seq, quant_bound};
 use vstd::prelude::*;
 
 verus! {
