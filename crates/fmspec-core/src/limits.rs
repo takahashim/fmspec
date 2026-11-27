@@ -171,6 +171,41 @@ pub proof fn lemma_fits_width(t: XTy, st: STy, enums: Seq<i64>)
     lemma_xwidth_of(st, enums);
 }
 
+/// 格納の型が大きさの条件を満たせば、それから作った式の型も満たす。
+pub proof fn lemma_lim_to_x(t: STy, enums: Seq<i64>)
+    requires
+        lim_s(t, enums),
+    ensures
+        lim_x(to_xty(t), enums),
+    decreases t, 1nat,
+{
+    lemma_xwidth_of(t, enums);
+    match t {
+        STy::Tuple(ts) => lemma_lim_to_xs(ts, enums),
+        STy::Record(_, ts) => lemma_lim_to_xs(ts, enums),
+        STy::Option(x) => lemma_lim_to_x(*x, enums),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_lim_to_xs(ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        lim_ss(ts, enums),
+    ensures
+        lim_xs(to_xtys(ts), enums),
+        to_xtys(ts).len() == ts.len(),
+        xwidth_sum(to_xtys(ts), enums) == width_sum(ts, enums),
+    decreases ts, 0nat,
+{
+    if ts.len() > 0 {
+        lemma_lim_to_xs(ts.drop_last(), enums);
+        lemma_lim_to_x(ts.last(), enums);
+        lemma_xwidth_of(ts.last(), enums);
+        assert(to_xtys(ts).drop_last() == to_xtys(ts.drop_last()));
+        assert(to_xtys(ts).last() == to_xty(ts.last()));
+    }
+}
+
 /// 上限を満たす型は、Listの長さの上限が小さい。
 pub proof fn lemma_lim_small(t: STy, enums: Seq<i64>)
     requires

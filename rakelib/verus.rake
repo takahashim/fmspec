@@ -269,7 +269,11 @@ VERUS_MUTANTS = [
   ["model_lower.rs", "Some(o) => Some(copy_stype(&o.ty)),", "Some(_) => None,", "遷移契約から出力を参照できなくする"],
   ["model_lower.rs", "ls.push(Layout { ty: copy_stype(&ts[i]), offset: off });", "ls.push(Layout { ty: copy_stype(&ts[i]), offset: 0 });", "どの位置も0にする"],
   ["model_lower.rs", "if !(wf_stype_exec(&ts[i], enums) && small_stype(&ts[i])) {", "if !wf_stype_exec(&ts[i], enums) {", "Listの長さの上限を確かめない"],
-  ["canon.rs", "out.push(Type::Int(0, *max as i64));", "out.push(Type::Int(1, *max as i64));", "スロットの型の実装でListの長さから0を除く"]
+  ["canon.rs", "out.push(Type::Int(0, *max as i64));", "out.push(Type::Int(1, *max as i64));", "スロットの型の実装でListの長さから0を除く"],
+  ["model_lower.rs", "    if !check_model(sm) {\n        return Err(LowerError::Type);", "    if false {\n        return Err(LowerError::Type);", "下ろしの前にモデルの型を確かめない"],
+  ["model_lower.rs", "        Err(Fail::Depth) => return Err(Fault::Depth),", "        Err(Fail::Depth) => return Err(Fault::Lower),", "値の式の深さの上限を内部の誤りにする"],
+  ["smodel.rs", "        Err(Fail::Depth) => return Err(LowerError::Depth),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "        Err(Fail::Depth) => return Err(LowerError::Guard(a)),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "guardの深さの上限を内部の誤りにする"],
+  ["lowering.rs", "                    if rows.len() > 0 {\n                        out.push(defs);\n                    }", "                    out.push(defs);", "上限0のListの `shift` に既定の行を加える"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -375,7 +379,9 @@ VERUS_CANARIES = [
   ["model_safe.rs", "        lemma_reach_core(sm, cv, m, st, cs, ks, sx, c, q, (n - 1) as nat);", "lemma_reach_core の帰納"],
   ["model_lower.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
   ["model_lower.rs", "        lemma_init_ok(*sm, cv, m, stg, sx, psg, cc);", "lower_model の結論"],
-  ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"]
+  ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"],
+  ["model_lower.rs", "            lemma_state_ctx(*sm, cv, cx, stys(sa.args@));\n            assert(out_sty(*sa)", "lower_model の遷移契約の文脈"],
+  ["smodel.rs", "                lemma_upd_pre(*sa, *cx, u as int);", "lower_action の代入の前提"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

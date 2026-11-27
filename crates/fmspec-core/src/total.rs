@@ -5,29 +5,33 @@
 //! 下ろしは `Fail::Type` で失敗せず、型の幅だけの純粋なスロットを返す（[`tpost`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, lemma_width_pos, lemma_xwidth_of, to_xtys, wf_stypes, sty, to_xty, wf_stype, wf_xtype, wf_xtypes, width, xty, xwidth, xwidth_sum, STy, XTy, XType};
+use crate::encoding::{keys, lemma_width_pos, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, wf_xtype};
 #[cfg(verus_keep_ghost)]
-use crate::infer::{type_of, SCtx};
+use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, STy, XTy, XType};
+#[cfg(verus_keep_ghost)]
+use crate::infer::{items_typed, lemma_items_typed_iff, type_of, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lim_s, lim_ss, lim_x, lim_xs};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::{Bound, Constant, Layout, LowerCtx};
+use crate::lists::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at, select_ok};
 #[cfg(verus_keep_ghost)]
-use crate::model::Expr;
-#[cfg(verus_keep_ghost)]
-use crate::preserve::{all_pure, lemma_pure_mono, pure_below};
-#[cfg(verus_keep_ghost)]
-use crate::lists::{flat, ite_row, ite_rows_ok};
+use crate::lowering::{mark_s, setop_s, Bound, Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::maps::{mparts_ok, mrow_at};
 #[cfg(verus_keep_ghost)]
+use crate::model::Expr;
+#[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Value};
 #[cfg(verus_keep_ghost)]
-use crate::slots::ite_s;
+use crate::preserve::{all_pure, lemma_pure_mono, pure_below};
+#[cfg(verus_keep_ghost)]
+use crate::quant::{picks, picks_in};
 #[cfg(verus_keep_ghost)]
 use crate::slots::Fail;
 #[cfg(verus_keep_ghost)]
-use crate::source::{Item, Over, TExpr};
+use crate::slots::{head_at, heads_ok, ite_s};
+#[cfg(verus_keep_ghost)]
+use crate::source::{Item, Over, SetOp, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -75,6 +79,12 @@ pub open spec fn ok_s(t: STy, enums: Seq<i64>) -> bool {
 /// 式の型が整形式で、大きさの条件を満たす。
 pub open spec fn ok_x(t: XTy, enums: Seq<i64>) -> bool {
     wf_xtype(t, enums) && lim_x(t, enums)
+}
+
+/// [`ok_s`] の不透明な形。ループの不変条件で、展開されないように使う。
+#[verifier::opaque]
+pub open spec fn ok_s_o(t: STy, enums: Seq<i64>) -> bool {
+    ok_s(t, enums)
 }
 
 pub open spec fn layout_wf(l: Layout, enums: Seq<i64>) -> bool {
@@ -278,6 +288,126 @@ pub proof fn lemma_ite_rows_shape(out: Seq<Seq<Expr>>, rows: Seq<Seq<Expr>>, k: 
     }
 }
 
+/// Mapの式の型が条件を満たせば、Mapの格納の型も満たす。
+pub proof fn lemma_ok_map(k: STy, v: STy, enums: Seq<i64>)
+    requires
+        ok_x(XTy::Map(Box::new(k), Box::new(v)), enums),
+    ensures
+        ok_s(STy::Map(Box::new(k), Box::new(v)), enums),
+        ok_s_o(STy::Map(Box::new(k), Box::new(v)), enums),
+{
+    reveal(ok_s_o);
+    assert(xwidth(XTy::Map(Box::new(k), Box::new(v)), enums) == width(STy::Map(Box::new(k), Box::new(v)), enums));
+}
+
+/// Listの式の型が条件を満たせば、Listの格納の型と要素の型も満たす。
+pub proof fn lemma_ok_list(e: STy, max: usize, enums: Seq<i64>)
+    requires
+        ok_x(XTy::List(Box::new(e), max), enums),
+    ensures
+        ok_s(STy::List(Box::new(e), max), enums),
+        ok_s(e, enums),
+{
+    assert(xwidth(XTy::List(Box::new(e), max), enums) == width(STy::List(Box::new(e), max), enums));
+}
+
+/// Listのスロットを行に分けると、長さのスロットと各行は、元のスロットが純粋なら純粋である。
+pub proof fn lemma_list_rows_shape(slots: Seq<Expr>, len: Expr, rows: Seq<Seq<Expr>>, w: nat, max: nat, n: nat)
+    requires
+        parts_ok(slots, len, rows, w, max),
+        all_pure(slots, n),
+    ensures
+        pure_below(len, n),
+        rows.len() == max,
+        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
+{
+    assert(pure_below(slots[0], n));
+    assert forall|p: int| 0 <= p < rows.len() implies (#[trigger] rows[p]).len() == w && all_pure(rows[p], n) by {
+        assert(row_at(rows[p], slots, p, w));
+        let base = 1 + p * w;
+        assert(rows[p] == slots.subrange(base, base + w));
+        assert forall|j: int| 0 <= j < rows[p].len() implies pure_below(#[trigger] rows[p][j], n) by {
+            assert(rows[p][j] == slots[base + j]);
+            assert(pure_below(slots[base + j], n));
+        }
+    }
+}
+
+/// Setどうしの演算のスロットは、両方のスロットが純粋なら純粋である。
+pub proof fn lemma_setop_pure(op: SetOp, x: Expr, y: Expr, n: nat)
+    requires
+        pure_below(x, n),
+        pure_below(y, n),
+    ensures
+        pure_below(setop_s(op, x, y), n),
+{
+    assert(pure_below(Expr::Not(Box::new(y)), n));
+    assert(pure_below(Expr::Or(Box::new(x), Box::new(y)), n));
+    assert(pure_below(Expr::And(Box::new(x), Box::new(y)), n));
+    assert(pure_below(Expr::And(Box::new(x), Box::new(Expr::Not(Box::new(y)))), n));
+    assert(pure_below(Expr::Implies(Box::new(x), Box::new(y)), n));
+}
+
+/// 行を選んだスロットは、行の長さだけあり、行と添字が純粋なら純粋である。
+pub proof fn lemma_select_shape(rows: Seq<Seq<Expr>>, idx: Expr, out: Seq<Expr>, w: nat, n: nat)
+    requires
+        select_ok(rows, idx, out),
+        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
+        pure_below(idx, n),
+    ensures
+        out.len() == w,
+        all_pure(out, n),
+{
+    assert(rows[0].len() == out.len());
+    assert forall|j: int| 0 <= j < out.len() implies pure_below(#[trigger] out[j], n) by {
+        assert(picks(out[j], col(rows, j), idx));
+        assert(all_pure(col(rows, j), n)) by {
+            assert forall|t: int| 0 <= t < col(rows, j).len() implies pure_below(#[trigger] col(rows, j)[t], n) by {
+                assert(col(rows, j)[t] == rows[t][j]);
+                assert(all_pure(rows[t], n));
+            }
+        }
+    }
+}
+
+/// 各行の先頭は、行が純粋なら純粋である。
+pub proof fn lemma_heads_pure(h: Seq<Expr>, rows: Seq<Seq<Expr>>, n: nat)
+    requires
+        heads_ok(h, rows),
+        forall|p: int| 0 <= p < rows.len() ==> all_pure(#[trigger] rows[p], n),
+    ensures
+        all_pure(h, n),
+        h.len() == rows.len(),
+{
+    assert forall|q: int| 0 <= q < h.len() implies pure_below(#[trigger] h[q], n) by {
+        assert(head_at(h[q], rows[q]));
+        assert(all_pure(rows[q], n));
+    }
+}
+
+/// Setの印付けの結果は、元のスロットと番号が純粋なら純粋である。
+pub proof fn lemma_mark_pure(on: bool, bits: Seq<Expr>, r: Expr, out: Seq<Expr>, n: nat)
+    requires
+        out.len() == bits.len(),
+        forall|k: int| 0 <= k < bits.len() ==> #[trigger] out[k] == mark_s(on, bits[k], r, k as i64),
+        all_pure(bits, n),
+        pure_below(r, n),
+    ensures
+        all_pure(out, n),
+{
+    assert forall|k: int| 0 <= k < out.len() implies pure_below(#[trigger] out[k], n) by {
+        assert(out[k] == mark_s(on, bits[k], r, k as i64));
+        assert(pure_below(bits[k], n));
+        assert(pure_below(Expr::Const(Value::Int(k as i64)), n));
+        let ce = Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64))));
+        let cn = Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64))));
+        assert(pure_below(ce, n));
+        assert(pure_below(cn, n));
+        assert(pure_below(Expr::Or(Box::new(bits[k]), Box::new(ce)), n));
+        assert(pure_below(Expr::And(Box::new(bits[k]), Box::new(cn)), n));
+    }
+}
+
 // ---- 式の大きさの条件 ----
 
 /// 量化でたどる値の型（[`type_of`] の量化の規則と同じ）。
@@ -411,6 +541,49 @@ pub proof fn lemma_lim_ok_items_at(items: Seq<Item>, c: SCtx, lt: Seq<XTy>, i: i
     }
 }
 
+/// Mapのリテラルの項目のキーと値に型が付き、大きさの条件を満たす。
+#[verifier::opaque]
+pub open spec fn items_ok(items: Seq<Item>, c: SCtx, bt: Seq<XTy>, kt: STy, vt: STy) -> bool {
+    forall|j: int|
+        0 <= j < items.len() ==> type_of((#[trigger] items[j]).key, c, bt) == Some(to_xty(kt)) && type_of(
+            items[j].value,
+            c,
+            bt,
+        ) == Some(to_xty(vt)) && lim_ok(items[j].key, c, bt) && lim_ok(items[j].value, c, bt)
+}
+
+pub proof fn lemma_items_ok_intro(items: Seq<Item>, c: SCtx, bt: Seq<XTy>, kt: STy, vt: STy)
+    requires
+        items_typed(items, to_xty(kt), to_xty(vt), c, bt),
+        lim_ok_items(items, c, bt),
+    ensures
+        items_ok(items, c, bt, kt, vt),
+{
+    reveal(items_ok);
+    lemma_items_typed_iff(items, to_xty(kt), to_xty(vt), c, bt);
+    assert forall|j: int| 0 <= j < items.len() implies type_of((#[trigger] items[j]).key, c, bt) == Some(to_xty(kt))
+        && type_of(items[j].value, c, bt) == Some(to_xty(vt)) && lim_ok(items[j].key, c, bt) && lim_ok(
+        items[j].value,
+        c,
+        bt,
+    ) by {
+        lemma_lim_ok_items_at(items, c, bt, j);
+    }
+}
+
+pub proof fn lemma_items_ok_at(items: Seq<Item>, c: SCtx, bt: Seq<XTy>, kt: STy, vt: STy, j: int)
+    requires
+        items_ok(items, c, bt, kt, vt),
+        0 <= j < items.len(),
+    ensures
+        type_of(items[j].key, c, bt) == Some(to_xty(kt)),
+        type_of(items[j].value, c, bt) == Some(to_xty(vt)),
+        lim_ok(items[j].key, c, bt),
+        lim_ok(items[j].value, c, bt),
+{
+    reveal(items_ok);
+}
+
 // ---- 下ろしの前提と結論 ----
 
 /// 下ろしの全域性の前提。`n` は束縛の列の深さ。
@@ -421,7 +594,25 @@ pub open spec fn tpre(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat) -> bool {
     &&& lim_ok(e, sctx(cx), bound_tys(sc))
 }
 
+/// [`put_pre`] を部品から組み立てる。
+pub proof fn lemma_put_pre(key: TExpr, value: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, kt: STy, vt: STy, ms: Seq<Expr>)
+    requires
+        tpre(key, cx, sc, n),
+        tpre(value, cx, sc, n),
+        type_of(key, sctx(cx), bound_tys(sc)) == Some(to_xty(kt)),
+        type_of(value, sctx(cx), bound_tys(sc)) == Some(to_xty(vt)),
+        ok_s_o(STy::Map(Box::new(kt), Box::new(vt)), cx.enums@),
+        ms.len() == width(STy::Map(Box::new(kt), Box::new(vt)), cx.enums@),
+        all_pure(ms, n),
+    ensures
+        put_pre(key, value, cx, sc, n, kt, vt, ms),
+{
+    reveal(put_pre);
+    reveal(ok_s_o);
+}
+
 /// [`crate::lowering`] の `put` の前提。Mapのスロット `ms` は型の幅だけあって純粋で、キーと値の式に型が付く。
+#[verifier::opaque]
 pub open spec fn put_pre(key: TExpr, value: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, kt: STy, vt: STy, ms: Seq<Expr>) -> bool {
     let mt = STy::Map(Box::new(kt), Box::new(vt));
     &&& tpre(key, cx, sc, n)

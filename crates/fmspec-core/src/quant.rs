@@ -8,9 +8,9 @@
 use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, sty, stys, STy, SVal};
 use crate::encoding::{keys_exec, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
+use crate::encoding::{lemma_default_len, lemma_keys_pos, lemma_stys, wf_stype, wf_stypes, width_sum, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_keys_pos, lemma_default_len, lemma_stys, wf_stype, wf_stypes, width_sum, MAX_KEYS};
+use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, decode, quant_l};
 #[cfg(verus_keep_ghost)]
@@ -553,6 +553,22 @@ pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> 
 
 pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
     picks_in(x, fs, r, 0, fs.len() as int)
+}
+
+/// 番号 `r` が範囲内で、その位置のスロットが真であるという式は純粋である。
+pub proof fn lemma_hit_pure(r: Expr, fs: Seq<Expr>, hit: Expr, n: nat)
+    requires
+        picks(hit, fs, r),
+        pure_below(r, n),
+        all_pure(fs, n),
+    ensures
+        pure_below(
+            crate::slots::and_s(Expr::Bin(BinOp::Ge, Box::new(r), Box::new(Expr::Const(Value::Int(0)))), hit),
+            n,
+        ),
+{
+    assert(pure_below(hit, n));
+    lemma_bin_const_pure(BinOp::Ge, r, 0, n);
 }
 
 /// 番号 `r` の位置の式を選ぶ式。

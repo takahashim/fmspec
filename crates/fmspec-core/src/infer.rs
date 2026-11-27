@@ -5,8 +5,9 @@
 //! Setの要素、Mapのキーと値、Listの要素になる式の型は、格納の型の式の型 [`to_xty`] と等しくなければならない。
 //! 要素の型の注釈は、実際の型と一致しなければならない。
 //!
-//! [`check`] は型検査器で、型を返したら、それが [`type_of`] の値であることを証明してある。
-//! 型が付く式を拒否しないことは証明していない（拒否はモデルの読み込みの誤りになるので、テストで検査する）。
+//! [`check`] は型検査器で、その結果が [`type_of`] の値と一致することを証明してある（型が付く式を拒否しない）。
+//! 下ろしの前に、[`crate::model_total::check_model`] がモデル全体の式でこれと大きさの条件を確かめる。
+//! 型が付く式の下ろしが型の誤りで失敗しないこと（全域性）は [`crate::total`] の仕様で述べる。
 
 use crate::encoding::STy;
 use crate::encoding::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, to_xtype};

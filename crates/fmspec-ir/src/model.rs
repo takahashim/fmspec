@@ -714,6 +714,10 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
         path: path.to_string(),
         message: "内部エラー: 中核の下ろしが式を受理しません".to_string(),
     };
+    let too_deep = |path: &str| LoadError::Schema {
+        path: path.to_string(),
+        message: "式が大きすぎます（局所変数の束縛が深すぎます）".to_string(),
+    };
     let eval = |path: &str, k: ErrKind| LoadError::Schema {
         path: path.to_string(),
         message: format!("値を評価できません（{k:?}）"),
@@ -725,6 +729,7 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
             let path = format!("$.constants[{i}].value");
             match f {
                 Fault::Lower => internal(&path),
+                Fault::Depth => too_deep(&path),
                 Fault::Eval(ErrKind::OutOfRange(x)) => LoadError::Schema {
                     message: format!("定数 {:?} の値 {x} が型の範囲の外です", constants[i].name),
                     path,
@@ -736,6 +741,7 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
             let path = &choice_paths[i][j];
             match f {
                 Fault::Lower => internal(path),
+                Fault::Depth => too_deep(path),
                 Fault::Eval(ErrKind::OutOfRange(x)) => invalid(
                     InvalidModel::Initial(j),
                     format!(
@@ -751,6 +757,7 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
             message: format!("初期値の候補の組み合わせが {MAX_INITIAL_CANDIDATES} 個を超えます"),
         },
         LowerError::Constraint(Fault::Lower) => internal("$.initial_constraint"),
+        LowerError::Constraint(Fault::Depth) => too_deep("$.initial_constraint"),
         LowerError::Constraint(Fault::Eval(k)) => LoadError::Schema {
             path: "$.initial_constraint".to_string(),
             message: format!("初期条件を評価できません（{k:?}）"),
@@ -766,6 +773,11 @@ fn lower_error(e: LowerError, names: &Names, constants: &[Constant], choice_path
         LowerError::Invariant(i) => reason(InvalidModel::Invariant(i)),
         LowerError::Contract(k) => reason(InvalidModel::Contract(k)),
         LowerError::Terminal => reason(InvalidModel::Terminal),
+        LowerError::Type => LoadError::Schema {
+            path: "$".to_string(),
+            message: "内部エラー: fmspec-ir と中核の型検査が食い違います".to_string(),
+        },
+        LowerError::Depth => too_deep("$"),
     }
 }
 

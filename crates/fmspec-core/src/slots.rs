@@ -27,6 +27,8 @@ use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
 #[cfg(verus_keep_ghost)]
+use crate::limits::*;
+#[cfg(verus_keep_ghost)]
 use crate::lists::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at, rows_view, select_ok};
 #[cfg(verus_keep_ghost)]
 use crate::maps::{mparts_ok, mrow_at};
@@ -37,8 +39,6 @@ use crate::quant::pick_slot;
 #[cfg(verus_keep_ghost)]
 use crate::quant::picks;
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
-#[cfg(verus_keep_ghost)]
-use crate::limits::*;
 use vstd::prelude::*;
 
 verus! {
