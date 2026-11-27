@@ -266,16 +266,29 @@ invariant(:no_milk_alone) { |s| s.items.include?(:milk).implies(s.items.any? { |
 | `!`、`not` | `not_` |
 | `==`、`!=` | `eq`、`ne` |
 | `while`、`until` | なし |
+| Rubyの `Array` や `Range` の `all?`、`any?`（`(0..2).all? { ... }`、`[...].map { ... }.any?`） | `all(*...)`、`any(*...)`、`forall`、`exists` |
+| `one?`、ブロック付きの `select`、`reject`、`find`、`count`、`partition`、`min_by` など | `forall`、`exists`。集合は記号ブロックの外で求める |
+| Rubyの `Array`、`Hash`、`Set`、`Range` のリテラルの `include?`、`member?`、`key?` | `set_of(型).value(...)` の `include?`、`eq` |
+| `nil?` | Optionの式の `none?` |
+| `eql?`、`equal?` | `eq` |
 
 記号式はRubyの値としては常に真である。
 `s.sold > 2 ? 0 : 1` と書くと、Rubyは仕様の構築時に `0` を選び、条件は式に残らない。
 `s.sold == 0` は、式ではなく `false` になる。
+Rubyの `Enumerable` の `all?` や `select` も、ブロックが返す記号式を真と読むので、条件は式に残らない。
+`Set[0, 1].include?(s.n)` は、記号式と要素を比べられないので、つねに偽になる。
 こうした誤りを防ぐために、`Fmspec.define` は記号ブロックのソースをPrismで読み、上の構文があれば `Fmspec::BuildError` で拒否する。
 
 この検査には次の性質がある。
 
 - 記号ブロックの中の構文すべてが対象で、記号式に使っているかどうかは区別しない。静的な分岐や繰り返しは、記号ブロックの外に書く。
 - ブロックから呼ぶメソッドの中は見ない。`==`、`!=`、`!` は記号式の演算子が実行時に拒否するが、メソッドの中の `if` や `&&` は検出できない。
+- `all?`、`any?`、`include?` は、記号式にもある。Rubyのリテラルの `Array`、`Hash`、`Range`、`Set[...]` と、`map` や `select` などの結果に対する呼び出しだけを拒否する。変数に入れたRubyの配列の `all?` は、記号式と区別できないので検出できない。
+
+Rubyの `true`、`false`、`nil` の `&`、`|`、`^` に記号式を渡すと（`true & s.on`、`(x ? false : true) & 記号式`）、
+Rubyの真偽値の演算になり、記号式は式に残らない。
+これは記号ブロックの外のヘルパー（lambda やメソッド）でも起きるので、構文検査ではなく、実行時に `Fmspec::BuildError` で拒否する。
+記号式を左に書くか（`s.on & true`）、`all(...)` や `any(...)` を使う。
 - ソースを読めないブロック（`eval` した文字列の中など）は検査できないので拒否する。
 - 同じ行で始まるブロックが複数あれば、すべて検査する。
 

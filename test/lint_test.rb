@@ -151,6 +151,74 @@ class LintTest < Minitest::Test
     assert_raises(Fmspec::BuildError) { !expr }
   end
 
+  # 記号式は Ruby の値としてつねに真なので、Ruby の Enumerable の述語や、リテラルの集合の include? に渡すと、
+  # 書いたつもりの条件が式に残らない。
+  def test_ruby_truthiness_is_rejected
+    rejected(/one\? は使えません/) do
+      invariant(:a) { |s| [s.on].one? }
+    end
+    rejected(/ブロック付きの select は使えません/) do
+      invariant(:a) { |s| [0, 1].select { |i| s.n.eq(i) }.length.positive? }
+    end
+    rejected(/ブロック付きの count は使えません/) do
+      invariant(:a) { |s| [0, 1].count { |i| s.n.eq(i) }.positive? }
+    end
+    rejected(/Ruby の Array や Range の all\? は使えません/) do
+      invariant(:a) { |s| (0..1).all? { |i| s.n.ne(i) } }
+    end
+    rejected(/Ruby の Array や Range の any\? は使えません/) do
+      invariant(:a) { |s| [0, 1].map { |i| s.n.eq(i) }.any? }
+    end
+    rejected(/Ruby の Array、Hash、Set、Range の include\? は使えません/) do
+      invariant(:a) { |s| Set[0, 1].include?(s.n) }
+    end
+    rejected(/include\? は使えません/) do
+      invariant(:a) { |s| [0, 1].include?(s.n) }
+    end
+    rejected(/nil\? は使えません/) do
+      invariant(:a) { |s| s.n.nil? }
+    end
+    rejected(/eql\? は使えません/) do
+      invariant(:a) { |s| s.n.eql?(0) }
+    end
+  end
+
+  # 記号式の all?、any?、include? と、ブロックのない count（状態変数の名前など）は使える。
+  def test_symbolic_collections_are_allowed
+    model = Fmspec.define(:m) do
+      state :items, set_of(int(0..2)), initial: Set[]
+      state :count, int(0..3), initial: 0
+      action(:x) { |s| update count: ite(s.count < 3, s.count + 1, 0) }
+      invariant(:a) { |s| s.items.all? { |i| i < 3 } & s.items.any? { |i| i >= 0 }.implies(s.items.include?(0) | true) }
+      invariant(:b) { |s| all(*[0, 1].map { |i| s.items.include?(i).implies(s.count >= 0) }) }
+      state :credit, map_of(int(0..1), int(0..1)), initial: {}
+      state :holder, option(int(0..1)), initial: nil
+      invariant(:c) { |s| s.credit.keys.all? { |k| s.credit[k] <= 1 } & s.credit.keys.include?(0).implies(s.holder.none?) }
+    end
+    assert_equal 3, model.to_ir["invariants"].length
+  end
+
+  def helper_and(expr) = true & expr
+  def helper_or(expr) = false | expr
+
+  # Ruby の true、false、nil の &、|、^ に記号式を渡すと、Ruby の真偽値の演算になる。ブロックの外の
+  # ヘルパーでも起きるので、構文検査ではなく実行時に拒否する。
+  def test_ruby_booleans_with_symbolic_operands_are_rejected_at_run_time
+    test = self
+    [:helper_and, :helper_or].each do |helper|
+      error = assert_raises(Fmspec::BuildError) do
+        base { invariant(:a) { |s| test.public_send(helper, s.on) } }
+      end
+      assert_match(/記号式が式に残りません。記号式を左に書くか、all\(\.\.\.\) や any\(\.\.\.\) を使います/, error.message)
+      assert_match(/#{Regexp.escape(__FILE__)}:\d+/, error.message)
+    end
+    expr = Fmspec::Expr.lift(true)
+    assert_raises(Fmspec::BuildError) { nil ^ expr }
+    # 記号式が左にあれば Expr の演算子になり、Ruby の真偽値どうしの演算は変わらない。
+    assert_equal({ "all" => [{ "bool" => true }, { "bool" => true }] }, (expr & true).node)
+    assert_equal [false, true, true], [true & false, false | true, nil ^ true]
+  end
+
   def test_allowed_forms
     model = base do
       action :x do |s|
