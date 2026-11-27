@@ -2,8 +2,8 @@
 
 use crate::canonical;
 use crate::json::{array, index, object, optional_array, required, schema, source, string, unique, Res};
-use crate::lower::{self, Constant, Ctx, Layout};
-use crate::resolve::Fields;
+use crate::resolve::{self, Constant, Ctx, Fields, Layout};
+use crate::type_syntax::parse_type;
 use crate::types::SType;
 use crate::IR_VERSION;
 use fmspec_core::eval::ErrKind;
@@ -159,11 +159,12 @@ impl fmt::Display for LoadError {
     }
 }
 
-fn lowered<T>(r: lower::Res<T>, site: impl FnOnce(String) -> LoadError) -> Res<T> {
+/// 名前解決の結果を読み込みの結果にする。型の誤りには、どの定義で起きたかを `site` で付ける。
+fn resolved<T>(r: resolve::Res<T>, site: impl FnOnce(String) -> LoadError) -> Res<T> {
     match r {
         Ok(x) => Ok(x),
-        Err(lower::Error::Schema(e)) => Err(e),
-        Err(lower::Error::Type(detail)) => Err(site(detail)),
+        Err(resolve::Error::Schema(e)) => Err(e),
+        Err(resolve::Error::Type(detail)) => Err(site(detail)),
     }
 }
 
@@ -171,16 +172,9 @@ fn invalid(reason: InvalidModel, message: String) -> LoadError {
     LoadError::Invalid { reason, message }
 }
 
-fn parse_stype(v: &Value, path: &str, enums: &[EnumNames]) -> Res<SType> {
-    lowered(lower::parse_type(v, path, enums), |detail| LoadError::Schema {
-        path: path.to_string(),
-        message: detail,
-    })
-}
-
 /// 局所変数のない環境に置く値を名前解決する（初期値と定数）。値は中核の下ろしが評価する。
 fn stored_tree(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<TExpr, LoadError> {
-    lowered(ctx.stored(v, path, st), |detail| LoadError::Schema {
+    resolved(ctx.stored(v, path, st), |detail| LoadError::Schema {
         path: path.to_string(),
         message: format!("初期値の型が状態変数の型と合いません（{detail}）"),
     })
@@ -212,7 +206,7 @@ fn parse_bindings<'v>(
         let map = object(item, &path, &["name", "type", "in"])?;
         let name = string(required(map, &path, "name")?, &format!("{path}.name"))?;
         unique(seen, &name, &path, "引数")?;
-        out.types.push(parse_stype(
+        out.types.push(parse_type(
             required(map, &path, "type")?,
             &format!("{path}.type"),
             enums,
@@ -297,7 +291,7 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
     let what = |kind: &str| format!("操作 {name:?} の{kind}");
     let user_guard = match map.get("guard") {
         None | Some(Value::Null) => TExpr::Lit(CoreValue::Bool(true)),
-        Some(g) => lowered(ctx.prop(g, &format!("{path}.guard")), |d| {
+        Some(g) => resolved(ctx.prop(g, &format!("{path}.guard")), |d| {
             invalid(
                 InvalidModel::Guard(a),
                 format!("{}が Bool 式でないか、未定義の参照を含みます（{d}）", what(" guard ")),
@@ -330,13 +324,13 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
             n_params: n_user_params.min(i),
             ..ctx
         };
-        lowered(before.prop(&serde_json::json!({"is_empty": [domain]}), &dpath), fail)?;
+        resolved(before.prop(&serde_json::json!({"is_empty": [domain]}), &dpath), fail)?;
         let me = if i < n_user_params {
             serde_json::json!({"param": i})
         } else {
             serde_json::json!({"choice": i - n_user_params})
         };
-        members.push(lowered(
+        members.push(resolved(
             ctx.prop(&serde_json::json!({"contains": [domain, me]}), &dpath),
             fail,
         )?);
@@ -360,7 +354,7 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
                 format!("{} {} 番目の更新の対象 {target} は未定義です", what(""), u + 1),
             ));
         };
-        let expr = lowered(
+        let expr = resolved(
             ctx.stored(required(up, &path, "expr")?, &format!("{path}.expr"), &l.ty),
             |d| {
                 invalid(
@@ -388,11 +382,11 @@ fn parse_action(v: &Value, path: &str, a: usize, p: &Parsed) -> Res<(ActionNames
         Some(o) => {
             let path = format!("{path}.output");
             let out = object(o, &path, &["type", "expr"])?;
-            let st = parse_stype(required(out, &path, "type")?, &format!("{path}.type"), enums)?;
+            let st = parse_type(required(out, &path, "type")?, &format!("{path}.type"), enums)?;
             if st.core().is_none() {
                 return schema(&format!("{path}.type"), "出力の型は bool、int、enum に限ります");
             }
-            let expr = lowered(
+            let expr = resolved(
                 ctx.stored(required(out, &path, "expr")?, &format!("{path}.expr"), &st),
                 |d| {
                     invalid(
@@ -491,7 +485,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         let c = object(item, &path, &["name", "type", "value"])?;
         let name = string(required(c, &path, "name")?, &format!("{path}.name"))?;
         unique(&mut seen, &name, &path, "定数")?;
-        let ty = parse_stype(required(c, &path, "type")?, &format!("{path}.type"), &enums)?;
+        let ty = parse_type(required(c, &path, "type")?, &format!("{path}.type"), &enums)?;
         let ctx = Ctx {
             enums: &enums,
             states: None,
@@ -527,7 +521,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         }
         let name = string(required(s, &path, "name")?, &format!("{path}.name"))?;
         unique(&mut seen, &name, &path, "状態変数")?;
-        let ty = parse_stype(required(s, &path, "type")?, &format!("{path}.type"), &enums)?;
+        let ty = parse_type(required(s, &path, "type")?, &format!("{path}.type"), &enums)?;
         let ctx = Ctx {
             enums: &enums,
             states: None,
@@ -578,7 +572,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         None => None,
         Some(e) => {
             let path = "$.initial_constraint";
-            Some(lowered(ctx.prop(e, path), |d| LoadError::Schema {
+            Some(resolved(ctx.prop(e, path), |d| LoadError::Schema {
                 path: path.to_string(),
                 message: format!("初期条件が Bool 式でないか、未定義の参照を含みます（{d}）"),
             })?)
@@ -612,7 +606,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
         let inv = object(item, &path, &["name", "expr", "source"])?;
         let name = string(required(inv, &path, "name")?, &format!("{path}.name"))?;
         unique(&mut seen, &name, &path, "不変条件")?;
-        invariants.push(lowered(
+        invariants.push(resolved(
             ctx.prop(required(inv, &path, "expr")?, &format!("{path}.expr")),
             |d| {
                 invalid(
@@ -658,7 +652,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
             constants: &constants,
             fields: &fields,
         };
-        let expr = lowered(cctx.prop(required(con, &path, "expr")?, &format!("{path}.expr")), |d| {
+        let expr = resolved(cctx.prop(required(con, &path, "expr")?, &format!("{path}.expr")), |d| {
             invalid(
                 InvalidModel::Contract(i),
                 format!("遷移契約 {name:?} が Bool 式でないか、未定義の参照を含みます（{d}）"),
@@ -671,7 +665,7 @@ pub fn parse(json: &str) -> Result<(RawModel, Names, String), LoadError> {
 
     let terminal = match map.get("terminal") {
         None | Some(Value::Null) => None,
-        Some(t) => Some(lowered(ctx.prop(t, "$.terminal"), |d| {
+        Some(t) => Some(resolved(ctx.prop(t, "$.terminal"), |d| {
             invalid(
                 InvalidModel::Terminal,
                 format!("終端条件が Bool 式でないか、未定義の参照を含みます（{d}）"),

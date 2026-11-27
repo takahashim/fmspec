@@ -9,9 +9,9 @@ mod canonical;
 mod conditions;
 mod evidence;
 mod json;
-mod lower;
 mod model;
 mod resolve;
+mod type_syntax;
 pub mod types;
 mod value;
 
