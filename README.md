@@ -75,13 +75,16 @@ target/debug/fmspec simulate examples/models/tickets.json --traces 100 --max-ste
 target/debug/fmspec check MODEL.json --json --certificate-out CERT.json --trace-out TRACE.json
 target/debug/fmspec verify-certificate MODEL.json CERT.json
 target/debug/fmspec replay MODEL.json TRACE.json
-target/debug/fmspec shrink MODEL.json TRACE.json --trace-out SHORT.json
+target/debug/fmspec shrink MODEL.json TRACE.json --trace-out SHORT.json --attempts 10000 --max-time-ms 5000
 target/debug/fmspec replay NEW_MODEL.json OLD_TRACE.json --allow-other-model
 target/debug/fmspec refine REFINEMENT.json --max-states 100000
 ```
 
 証明書とトレースは、作ったモデルの digest を持ち、digest が違うモデルでは読めない証拠として拒否する。
 `verify-certificate`、`replay`、`shrink` に `--allow-other-model` を付けると、別のモデルの証拠も今のモデルで読み、今のモデルに対して判定ゲートが検査する（モデルを変えた後に、以前の反例が再現するかを確かめる）。
+
+`shrink` は、試す候補の数（`--attempts`、既定 10000）か時間（`--max-time-ms`）の上限に達したら縮小を打ち切り、それまでに判定ゲートが受理したトレースを返す（結果の `shrink` に打ち切ったことを記録する）。
+`replay` と `shrink` の `--max-check-cost` は、判定ゲートがトレースの検査にかける評価回数の上限である。
 
 IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
 
