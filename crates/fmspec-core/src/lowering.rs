@@ -2006,17 +2006,17 @@ fn low_ite(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r
     {
         let k = w - 1 - j;
         let ghost bj = *blk;
-        let o = bind(blk, ite(copy_expr(&c), pad(k, copy_expr(&xa[j])), pad(k, copy_expr(&yb[j]))))?;
+        let o = bind(blk, ite(copy_expr(&c), pad_lets(k, copy_expr(&xa[j])), pad_lets(k, copy_expr(&yb[j]))))?;
         out.push(o);
         proof {
             lemma_extends_trans(b0, bj, *blk);
             lemma_extends_trans(b2, bj, *blk);
             let fa0 = fa;
             let fb0 = fb;
-            let pa = pads(xa@, k as nat);
-            let pb = pads(yb@, k as nat);
-            assert(pa[j as int] == pad_s(k as nat, xa@[j as int]));
-            assert(pb[j as int] == pad_s(k as nat, yb@[j as int]));
+            let pa = pad_lets_seq(xa@, k as nat);
+            let pb = pad_lets_seq(yb@, k as nat);
+            assert(pa[j as int] == pad_lets_s(k as nat, xa@[j as int]));
+            assert(pb[j as int] == pad_lets_s(k as nat, yb@[j as int]));
             fa = fa.push(pa);
             fb = fb.push(pb);
             lemma_ite_binds_push(c, fa0, fb0, pa, pb, j as nat);
@@ -2280,30 +2280,30 @@ proof fn lemma_ite_binds_push(c: Expr, fa: Seq<Seq<Expr>>, fb: Seq<Seq<Expr>>, x
 }
 
 /// `k` 個の空の `let` の下で `x` を評価する。局所変数の数を `k` だけ増やす。
-spec fn pad_s(k: nat, x: Expr) -> Expr
+spec fn pad_lets_s(k: nat, x: Expr) -> Expr
     decreases k,
 {
     if k == 0 {
         x
     } else {
-        Expr::Let(Box::new(bool_lit(true)), Box::new(pad_s((k - 1) as nat, x)))
+        Expr::Let(Box::new(bool_lit(true)), Box::new(pad_lets_s((k - 1) as nat, x)))
     }
 }
 
-fn pad(k: usize, x: Expr) -> (r: Expr)
+fn pad_lets(k: usize, x: Expr) -> (r: Expr)
     ensures
-        r == pad_s(k as nat, x),
+        r == pad_lets_s(k as nat, x),
     decreases k,
 {
     if k == 0 {
         x
     } else {
-        Expr::Let(Box::new(Expr::Const(Value::Bool(true))), Box::new(pad(k - 1, x)))
+        Expr::Let(Box::new(Expr::Const(Value::Bool(true))), Box::new(pad_lets(k - 1, x)))
     }
 }
 
-spec fn pads(xs: Seq<Expr>, k: nat) -> Seq<Expr> {
-    xs.map_values(|x: Expr| pad_s(k, x))
+spec fn pad_lets_seq(xs: Seq<Expr>, k: nat) -> Seq<Expr> {
+    xs.map_values(|x: Expr| pad_lets_s(k, x))
 }
 
 spec fn trues(k: nat) -> Seq<Value> {
@@ -2312,14 +2312,14 @@ spec fn trues(k: nat) -> Seq<Value> {
 
 proof fn lemma_pad_eval(k: nat, x: Expr, env: Env, l: Seq<Value>)
     ensures
-        eval_l(pad_s(k, x), env, l) == eval_l(x, env, l + trues(k)),
+        eval_l(pad_lets_s(k, x), env, l) == eval_l(x, env, l + trues(k)),
     decreases k,
 {
     if k == 0 {
         assert(l + trues(0) =~= l);
     } else {
-        let inner = pad_s((k - 1) as nat, x);
-        assert(pad_s(k, x) == Expr::Let(Box::new(bool_lit(true)), Box::new(inner)));
+        let inner = pad_lets_s((k - 1) as nat, x);
+        assert(pad_lets_s(k, x) == Expr::Let(Box::new(bool_lit(true)), Box::new(inner)));
         assert(eval_l(bool_lit(true), env, l) == Ok::<Value, ErrKind>(Value::Bool(true)));
         lemma_pad_eval((k - 1) as nat, x, env, l.push(Value::Bool(true)));
         assert(l.push(Value::Bool(true)) + trues((k - 1) as nat) =~= l + trues(k));
@@ -2332,9 +2332,9 @@ proof fn lemma_pads_closed(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, d: na
         n == d + k,
         closed_slots(e, cx, sc, n, t, xs),
     ensures
-        closed_slots(e, cx, sc, d, t, pads(xs, k)),
+        closed_slots(e, cx, sc, d, t, pad_lets_seq(xs, k)),
 {
-    let ps = pads(xs, k);
+    let ps = pad_lets_seq(xs, k);
     assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
         #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == d implies slots_result(
         eval_src(e, se, sls),
