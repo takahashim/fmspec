@@ -123,6 +123,27 @@ fn check_exit_codes_follow_the_status() {
         (3, &json!("inconclusive"), &json!("max_states"))
     );
     assert_eq!(body["search"]["complete"], json!(false));
+
+    // チケット例の到達状態は深さ2まで。深さ1では未完了で、証明書を出さない。
+    let (code, body) = f.json(&["check", "tickets.json", "--max-depth", "2"]);
+    assert_eq!((code, &body["status"]), (0, &json!("verified")));
+    let (code, body) = f.json(&["check", "tickets.json", "--max-depth", "1"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_depth"))
+    );
+    assert!(body.get("certificate_states").is_none());
+
+    let (code, body) = f.json(&["check", "tickets.json", "--max-time-ms", "0"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_time_ms"))
+    );
+    let (code, body) = f.json(&["simulate", "tickets.json", "--max-time-ms", "0"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_time_ms"))
+    );
 }
 
 #[test]
@@ -235,6 +256,9 @@ fn usage_errors() {
         vec!["verify-certificate", "tickets.json"],
         vec!["simulate", "tickets.json", "--traces", "0"],
         vec!["simulate", "tickets.json", "--max-states", "3"],
+        vec!["simulate", "tickets.json", "--max-depth", "3"],
+        vec!["verify-certificate", "tickets.json", "c.json", "--max-depth", "3"],
+        vec!["check", "tickets.json", "--max-time-ms", "-1"],
         vec!["shrink", "tickets.json"],
         vec!["bisect", "tickets.json"],
     ] {

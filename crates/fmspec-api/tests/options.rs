@@ -39,9 +39,17 @@ fn condition_errors() {
         "max_states は1以上の整数です（0）"
     );
     assert_eq!(check_error(json!({"certificate": 1})), "certificate は真偽値です");
+    assert_eq!(
+        check_error(json!({"max_depth": -1})),
+        "max_depth は0以上の整数です（-1）"
+    );
+    assert_eq!(
+        check_error(json!({"max_time_ms": 1.5})),
+        "max_time_ms は0以上の整数です（1.5）"
+    );
     let ok = check(
         &counter(),
-        &json!({"deadlock": null, "actions": null, "max_states": null}),
+        &json!({"deadlock": null, "actions": null, "max_states": null, "max_depth": null, "max_time_ms": null}),
         None,
     )
     .unwrap();
