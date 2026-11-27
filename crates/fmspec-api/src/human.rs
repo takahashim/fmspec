@@ -123,6 +123,21 @@ fn refinement_property(p: &Value) -> String {
     }
 }
 
+/// `inconclusive` の理由（`reason`）の文。キーの名前は括弧に添える。知らない理由はキーの名前のまま示す。
+fn reason_text(reason: &Value) -> String {
+    match reason.as_str() {
+        Some("max_states") => "状態数の上限（max_states）に達しました".to_string(),
+        Some("max_depth") => "深さの上限（max_depth）で探索を打ち切りました".to_string(),
+        Some("max_time_ms") => "時間の上限（max_time_ms）に達しました".to_string(),
+        Some("max_check_cost") => "証拠の検査の見積もりが、評価回数の上限（max_check_cost）を超えました".to_string(),
+        Some("interrupted") => "中断の要求で打ち切りました（interrupted）".to_string(),
+        Some("abstract_failed") => {
+            "写した状態で、抽象モデルの遷移の列挙が評価エラーになりました（abstract_failed）".to_string()
+        }
+        _ => plain(reason),
+    }
+}
+
 pub fn human(body: &Value) -> String {
     let mut out = String::new();
     let status = body["status"].as_str().unwrap_or("?");
@@ -150,13 +165,23 @@ pub fn human(body: &Value) -> String {
         "sampled" => format!("Sampled: {model}（網羅性の主張なし）"),
         "violated" => format!("Violated: {model} / {property}"),
         "error" => format!("Error: {model} / {property}"),
-        "inconclusive" => format!("Inconclusive: {model}（{}）", plain(&body["reason"])),
+        "inconclusive" => format!("Inconclusive: {model}"),
         "internal_error" => format!("InternalError: {model}"),
         "rejected" => format!("Rejected: {model}"),
+        // モデルのない結果（usage_error、invalid_model など）は、CLI の標準エラー出力と同じく status と message を示す。
+        other if body.get("model").is_none() && !refinement => {
+            let _ = writeln!(out, "{other}: {}", plain(&body["message"]));
+            return out;
+        }
         other => format!("{other}: {model}"),
     };
     let _ = writeln!(out, "{headline}");
-    if let Some(digest) = body.get("evidence_model_digest") {
+    if let Some(reason) = body.get("reason").filter(|_| status == "inconclusive") {
+        let _ = writeln!(out, "  打ち切りの理由: {}", reason_text(reason));
+    }
+    // 読めなかった証拠（unreadable）は扱っていない。その digest は拒否の理由の文が示す。
+    let unreadable = body["rejected"]["reason"] == json!("unreadable");
+    if let Some(digest) = body.get("evidence_model_digest").filter(|_| !unreadable) {
         let _ = writeln!(
             out,
             "  別のモデルに対する証拠を、指定によりこのモデルで扱いました（証拠のdigestは {}）",

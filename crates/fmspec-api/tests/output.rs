@@ -5,7 +5,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_api::{check, describe, human, load, replay, replay_with, shrink, simulate, verify_certificate, Model};
+use fmspec_api::{
+    check, describe, human, load, replay, replay_with, shrink, simulate, to_text, verify_certificate, Model,
+};
 use serde_json::{json, Value};
 
 /// 支払い回数 `charges`（0..2）。`pay(id)` は内部選択 `ok` が真なら1回増やし、
@@ -117,7 +119,26 @@ fn results_read_as_text() {
     );
     assert_eq!(
         human(&check(&m, &json!({"max_states": 1}), None).unwrap()),
-        "Inconclusive: orders（max_states）\n  探索: 未完走、訪問状態数 1、遷移数 2（探索器の報告）\n"
+        "Inconclusive: orders\n  打ち切りの理由: 状態数の上限（max_states）に達しました\n  \
+         探索: 未完走、訪問状態数 1、遷移数 2（探索器の報告）\n"
+    );
+    // 打ち切りの理由は、理由ごとの文で示す。キーの名前は括弧に添える。
+    for (reason, text) in [
+        ("max_depth", "深さの上限（max_depth）で探索を打ち切りました"),
+        ("max_time_ms", "時間の上限（max_time_ms）に達しました"),
+        ("max_check_cost", "証拠の検査の見積もりが、評価回数の上限（max_check_cost）を超えました"),
+        ("interrupted", "中断の要求で打ち切りました（interrupted）"),
+        ("abstract_failed", "写した状態で、抽象モデルの遷移の列挙が評価エラーになりました（abstract_failed）"),
+    ] {
+        let body = json!({"status": "inconclusive", "model": "m", "reason": reason});
+        assert_eq!(human(&body), format!("Inconclusive: m\n  打ち切りの理由: {text}\n"));
+    }
+    // モデルのない結果（オプションの誤りなど）は、status と message を1行で示す。
+    let usage = serde_json::from_str::<Value>(&to_text(check(&m, &json!({"bogus": 1}), None))).unwrap();
+    assert_eq!(human(&usage), "usage_error: 未知のオプション \"bogus\"\n");
+    assert_eq!(
+        human(&json!({"status": "invalid_model", "message": "m.json: 壊れています"})),
+        "invalid_model: m.json: 壊れています\n"
     );
 
     // 内部選択と出力のあるトレース。縮小しても短くならない。

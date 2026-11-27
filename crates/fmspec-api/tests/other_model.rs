@@ -155,6 +155,11 @@ fn evidence_that_does_not_fit_the_current_model_is_unreadable() {
         assert!(message.contains(what), "{message}");
         // 読めない証拠には、読めていない検査条件を付けない。
         assert!(body.get("conditions").is_none(), "{body}");
+        // 表示では、このモデルで扱ったとは書かず、digest は拒否の理由に1度だけ示す。
+        assert_eq!(
+            human(&body),
+            format!("Rejected: counter\n  拒否の理由: {message}\n")
+        );
     }
     // JSONとして読めない証拠と、版の誤りは、digest を読む前の誤りなので、そのまま報告する。
     let body = replay_with(&old, "{", &allow()).unwrap();
