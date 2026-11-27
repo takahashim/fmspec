@@ -103,7 +103,10 @@ class TlaplusExamplesTest < Minitest::Test
                                     "TransactionConsistency" => "transaction_consistency",
                                     "DirectoryAccurate" => "directory_accurate", "ExclusiveIsolation" => "exclusive_isolation",
                                     "WritebackCarriesLatest" => "writeback_carries_latest" },
-                      deadlock: true, expected: nil }
+                      deadlock: true, expected: nil },
+    # 不変条件 KlotskiGoal の違反がパズルの解にあたる。最短の解は116手で、反例が最短であることを長い反例で確かめる。
+    "SlidingPuzzles" => { model: "sliding_puzzles", config: "INIT Init\nNEXT Next", type_ok: %w[TypeOK],
+                          invariants: { "KlotskiGoal" => "klotski_goal" }, deadlock: true, expected: :violated }
   }.freeze
 
   def setup

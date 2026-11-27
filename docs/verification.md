@@ -148,7 +148,8 @@ TLCは、`rakelib/tlc.rake` の `TLA2TOOLS_VERSION` のリリースの tla2tools
 そこで、[tlaplus/Examples](https://github.com/tlaplus/Examples) の仕様を他人が書いたまま写し（`examples/tlaplus/vendor`）、同じモデルをDSLで書いたもの（`examples/tlaplus/models`）と比べる（`test/tlaplus_examples_test.rb`、`rake test:tlc`）。
 この比較は、DSLからIRへの変換、エンジンの意味論と探索を、まとめて独立の仕様と突き合わせる。
 
-対象は DieHard、TCommit、TwoPhase、EWD840、MissionariesAndCannibals、DiningPhilosophers と、PlusCalから翻訳された Simple、Lock、Peterson、DiningPhilosophersPCal、Bakery である。
+対象は DieHard、TCommit、TwoPhase、EWD840、MissionariesAndCannibals、DiningPhilosophers と、PlusCalから翻訳された Simple、Lock、Peterson、DiningPhilosophersPCal、Bakery、Specifying Systems の HourClock、Channel、AsynchInterface、InnerFIFO、AlternatingBit、InternalMemory、German のキャッシュコヒーレンスのプロトコル（GermanControl、GermanData）、SlidingPuzzles である。
+SlidingPuzzles の最短の解は116手で、長い反例でも最短であることを確かめる。
 PlusCalの仕様はDSLの `process` で書き、`pc` をインスタンスごとのプログラムカウンタに対応させる。
 これで、`process` の展開（プログラムカウンタ、ステップのguard、`goto`、インスタンスごとの番号、終端条件の既定）も独立の仕様と突き合わせる。
 DSLの状態変数は、TLA+の状態変数と一対一に対応させてある。
