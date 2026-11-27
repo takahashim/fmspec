@@ -6,12 +6,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::{decide, validate, CheckedModel, VerdictKind};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
 use fmspec_core::semantics::Conditions;
-use fmspec_search::{check, explore, sample, shrink, simulate, test_paths, BfsOptions, Outcome, SimOptions, Status};
+use fmspec_core::step::Site;
+use fmspec_search::{
+    check, explore, sample, shrink, simulate, test_paths, BfsOptions, Outcome, ShrinkOptions, ShrinkStop, SimOptions,
+    Status,
+};
+use std::cell::Cell;
 use std::collections::{BTreeSet, VecDeque};
+use std::time::{Duration, Instant};
 
 fn int(x: i64) -> Expr {
     Expr::Const(Value::Int(x))
@@ -511,9 +518,13 @@ fn shrunk_traces_keep_the_claim_and_no_single_step_can_be_removed() {
             continue;
         };
         // 試す候補がなければ、元のトレースを返す。
-        assert_eq!(shrink(&m, &cond, &start, &steps, &claim, 0), steps, "seed {seed}");
+        assert_eq!(
+            shrink(&m, &cond, &start, &steps, &claim, &ShrinkOptions::attempts(0)).steps,
+            steps,
+            "seed {seed}"
+        );
 
-        let best = shrink(&m, &cond, &start, &steps, &claim, 10_000);
+        let best = shrink(&m, &cond, &start, &steps, &claim, &ShrinkOptions::attempts(10_000)).steps;
         let accepted = |steps: Vec<TraceStep>| {
             decide(&m, &cond, &Evidence::Trace(start.clone(), steps, claim.clone())).kind() == VerdictKind::Violated
         };
@@ -628,9 +639,13 @@ fn shrunk_traces_keep_the_claim_and_no_single_step_or_argument_can_be_reduced() 
         let Ok(Some(Evidence::Trace(start, steps, claim))) = simulate(&m, &cond, &opts).evidence else {
             continue;
         };
-        assert_eq!(shrink(&m, &cond, &start, &steps, &claim, 0), steps, "seed {seed}");
+        assert_eq!(
+            shrink(&m, &cond, &start, &steps, &claim, &ShrinkOptions::attempts(0)).steps,
+            steps,
+            "seed {seed}"
+        );
 
-        let best = shrink(&m, &cond, &start, &steps, &claim, 10_000);
+        let best = shrink(&m, &cond, &start, &steps, &claim, &ShrinkOptions::attempts(10_000)).steps;
         let accepted = |steps: Vec<TraceStep>| {
             decide(&m, &cond, &Evidence::Trace(start.clone(), steps, claim.clone())).kind() == VerdictKind::Violated
         };
@@ -677,6 +692,329 @@ fn shrunk_traces_keep_the_claim_and_no_single_step_or_argument_can_be_reduced() 
         }
     }
     assert!(lowered > 30, "効かない引数が0でないトレースが少なすぎる: {lowered}");
+}
+
+/// `x` を `d`（0から3）だけ増やす操作 `add` だけを持つモデル。不変条件は `x < bound`。
+fn adder(bound: i64) -> CheckedModel {
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, bound + 3)],
+        inits: vec![vec![0]],
+        actions: vec![Action {
+            n_params: 1,
+            domains: vec![Type::Int(0, 3)],
+            guard: Expr::Bin(BinOp::Lt, Box::new(Expr::Var(0)), Box::new(int(bound))),
+            updates: vec![Update {
+                target: 0,
+                expr: Expr::Bin(BinOp::Add, Box::new(Expr::Var(0)), Box::new(Expr::Arg(0))),
+            }],
+            output: None,
+        }],
+        invariants: vec![Expr::Bin(BinOp::Lt, Box::new(Expr::Var(0)), Box::new(int(bound)))],
+        contracts: vec![],
+        terminal: None,
+    };
+    validate(raw).expect("整形式のモデル")
+}
+
+/// `adder` で、`d` が `ds` のステップを並べたトレース。
+fn adds(ds: &[i64]) -> Vec<TraceStep> {
+    ds.iter()
+        .scan(0, |x, d| {
+            *x += d;
+            Some(TraceStep {
+                action: 0,
+                args: vec![*d],
+                output: None,
+                state: vec![*x],
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn shrinking_a_long_trace_stops_at_the_deadline_with_an_accepted_trace() {
+    // どのステップを除いても、どの引数を小さくしても違反しないので、局所最小を確かめるには長さの2乗に比例する時間がかかる。
+    let m = adder(3000);
+    let cond = conditions(&m, false);
+    let steps = adds(&[1; 3000]);
+    let claim = Claim::Invariant(0);
+    let accepted = |steps: &[TraceStep]| {
+        decide(&m, &cond, &Evidence::Trace(vec![0], steps.to_vec(), claim.clone())).kind() == VerdictKind::Violated
+    };
+    assert!(accepted(&steps));
+    let started = Instant::now();
+    let opts = ShrinkOptions {
+        attempts: 10_000,
+        interrupt: None,
+        deadline: started.checked_add(Duration::from_millis(100)),
+    };
+    let shrunk = shrink(&m, &cond, &[0], &steps, &claim, &opts);
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(shrunk.stopped, Some(ShrinkStop::Limit(Limit::MaxTime)));
+    assert!(shrunk.attempts < 10_000);
+    assert_eq!(shrunk.steps, steps);
+    assert!(accepted(&shrunk.steps));
+}
+
+#[test]
+fn an_interrupt_request_stops_the_shrinking_with_the_last_accepted_trace() {
+    let m = adder(6);
+    let cond = conditions(&m, false);
+    let claim = Claim::Invariant(0);
+    let steps = adds(&[1, 0, 3, 2]);
+    let full = shrink(&m, &cond, &[0], &steps, &claim, &ShrinkOptions::attempts(10_000));
+    assert_eq!(full.stopped, None);
+    assert_eq!(full.steps, adds(&[1, 3, 2]));
+    for k in 0..full.attempts {
+        let asked = Cell::new(0);
+        let interrupt = || {
+            asked.set(asked.get() + 1);
+            asked.get() > k
+        };
+        let opts = ShrinkOptions {
+            attempts: 10_000,
+            interrupt: Some(&interrupt),
+            deadline: None,
+        };
+        let part = shrink(&m, &cond, &[0], &steps, &claim, &opts);
+        assert_eq!(
+            (part.attempts, part.stopped),
+            (k, Some(ShrinkStop::Limit(Limit::Interrupted)))
+        );
+        // 打ち切った時点の結果は、判定ゲートが同じ主張で受理したトレースである。
+        let kind = decide(&m, &cond, &Evidence::Trace(vec![0], part.steps.clone(), claim.clone())).kind();
+        assert_eq!(kind, VerdictKind::Violated, "k = {k}");
+        assert!(part.steps.len() >= full.steps.len());
+    }
+}
+
+#[test]
+fn removals_and_argument_changes_share_the_attempts_and_a_spent_budget_leaves_an_accepted_trace() {
+    let mut both = 0;
+    for seed in 0..100u64 {
+        let n = 4 + (seed % 7) as i64;
+        let edges = random_graph(seed, n, 3 + (seed % 8) as usize);
+        let bad = [n - 1];
+        let m = graph_with_args(n, &edges, &bad);
+        let cond = conditions(&m, false);
+        let opts = SimOptions {
+            seed,
+            traces: 20,
+            max_steps: 30,
+            interrupt: None,
+            deadline: None,
+        };
+        let Ok(Some(Evidence::Trace(start, steps, claim))) = simulate(&m, &cond, &opts).evidence else {
+            continue;
+        };
+        let full = shrink(&m, &cond, &start, &steps, &claim, &ShrinkOptions::attempts(10_000));
+        assert_eq!(full.stopped, None, "seed {seed}");
+        // 上限がちょうど試した候補（削除と引数の変更を合わせた数）の数なら、上限なしと同じ結果に終わる。
+        let exact = shrink(
+            &m,
+            &cond,
+            &start,
+            &steps,
+            &claim,
+            &ShrinkOptions::attempts(full.attempts),
+        );
+        assert_eq!(exact, full, "seed {seed}");
+        let lowered = steps.iter().zip(&full.steps).any(|(s, t)| s.args != t.args);
+        if lowered && full.steps.len() < steps.len() {
+            both += 1;
+        }
+        for budget in 0..full.attempts {
+            let part = shrink(&m, &cond, &start, &steps, &claim, &ShrinkOptions::attempts(budget));
+            assert_eq!(
+                (part.attempts, part.stopped),
+                (budget, Some(ShrinkStop::Attempts)),
+                "seed {seed}"
+            );
+            let kind = decide(
+                &m,
+                &cond,
+                &Evidence::Trace(start.clone(), part.steps.clone(), claim.clone()),
+            )
+            .kind();
+            assert_eq!(kind, VerdictKind::Violated, "seed {seed}, budget {budget}");
+            assert!(
+                full.steps.len() <= part.steps.len() && part.steps.len() <= steps.len(),
+                "seed {seed}"
+            );
+        }
+    }
+    assert!(both > 10, "削除と引数の変更の両方で縮んだトレースが少なすぎる: {both}");
+}
+
+/// 操作 `set(d)`（`x := d`、`d` は0から1_000_000）と `tick(e)`（`y := y + 1`、`e` は0か1で遷移先に効かない）を持つモデル。
+/// 不変条件は「`x >= 500000` かつ `y >= 3` でない」。
+fn wide() -> CheckedModel {
+    let bin = |op, a, b| Expr::Bin(op, Box::new(a), Box::new(b));
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, 1_000_000), Type::Int(0, 3)],
+        inits: vec![vec![0, 0]],
+        actions: vec![
+            Action {
+                n_params: 1,
+                domains: vec![Type::Int(0, 1_000_000)],
+                guard: Expr::Const(Value::Bool(true)),
+                updates: vec![Update {
+                    target: 0,
+                    expr: Expr::Arg(0),
+                }],
+                output: None,
+            },
+            Action {
+                n_params: 1,
+                domains: vec![Type::Int(0, 1)],
+                guard: bin(BinOp::Lt, Expr::Var(1), int(3)),
+                updates: vec![Update {
+                    target: 1,
+                    expr: bin(BinOp::Add, Expr::Var(1), int(1)),
+                }],
+                output: None,
+            },
+        ],
+        invariants: vec![Expr::Not(Box::new(Expr::And(
+            Box::new(bin(BinOp::Ge, Expr::Var(0), int(500_000))),
+            Box::new(bin(BinOp::Ge, Expr::Var(1), int(3))),
+        )))],
+        contracts: vec![],
+        terminal: None,
+    };
+    validate(raw).expect("整形式のモデル")
+}
+
+#[test]
+fn a_wide_domain_does_not_spend_the_attempts_before_other_arguments_are_lowered() {
+    let m = wide();
+    let cond = conditions(&m, false);
+    let claim = Claim::Invariant(0);
+    let step = |action, arg, state: [i64; 2]| TraceStep {
+        action,
+        args: vec![arg],
+        output: None,
+        state: state.to_vec(),
+    };
+    let steps = vec![
+        step(0, 700_000, [700_000, 0]),
+        step(1, 1, [700_000, 1]),
+        step(1, 1, [700_000, 2]),
+        step(1, 1, [700_000, 3]),
+    ];
+    let shrunk = shrink(&m, &cond, &[0, 0], &steps, &claim, &ShrinkOptions::attempts(10_000));
+    let kind = decide(
+        &m,
+        &cond,
+        &Evidence::Trace(vec![0, 0], shrunk.steps.clone(), claim.clone()),
+    )
+    .kind();
+    assert_eq!(kind, VerdictKind::Violated);
+    // d は二分探索で、違反に要る最小の値まで小さくなり、遷移先に効かない e は0になる。
+    let expected = vec![
+        step(0, 500_000, [500_000, 0]),
+        step(1, 0, [500_000, 1]),
+        step(1, 0, [500_000, 2]),
+        step(1, 0, [500_000, 3]),
+    ];
+    assert_eq!(shrunk.steps, expected);
+    // d より前の値をすべて試して局所最小を確かめるには候補が足りないので、打ち切ったことを報告する。
+    assert_eq!((shrunk.attempts, shrunk.stopped), (10_000, Some(ShrinkStop::Attempts)));
+}
+
+/// 公開引数 `d`（0から3）と、遷移先に効かない内部選択 `e`（0から3）を持つ操作 `add` だけのモデル。`add` は `x` を `d` だけ増やす。
+fn add_with_choice(guard: Expr, contracts: Vec<Contract>) -> CheckedModel {
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, 10)],
+        inits: vec![vec![0]],
+        actions: vec![Action {
+            n_params: 1,
+            domains: vec![Type::Int(0, 3), Type::Int(0, 3)],
+            guard,
+            updates: vec![Update {
+                target: 0,
+                expr: Expr::Bin(BinOp::Add, Box::new(Expr::Var(0)), Box::new(Expr::Arg(0))),
+            }],
+            output: None,
+        }],
+        invariants: vec![],
+        contracts,
+        terminal: None,
+    };
+    validate(raw).expect("整形式のモデル")
+}
+
+/// `add_with_choice` で、引数 `(d, e)` の列を初期状態からたどったトレース。
+fn adds_with_choice(args: &[(i64, i64)]) -> Vec<TraceStep> {
+    args.iter()
+        .scan(0, |x, (d, e)| {
+            *x += d;
+            Some(TraceStep {
+                action: 0,
+                args: vec![*d, *e],
+                output: None,
+                state: vec![*x],
+            })
+        })
+        .collect()
+}
+
+/// 主張が不変条件でない違反と評価エラーでも、引数を小さくし、後続のステップを再実行する。
+#[test]
+fn arguments_are_lowered_for_contract_deadlock_and_step_error_claims() {
+    let bin = |op, a, b| Expr::Bin(op, Box::new(a), Box::new(b));
+    let below_five = bin(BinOp::Lt, Expr::Var(0), int(5));
+    // 遷移契約：1回の遷移で2以上増えない。
+    let small_steps = Contract {
+        action: 0,
+        expr: bin(BinOp::Lt, bin(BinOp::Sub, Expr::Next(0), Expr::Var(0)), int(2)),
+    };
+    // x = 5 で guard の評価が0除算になる。x < 5 では真、x > 5 では偽。
+    let fails_at_five = bin(
+        BinOp::Ge,
+        bin(BinOp::Div, int(10), bin(BinOp::Sub, int(5), Expr::Var(0))),
+        int(0),
+    );
+    let cases = [
+        (
+            add_with_choice(Expr::Const(Value::Bool(true)), vec![small_steps]),
+            false,
+            Claim::Contract(0),
+            adds_with_choice(&[(1, 1), (3, 2)]),
+            // 前のステップを除き、d は違反する最小の2に、e は0になる。
+            adds_with_choice(&[(2, 0)]),
+        ),
+        (
+            add_with_choice(below_five, vec![]),
+            true,
+            Claim::Deadlock,
+            adds_with_choice(&[(3, 1), (3, 1)]),
+            // 1つ目の d を2にすると、2つ目のステップの遷移先が5になり、そこで止まる。
+            adds_with_choice(&[(2, 0), (3, 0)]),
+        ),
+        (
+            add_with_choice(fails_at_five, vec![]),
+            false,
+            Claim::StepError(0, vec![0, 0], Site::Guard, ErrKind::DivByZero),
+            adds_with_choice(&[(2, 3), (3, 1)]),
+            adds_with_choice(&[(2, 0), (3, 0)]),
+        ),
+    ];
+    for (m, deadlock, claim, steps, expected) in cases {
+        let cond = conditions(&m, deadlock);
+        let accepted = |steps: &[TraceStep]| {
+            let kind = decide(&m, &cond, &Evidence::Trace(vec![0], steps.to_vec(), claim.clone())).kind();
+            matches!(kind, VerdictKind::Violated | VerdictKind::Error)
+        };
+        assert!(accepted(&steps), "{claim:?}");
+        let shrunk = shrink(&m, &cond, &[0], &steps, &claim, &ShrinkOptions::attempts(10_000));
+        assert_eq!(shrunk.stopped, None, "{claim:?}");
+        assert_eq!(shrunk.steps, expected, "{claim:?}");
+        assert!(accepted(&shrunk.steps), "{claim:?}");
+    }
 }
 
 // ---- 状態と遷移のグラフ（仕様書 §11.3）----

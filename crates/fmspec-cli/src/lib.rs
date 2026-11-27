@@ -46,8 +46,8 @@ const USAGE: &str = "\
   fmspec check MODEL.json [--strategy bfs] [--max-states N] [--max-depth N] [--max-time-ms N] [--max-check-cost N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
   fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [--max-time-ms N] [検査条件] [--trace-out FILE]
   fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [--max-time-ms N] [検査条件] [--allow-other-model]
-  fmspec replay MODEL.json TRACE.json [--allow-other-model]
-  fmspec shrink MODEL.json TRACE.json [--trace-out FILE] [--allow-other-model]
+  fmspec replay MODEL.json TRACE.json [--max-check-cost N] [--allow-other-model]
+  fmspec shrink MODEL.json TRACE.json [--attempts N] [--max-time-ms N] [--max-check-cost N] [--trace-out FILE] [--allow-other-model]
   fmspec refine REFINEMENT.json [--max-states N] [--max-depth N] [--max-time-ms N] [--actions A,B,...]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
@@ -59,12 +59,16 @@ const USAGE: &str = "\
 証拠（verify-certificate、replay、shrink）:
   --allow-other-model    model_digest が違う証拠も、このモデルの名前と型で読んで検査する
 
+縮小（shrink）:
+  --attempts N           試す候補（ステップの削除と引数の変更）の数の上限（既定 10000）
+  --max-time-ms N        縮小の時間の上限。上限に達したら、それまでに判定ゲートが受理したトレースを返す
+
 共通:
   --json                 結果を機械可読のJSONで出力する
 ";
 
 /// fmspec-api に渡す、値を取るオプション。[フラグ, オプションのキー, 種類]。
-const VALUED: [(&str, &str, Kind); 10] = [
+const VALUED: [(&str, &str, Kind); 11] = [
     ("--max-states", "max_states", Kind::Count),
     ("--max-depth", "max_depth", Kind::Count),
     ("--max-time-ms", "max_time_ms", Kind::Count),
@@ -72,6 +76,7 @@ const VALUED: [(&str, &str, Kind); 10] = [
     ("--traces", "traces", Kind::Count),
     ("--max-steps", "max_steps", Kind::Count),
     ("--seed", "seed", Kind::Count),
+    ("--attempts", "attempts", Kind::Count),
     ("--actions", "actions", Kind::Names),
     ("--invariants", "invariants", Kind::Names),
     ("--contracts", "contracts", Kind::Names),
@@ -240,8 +245,24 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
         true,
         cmd_verify_certificate,
     ),
-    ("replay", &["--allow-other-model"], false, cmd_replay),
-    ("shrink", &["--trace-out", "--allow-other-model"], false, cmd_shrink),
+    (
+        "replay",
+        &["--max-check-cost", "--allow-other-model"],
+        false,
+        cmd_replay,
+    ),
+    (
+        "shrink",
+        &[
+            "--attempts",
+            "--max-time-ms",
+            "--max-check-cost",
+            "--trace-out",
+            "--allow-other-model",
+        ],
+        false,
+        cmd_shrink,
+    ),
     (
         "refine",
         &["--max-states", "--max-depth", "--max-time-ms", "--actions"],
@@ -340,7 +361,8 @@ fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
-    let body = fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone())).map_err(|e| usage(a.json, e))?;
+    let body =
+        fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone()), None).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
     Ok(finish(a.json, body))
 }

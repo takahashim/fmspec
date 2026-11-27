@@ -76,17 +76,24 @@ module Fmspec
     end
 
     # トレース（Trace、Hash、またはJSON文字列）を、記録された検査条件で再生する。
-    # `allow_other_model` は verify_certificate と同じ。
-    def replay(trace, allow_other_model: false)
-      options = allow_other_model ? { "allow_other_model" => true } : {}
+    # `max_check_cost` と `allow_other_model` は verify_certificate と同じ。
+    # 判定ゲートはトレースを区切らずに検査するので、時間の上限は受け付けず、割り込みは検査を終えてから伝わる。
+    def replay(trace, max_check_cost: nil, allow_other_model: false)
+      options = {}
+      options["max_check_cost"] = max_check_cost if max_check_cost
+      options["allow_other_model"] = true if allow_other_model
       result(native.replay(trace_json(trace), JSON.generate(options)))
     end
 
     # モデル違反のトレースを、同じ違反を保ったまま短くする（仕様書 §10）。結果は局所最小である。
-    # `allow_other_model` は verify_certificate と同じ。
-    def shrink(trace, attempts: nil, allow_other_model: false)
+    # `attempts` は試す候補の数の上限、`max_time_ms` は縮小の時間の上限で、達したら縮小を打ち切り、
+    # それまでに判定ゲートが受理したトレースを返す（`Result#shrink` に打ち切ったことを記録する）。
+    # `max_check_cost` は元のトレースの検査の上限で、`allow_other_model` は verify_certificate と同じ。
+    def shrink(trace, attempts: nil, max_time_ms: nil, max_check_cost: nil, allow_other_model: false)
       options = {}
       options["attempts"] = attempts if attempts
+      options["max_time_ms"] = max_time_ms if max_time_ms
+      options["max_check_cost"] = max_check_cost if max_check_cost
       options["allow_other_model"] = true if allow_other_model
       result(native.shrink(trace_json(trace), JSON.generate(options)))
     end

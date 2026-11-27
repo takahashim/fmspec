@@ -61,7 +61,7 @@ fn simulation_and_shrinking_keep_the_start_state() {
     stay["action"] = json!("stay");
     stay["state"] = json!({"n": 3});
     trace["steps"] = json!([stay, stay, inc]);
-    let shrunk = shrink(&m, &trace.to_string(), &json!({})).unwrap();
+    let shrunk = shrink(&m, &trace.to_string(), &json!({}), None).unwrap();
     assert_eq!(shrunk["status"], "violated", "{shrunk}");
     assert_eq!(shrunk["original_steps"], 3);
     assert_eq!(shrunk["trace"]["initial"], json!({"n": 3}));

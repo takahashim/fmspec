@@ -167,6 +167,16 @@ class CheckTest < Minitest::Test
     assert_equal [2, long.trace.length], [shrunk.trace.length, shrunk.to_h["original_steps"]]
     assert_equal long.trace.seed, shrunk.trace.seed
     assert_equal :violated, model.replay(shrunk.trace).status
+    assert_equal true, shrunk.shrink["complete"]
+    # 上限に達したら打ち切り、それまでに判定ゲートが受理したトレースを返す。
+    late = model.shrink(long.trace, max_time_ms: 0)
+    assert_equal [:violated, false, "max_time_ms"], [late.status, late.shrink["complete"], late.shrink["limit"]]
+    assert_equal long.trace.to_h["steps"], late.trace.to_h["steps"]
+    assert_equal "attempts", model.shrink(long.trace, attempts: 1).shrink["limit"]
+    # 見積もりが上限を超えるトレースは検査しない。
+    [model.replay(long.trace, max_check_cost: 1), model.shrink(long.trace, max_check_cost: 1)].each do |r|
+      assert_equal [:inconclusive, :max_check_cost], [r.status, r.reason]
+    end
     # BFS の反例は最短なので、それ以上は縮まない。
     shortest = model.check.trace
     assert_equal shortest.to_h["steps"], model.shrink(shortest).trace.to_h["steps"]

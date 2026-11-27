@@ -386,6 +386,45 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     f.put("forged.json", &forged);
     let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
+
+    // 試す候補の数と時間の上限。打ち切っても、判定ゲートが受理したトレースを返して書き出す。
+    let (code, body) = f.json(&[
+        "shrink",
+        "noguard.json",
+        "long.json",
+        "--attempts",
+        "1",
+        "--trace-out",
+        "one.json",
+    ]);
+    assert_eq!((code, &body["status"]), (1, &json!("violated")), "{body}");
+    assert_eq!(
+        body["shrink"],
+        json!({"attempts": 1, "complete": false, "limit": "attempts"})
+    );
+    let (code, replayed) = f.json(&["replay", "noguard.json", "one.json"]);
+    assert_eq!((code, &replayed["status"]), (1, &json!("violated")));
+    let (code, body) = f.json(&["shrink", "noguard.json", "long.json", "--max-time-ms", "0"]);
+    assert_eq!((code, &body["shrink"]["limit"]), (1, &json!("max_time_ms")), "{body}");
+    assert_eq!(body["trace"]["steps"], f.get("long.json")["steps"]);
+    let (code, body) = f.json(&["shrink", "noguard.json", "long.json", "--attempts", "0"]);
+    assert_eq!((code, &body["message"]), (2, &json!("attempts は1以上の整数です（0）")));
+    // 見積もりが上限を超えるトレースは検査しない。
+    for command in ["replay", "shrink"] {
+        let (code, body) = f.json(&[command, "noguard.json", "long.json", "--max-check-cost", "1"]);
+        assert_eq!((code, &body["reason"]), (3, &json!("max_check_cost")), "{body}");
+    }
+    // トレースの検査は区切らないので、replay は時間の上限を受け付けない。
+    let (code, body) = f.json(&["replay", "noguard.json", "long.json", "--max-time-ms", "10"]);
+    assert_eq!(
+        (code, &body["message"]),
+        (2, &json!("replay は --max-time-ms を受け付けません"))
+    );
+    let (code, body) = f.json(&["check", "noguard.json", "--attempts", "10"]);
+    assert_eq!(
+        (code, &body["message"]),
+        (2, &json!("check は --attempts を受け付けません"))
+    );
 }
 
 #[test]

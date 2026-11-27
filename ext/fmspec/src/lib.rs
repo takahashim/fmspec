@@ -10,9 +10,10 @@
 //!
 //! - IR、オプション、証拠、結果は、いずれもJSON文字列で受け渡す。CLIと同じ `fmspec-api` を呼ぶ。
 //! - 拡張は Ruby のブロックやメソッドを呼び出さない。
-//! - 探索と証拠の検査は GVL を解放して実行する。検査、シミュレーション、証明書の検査、カバレッジ、テスト経路は、
-//!   Ruby の中断要求で打ち切る。割り込みは Ruby の例外として伝わり、例外が発生しなかった場合は `inconclusive` の結果を返す。
-//!   `replay` と `shrink` は打ち切らない。
+//! - 探索と証拠の検査は GVL を解放して実行する。検査、シミュレーション、証明書の検査、カバレッジ、テスト経路、縮小は、
+//!   Ruby の中断要求で打ち切る。割り込みは Ruby の例外として伝わり、例外が発生しなかった場合は `inconclusive` の結果
+//!   （縮小では、それまでに判定ゲートが受理したトレースと、打ち切ったことの報告）を返す。
+//!   `replay` は中断要求を確かめない。判定ゲートのトレースの検査は区切らないので、確かめる箇所がない。
 //! - panic は `Fmspec::InternalError` になる。`Exception` の子で、`rescue => e` では捕まらない。
 
 use nupur::args::string_arg;
@@ -170,10 +171,9 @@ fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Resul
     let trace = read(ruby, trace)?;
     let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    let result = nupur::gvl::without_gvl(ruby, move || {
-        fmspec_api::to_text(fmspec_api::shrink(model, &trace, &options))
-    })?;
-    text(ruby, &result)
+    search(ruby, move |interrupt| {
+        fmspec_api::shrink(model, &trace, &options, interrupt)
+    })
 }
 
 /// `Session.start(model, options_json)`: セッションを作る。
