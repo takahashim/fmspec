@@ -7,19 +7,26 @@ use fmspec_core::typing::InvalidModel;
 use fmspec_ir::{
     claim_to_json, conditions_to_json, state_to_json, trace_to_json, Model, Source, Trace, ENGINE_VERSION, IR_VERSION,
 };
-use fmspec_search::{Outcome, Sampled, SimOptions, Status, PRNG_NAME};
+use fmspec_search::{Inconsistency, Internal, Outcome, Sampled, SimOptions, Status, PRNG_NAME};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-fn base(model: &Model, cond: &Conditions, status: &str) -> Value {
+/// どの結果にもある項目。
+fn header(model: &Model, status: &str) -> Value {
     json!({
         "status": status,
         "model": model.names.model,
         "model_digest": model.digest,
         "engine_version": ENGINE_VERSION,
-        "ir_version": IR_VERSION,
-        "conditions": conditions_to_json(&model.names, cond),
     })
+}
+
+/// 検査条件のもとで判定した結果に共通の項目。
+fn base(model: &Model, cond: &Conditions, status: &str) -> Value {
+    let mut body = header(model, status);
+    body["ir_version"] = json!(IR_VERSION);
+    body["conditions"] = conditions_to_json(&model.names, cond);
+    body
 }
 
 pub(crate) fn limit_name(limit: Limit) -> &'static str {
@@ -31,23 +38,18 @@ pub(crate) fn limit_name(limit: Limit) -> &'static str {
     }
 }
 
-fn source_json(source: &Option<Source>) -> Value {
-    match source {
-        Some(s) => json!({"file": s.file, "line": s.line}),
-        None => Value::Null,
-    }
-}
-
 /// 主張の対象の定義のソース位置。
 fn claim_source(model: &Model, claim: &Claim) -> Value {
     let names = &model.names;
-    match claim {
-        Claim::Invariant(i) | Claim::InvariantError(i, _) => {
-            source_json(names.invariant_sources.get(*i).unwrap_or(&None))
-        }
-        Claim::Contract(k) | Claim::ContractError(k, _) => source_json(names.contract_sources.get(*k).unwrap_or(&None)),
-        Claim::StepError(a, _, _, _) => source_json(&names.actions.get(*a).and_then(|n| n.source.clone())),
-        Claim::Deadlock | Claim::TerminalError(_) => Value::Null,
+    let source: Option<&Source> = match claim {
+        Claim::Invariant(i) | Claim::InvariantError(i, _) => names.invariant_sources.get(*i).and_then(Option::as_ref),
+        Claim::Contract(k) | Claim::ContractError(k, _) => names.contract_sources.get(*k).and_then(Option::as_ref),
+        Claim::StepError(a, _, _, _) => names.actions.get(*a).and_then(|n| n.source.as_ref()),
+        Claim::Deadlock | Claim::TerminalError(_) => None,
+    };
+    match source {
+        Some(s) => json!({"file": s.file, "line": s.line}),
+        None => Value::Null,
     }
 }
 
@@ -161,7 +163,7 @@ fn attach_evidence(body: &mut Value, model: &Model, cond: &Conditions, evidence:
     }
 }
 
-fn status_name(status: Status) -> &'static str {
+fn status_name(status: &Status) -> &'static str {
     match status {
         Status::Verified => "verified",
         Status::Violated => "violated",
@@ -171,10 +173,56 @@ fn status_name(status: Status) -> &'static str {
     }
 }
 
-fn attach_internal_error(body: &mut Value, model: &Model, outcome: &Outcome) {
-    if let Status::InternalError(reject) = outcome.status {
-        body["rejected"] = reject_json(model, &outcome.evidence, reject);
-        body["message"] = json!("探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です");
+/// 探索器の内部の不整合を報告する `message`。
+pub(crate) const INCONSISTENCY_MESSAGE: &str = "探索器の内部の不整合です。fmspec の不具合です";
+
+/// 探索器の内部の不整合の内容。状態は符号化列（`encoded_state`）で示し、状態型に従うときだけ値（`state`）も示す。
+pub(crate) fn inconsistency_json(model: &Model, inconsistency: &Inconsistency) -> Value {
+    match inconsistency {
+        Inconsistency::Successors { action, state } => {
+            let names = &model.names;
+            let decoded = if model.checked().state_ok(state) {
+                state_to_json(model, state)
+            } else {
+                Value::Null
+            };
+            json!({
+                "kind": "successors",
+                "action": names.actions.get(*action).map(|n| json!(n.name)).unwrap_or(json!(action)),
+                "state": decoded,
+                "encoded_state": state,
+                "message": "状態での操作の遷移を列挙できません。操作が未定義か、状態が状態型に従いません",
+            })
+        }
+        Inconsistency::SymmetryTrace => json!({
+            "kind": "symmetry_trace",
+            "message": "対称性による削減で、代表元の経路から具体的なトレースを作れません",
+        }),
+    }
+}
+
+/// 探索器の内部の不整合を見つけ、結果を返せなかったことの報告。カバレッジとテスト経路が使う。
+pub(crate) fn inconsistency_report(model: &Model, inconsistency: &Inconsistency) -> Value {
+    let mut body = header(model, "internal_error");
+    body["inconsistency"] = inconsistency_json(model, inconsistency);
+    body["message"] = json!(INCONSISTENCY_MESSAGE);
+    body
+}
+
+/// 判定ゲートを通した結果の証拠と、`internal_error` の内容。
+/// 探索器の内部の不整合では、判定ゲートに渡した `Unavailable` に意味はないので、証拠の項目（`reason` など）は付けない。
+fn attach_outcome(body: &mut Value, model: &Model, cond: &Conditions, outcome: &Outcome, seed: Option<u64>) {
+    match &outcome.status {
+        Status::InternalError(Internal::Inconsistent(inconsistency)) => {
+            body["inconsistency"] = inconsistency_json(model, inconsistency);
+            body["message"] = json!(INCONSISTENCY_MESSAGE);
+        }
+        Status::InternalError(Internal::Rejected(reject)) => {
+            attach_evidence(body, model, cond, &outcome.evidence, seed);
+            body["rejected"] = reject_json(model, &outcome.evidence, *reject);
+            body["message"] = json!("探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です");
+        }
+        _ => attach_evidence(body, model, cond, &outcome.evidence, seed),
     }
 }
 
@@ -189,7 +237,7 @@ pub fn simulation_report(
     let status = sampled
         .found
         .as_ref()
-        .map(|o| status_name(o.status))
+        .map(|o| status_name(&o.status))
         .unwrap_or("sampled");
     let mut body = base(model, cond, status);
     body["strategy"] = json!("random");
@@ -203,15 +251,14 @@ pub fn simulation_report(
         "time_ms": time.as_secs_f64() * 1000.0,
     });
     if let Some(outcome) = &sampled.found {
-        attach_evidence(&mut body, model, cond, &outcome.evidence, Some(opts.seed));
-        attach_internal_error(&mut body, model, outcome);
+        attach_outcome(&mut body, model, cond, outcome, Some(opts.seed));
     }
     body
 }
 
 /// `check` の結果。探索器の報告（`search`）は検査済みの値ではない。
 pub fn check_report(model: &Model, cond: &Conditions, outcome: &Outcome) -> Value {
-    let status = status_name(outcome.status);
+    let status = status_name(&outcome.status);
     let mut body = base(model, cond, status);
     body["strategy"] = json!("bfs");
     body["search"] = json!({
@@ -221,13 +268,19 @@ pub fn check_report(model: &Model, cond: &Conditions, outcome: &Outcome) -> Valu
         "time_ms": outcome.search_time.as_secs_f64() * 1000.0,
     });
     body["gate"] = json!({"time_ms": outcome.gate_time.as_secs_f64() * 1000.0});
-    attach_evidence(&mut body, model, cond, &outcome.evidence, None);
-    attach_internal_error(&mut body, model, outcome);
+    attach_outcome(&mut body, model, cond, outcome, None);
     body
 }
 
 /// 外部から提示された証拠の検査結果。探索を行っていないので、探索統計は付けない。
-pub fn evidence_report(model: &Model, cond: &Conditions, evidence: &Evidence, verdict: &Verdict) -> Value {
+/// `seed` は、提示されたトレースに記録されていたseedで、示すトレースにそのまま残す。
+pub fn evidence_report(
+    model: &Model,
+    cond: &Conditions,
+    evidence: &Evidence,
+    verdict: &Verdict,
+    seed: Option<u64>,
+) -> Value {
     let status = match verdict.kind() {
         VerdictKind::Verified => "verified",
         VerdictKind::Violated => "violated",
@@ -237,7 +290,7 @@ pub fn evidence_report(model: &Model, cond: &Conditions, evidence: &Evidence, ve
         VerdictKind::Rejected => "rejected",
     };
     let mut body = base(model, cond, status);
-    attach_evidence(&mut body, model, cond, evidence, None);
+    attach_evidence(&mut body, model, cond, evidence, seed);
     if let Some(reject) = verdict.reject() {
         body["rejected"] = reject_json(model, evidence, reject);
     }
@@ -251,13 +304,214 @@ fn invalid_message(invalid: InvalidModel) -> String {
     format!("モデルが整形式ではありません（{invalid:?}）")
 }
 
-/// 形式が合わない、または別のモデルに対する証拠。
+/// 形式が合わない、または別のモデルに対する証拠。検査条件を読めていないので、`conditions` は付けない。
 pub fn unreadable_evidence(model: &Model, message: &str) -> Value {
-    json!({
-        "status": "rejected",
-        "model": model.names.model,
-        "model_digest": model.digest,
-        "engine_version": ENGINE_VERSION,
-        "rejected": {"reason": "unreadable", "message": message},
-    })
+    let mut body = header(model, "rejected");
+    body["rejected"] = json!({"reason": "unreadable", "message": message});
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{check_report, inconsistency_report, simulation_report};
+    use crate::human::human;
+    use fmspec_core::evidence::{Certificate, Evidence, Limit};
+    use fmspec_ir::{default_conditions, load, Model, ENGINE_VERSION};
+    use fmspec_search::{
+        check_evidence, Inconsistency, Internal, Outcome, Sampled, SimOptions, SimStats, Stats, Status,
+    };
+    use serde_json::{json, Value};
+
+    const INCONSISTENCY: &str = "探索器の内部の不整合です。fmspec の不具合です";
+    const SUCCESSORS: &str = "状態での操作の遷移を列挙できません。操作が未定義か、状態が状態型に従いません";
+
+    /// 状態変数 `x`（`0..=3`、初期値0）と、`x` を1増やす操作 `inc` を持つモデル。
+    fn counter() -> Model {
+        let ir = json!({
+            "ir_version": 1,
+            "name": "counter",
+            "states": [{"name": "x", "type": {"int": {"min": 0, "max": 3}}, "initial": {"int": 0}}],
+            "actions": [{
+                "name": "inc",
+                "guard": {"lt": [{"var": 0}, {"int": 3}]},
+                "updates": [{"target": 0, "expr": {"add": [{"var": 0}, {"int": 1}]}}]
+            }]
+        });
+        load(&ir.to_string()).unwrap()
+    }
+
+    /// 探索器が内部の不整合を返したときの検査結果。`check` と同じく、判定ゲートには `Unavailable` を渡してある。
+    fn inconsistent(m: &Model, inconsistency: Inconsistency) -> Outcome {
+        let cond = default_conditions(m, false);
+        let stats = Stats {
+            visited_states: 2,
+            transitions: 1,
+            complete: false,
+        };
+        let mut o = check_evidence(m.checked(), &cond, Evidence::Unavailable(Limit::Interrupted), stats);
+        o.status = Status::InternalError(Internal::Inconsistent(inconsistency));
+        o
+    }
+
+    /// `a` に `b` の項目を加える。
+    fn merged(mut a: Value, b: Value) -> Value {
+        for (k, v) in b.as_object().unwrap() {
+            a[k] = v.clone();
+        }
+        a
+    }
+
+    fn identity(m: &Model) -> Value {
+        json!({"model": "counter", "model_digest": m.digest, "engine_version": ENGINE_VERSION})
+    }
+
+    #[test]
+    fn an_inconsistency_is_reported_as_an_internal_error_without_a_reason() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        let o = inconsistent(
+            &m,
+            Inconsistency::Successors {
+                action: 0,
+                state: vec![1, 2],
+            },
+        );
+        let body = check_report(&m, &cond, &o);
+        let expected = merged(
+            identity(&m),
+            json!({
+                "status": "internal_error",
+                "ir_version": 1,
+                "conditions": body["conditions"],
+                "strategy": "bfs",
+                "search": {"complete": false, "visited_states": 2, "transitions": 1, "time_ms": 0.0},
+                "gate": {"time_ms": body["gate"]["time_ms"]},
+                "inconsistency": {
+                    "kind": "successors",
+                    "action": "inc",
+                    "state": null,
+                    "encoded_state": [1, 2],
+                    "message": SUCCESSORS,
+                },
+                "message": INCONSISTENCY,
+            }),
+        );
+        assert_eq!(body, expected);
+        assert_eq!(
+            human(&body),
+            format!(
+                "InternalError: counter\n  不整合: {SUCCESSORS}\n    action: inc\n    encoded_state: [1,2]\n  {INCONSISTENCY}\n  探索: 未完走、訪問状態数 2、遷移数 1（探索器の報告）\n"
+            )
+        );
+    }
+
+    #[test]
+    fn an_inconsistency_in_a_well_typed_state_shows_the_state_and_the_action_index() {
+        let m = counter();
+        let o = inconsistent(
+            &m,
+            Inconsistency::Successors {
+                action: 5,
+                state: vec![2],
+            },
+        );
+        let body = check_report(&m, &default_conditions(&m, false), &o);
+        assert_eq!(body["inconsistency"]["action"], json!(5));
+        assert_eq!(body["inconsistency"]["state"], json!({"x": 2}));
+        assert_eq!(body["inconsistency"]["encoded_state"], json!([2]));
+        let text = human(&body);
+        assert!(
+            text.contains("    action: 5\n    state: x: 2\n    encoded_state: [2]\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_inconsistency_in_a_simulation_is_an_internal_error() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        let opts = SimOptions {
+            seed: 3,
+            traces: 1,
+            max_steps: 1,
+            interrupt: None,
+        };
+        let sampled = Sampled {
+            found: Some(inconsistent(
+                &m,
+                Inconsistency::Successors {
+                    action: 0,
+                    state: vec![9],
+                },
+            )),
+            stats: SimStats::default(),
+        };
+        let body = simulation_report(&m, &cond, &opts, &sampled, std::time::Duration::ZERO);
+        assert_eq!(body["status"], "internal_error");
+        assert_eq!(body["inconsistency"]["encoded_state"], json!([9]));
+        assert_eq!(body["message"], INCONSISTENCY);
+        assert!(body.get("reason").is_none(), "{body}");
+        assert!(body.get("rejected").is_none(), "{body}");
+    }
+
+    #[test]
+    fn an_inconsistency_in_the_graph_is_reported_in_place_of_the_coverage() {
+        let m = counter();
+        let body = inconsistency_report(
+            &m,
+            &Inconsistency::Successors {
+                action: 0,
+                state: vec![],
+            },
+        );
+        let expected = merged(
+            identity(&m),
+            json!({
+                "status": "internal_error",
+                "inconsistency": {
+                    "kind": "successors",
+                    "action": "inc",
+                    "state": null,
+                    "encoded_state": [],
+                    "message": SUCCESSORS,
+                },
+                "message": INCONSISTENCY,
+            }),
+        );
+        assert_eq!(body, expected);
+    }
+
+    /// 判定ゲートが証拠を拒否した `internal_error` の出力は、不整合を区別する前と同じである。
+    #[test]
+    fn a_rejected_certificate_is_still_reported_with_its_reason() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        let cert = Evidence::Certificate(Certificate {
+            conditions: cond.clone(),
+            states: vec![vec![0]],
+        });
+        let o = check_evidence(m.checked(), &cond, cert, Stats::default());
+        assert!(matches!(o.status, Status::InternalError(Internal::Rejected(_))));
+        let body = check_report(&m, &cond, &o);
+        assert_eq!(body["status"], "internal_error");
+        assert_eq!(body["certificate_states"], json!(1));
+        assert_eq!(
+            body["rejected"],
+            json!({
+                "reason": "missing_successor", "state": {"x": 0}, "action": "inc",
+                "message": "証明書の状態からの遷移先が、証明書に含まれません",
+            })
+        );
+        let message = "探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です";
+        assert_eq!(body["message"], message);
+        assert!(body.get("inconsistency").is_none(), "{body}");
+        assert_eq!(
+            human(&body),
+            format!(
+                "InternalError: counter\n  拒否の理由: 証明書の状態からの遷移先が、証明書に含まれません\n    state: x: 0\n    action: inc\n  {message}\n  証明書の状態数 1\n  探索: 未完走、訪問状態数 0、遷移数 0（探索器の報告）\n"
+            )
+        );
+    }
 }

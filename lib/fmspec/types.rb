@@ -264,10 +264,12 @@ module Fmspec
         nil
       end
 
+      # Array も集合として扱う。境界の形式は重複を含まない要素の配列なので、
+      # 要素を wire の値にしてから重複を除く（`[:a, :a]` は `Set[:a]` と同じ値になる）。
       def to_wire(value)
         return Types.unrepresentable(value) unless value.is_a?(::Set) || value.is_a?(Array)
 
-        value.map { |v| elem.to_wire(v) }
+        value.map { |v| elem.to_wire(v) }.uniq
       end
 
       def from_wire(json) = json.map { |v| elem.from_wire(v) }.to_set

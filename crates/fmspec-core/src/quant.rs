@@ -8,7 +8,7 @@
 use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, sty, stys, STy, SVal};
 use crate::encoding::{keys_exec, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_default_len, lemma_keys_pos, lemma_stys, wf_stype, wf_stypes, width_sum, MAX_KEYS};
+use crate::encoding::{lemma_default_len, lemma_keys_pos, lemma_stys, wf_stype, wf_stypes, width_sum};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
 #[cfg(verus_keep_ghost)]

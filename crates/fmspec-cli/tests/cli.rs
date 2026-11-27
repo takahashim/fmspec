@@ -43,12 +43,19 @@ impl Files {
         (code, body)
     }
 
-    fn get(&self, path: &str) -> String {
-        self.0
-            .borrow()
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| panic!("{path} が書かれていない"))
+    /// コマンドが書き出したJSONのファイル。
+    fn get(&self, path: &str) -> Value {
+        let text = self.0.borrow().get(path).cloned();
+        let text = text.unwrap_or_else(|| panic!("{path} が書かれていない"));
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn has(&self, path: &str) -> bool {
+        self.0.borrow().contains_key(path)
+    }
+
+    fn put(&self, path: &str, body: &Value) {
+        self.0.borrow_mut().insert(path.to_string(), body.to_string());
     }
 }
 
@@ -75,13 +82,14 @@ fn validate() {
     let f = files();
     let (code, body) = f.json(&["validate", "tickets.json"]);
     assert_eq!((code, &body["status"]), (0, &json!("valid")));
-    for bad in ["broken.json", "untyped.json", "missing.json"] {
+    for (bad, status) in [
+        ("broken.json", "invalid_model"),
+        ("untyped.json", "invalid_model"),
+        ("missing.json", "input_error"),
+    ] {
         let (code, body) = f.json(&["validate", bad]);
-        assert_eq!(code, 2, "{bad}");
-        assert!(
-            ["invalid_model", "input_error"].contains(&body["status"].as_str().unwrap()),
-            "{body}"
-        );
+        assert_eq!((code, &body["status"]), (2, &json!(status)), "{bad}");
+        assert!(body["message"].as_str().unwrap().starts_with(bad), "{body}");
     }
     let (code, out, err) = f.run(&["validate", "untyped.json"]);
     assert_eq!((code, out.as_str()), (2, ""));
@@ -147,9 +155,9 @@ fn certificates_can_be_saved_and_verified_separately() {
     // 別の検査条件での検証、状態を欠いた証明書、別のモデルの証明書は拒否する。
     let (code, body) = f.json(&["verify-certificate", "tickets.json", "cert.json", "--deadlock"]);
     assert_eq!((code, &body["rejected"]["reason"]), (1, &json!("condition_mismatch")));
-    let mut cert: Value = serde_json::from_str(&f.get("cert.json")).unwrap();
+    let mut cert = f.get("cert.json");
     cert["states"].as_array_mut().unwrap().pop();
-    f.0.borrow_mut().insert("short.json".to_string(), cert.to_string());
+    f.put("short.json", &cert);
     let (code, body) = f.json(&["verify-certificate", "tickets.json", "short.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
     assert_eq!(body["rejected"]["reason"], json!("missing_successor"));
@@ -171,9 +179,9 @@ fn traces_can_be_saved_and_replayed() {
     assert_eq!((code, &body["status"]), (2, &json!("error")));
 
     // 途中の状態を書き換えたトレースは拒否する。
-    let mut trace: Value = serde_json::from_str(&f.get("trace.json")).unwrap();
+    let mut trace = f.get("trace.json");
     trace["steps"][0]["state"]["sold"] = json!(3);
-    f.0.borrow_mut().insert("forged.json".to_string(), trace.to_string());
+    f.put("forged.json", &trace);
     let (code, body) = f.json(&["replay", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
     assert_eq!(
@@ -210,8 +218,14 @@ Violated: tickets / 不変条件 capacity_respected の違反
 #[test]
 fn usage_errors() {
     let f = files();
-    assert_eq!(f.run(&[]).0, 2);
-    assert_eq!(f.run(&["--help"]).0, 0);
+    let (code, out, err) = f.run(&[]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    assert!(err.starts_with("使い方:"), "{err}");
+    let (code, out, _) = f.run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("使い方:"), "{out}");
+    let (code, out, _) = f.run(&["--version"]);
+    assert_eq!((code, out), (0, format!("fmspec {}\n", env!("CARGO_PKG_VERSION"))));
     for args in [
         vec!["frobnicate"],
         vec!["check"],
@@ -304,9 +318,9 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     assert_eq!((code, &replayed["status"]), (1, &json!("violated")));
 
     // 受理されないトレースは縮小しない。
-    let mut forged: Value = serde_json::from_str(&f.get("long.json")).unwrap();
+    let mut forged = f.get("long.json");
     forged["steps"][0]["state"]["sold"] = json!(0);
-    f.0.borrow_mut().insert("forged.json".to_string(), forged.to_string());
+    f.put("forged.json", &forged);
     let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
 }
@@ -338,4 +352,154 @@ fn refine_exit_codes_follow_the_status() {
     assert_eq!((code, &body["status"]), (2, &json!("invalid_model")));
     let (code, body) = f.json(&["refine", "same.json", "--deadlock"]);
     assert_eq!((code, &body["status"]), (2, &json!("usage_error")));
+}
+
+#[test]
+fn commands_reject_options_they_do_not_use() {
+    let f = files();
+    for (args, flag) in [
+        (vec!["validate", "tickets.json", "--deadlock"], "--deadlock"),
+        (vec!["check", "tickets.json", "--seed", "1"], "--seed"),
+        (
+            vec!["simulate", "tickets.json", "--certificate-out", "out.json"],
+            "--certificate-out",
+        ),
+        (
+            vec![
+                "verify-certificate",
+                "tickets.json",
+                "c.json",
+                "--trace-out",
+                "out.json",
+            ],
+            "--trace-out",
+        ),
+        (
+            vec!["replay", "tickets.json", "t.json", "--actions", "purchase"],
+            "--actions",
+        ),
+        (
+            vec!["shrink", "tickets.json", "t.json", "--invariants", "capacity_respected"],
+            "--invariants",
+        ),
+    ] {
+        let (code, body) = f.json(&args);
+        assert_eq!((code, &body["status"]), (2, &json!("usage_error")), "{args:?}");
+        assert_eq!(
+            body["message"],
+            json!(format!("{} は {flag} を受け付けません", args[0])),
+            "{args:?}"
+        );
+    }
+    // 拒否したコマンドは実行しないので、何も書き出さない。
+    assert!(!f.has("out.json"));
+}
+
+#[test]
+fn usage_errors_go_to_stderr_without_json() {
+    let f = files();
+    for (args, message) in [
+        (
+            vec!["check", "tickets.json", "--trace-out"],
+            "--trace-out には値が必要です",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-states", "-1"],
+            "--max-states は0以上の整数です（\"-1\"）",
+        ),
+        (
+            vec!["simulate", "tickets.json", "--seed", "x"],
+            "--seed は0以上の整数です（\"x\"）",
+        ),
+        (vec!["check", "tickets.json", "--bogus"], "未知のオプション --bogus"),
+    ] {
+        let (code, out, err) = f.run(&args);
+        assert_eq!((code, out.as_str()), (2, ""), "{args:?}");
+        assert_eq!(err, format!("usage_error: {message}\n"), "{args:?}");
+    }
+}
+
+#[test]
+fn only_accepted_evidence_is_written() {
+    let f = files();
+    // 証明書はファイルにだけ書き、標準出力の結果には含めない。
+    let (code, body) = f.json(&[
+        "check",
+        "tickets.json",
+        "--certificate-out",
+        "cert.json",
+        "--trace-out",
+        "t0.json",
+    ]);
+    assert_eq!(code, 0);
+    assert!(body.get("certificate").is_none(), "{body}");
+    assert!(f.has("cert.json"));
+    // 検証できたときは、書き出すトレースがない。
+    assert!(!f.has("t0.json"));
+    // 違反や探索未完了では、証明書を書き出さない。
+    let (code, _) = f.json(&["check", "noguard.json", "--certificate-out", "c1.json"]);
+    assert_eq!(code, 1);
+    let (code, _) = f.json(&[
+        "check",
+        "tickets.json",
+        "--max-states",
+        "2",
+        "--certificate-out",
+        "c3.json",
+    ]);
+    assert_eq!(code, 3);
+    assert!(!f.has("c1.json") && !f.has("c3.json"));
+    // 違反なしのシミュレーションは、トレースを書き出さない。
+    let (code, _) = f.json(&["simulate", "tickets.json", "--traces", "3", "--trace-out", "t1.json"]);
+    assert_eq!(code, 0);
+    assert!(!f.has("t1.json"));
+    // 判定ゲートが拒否したトレースは、縮小の結果として書き出さない。
+    f.json(&["check", "noguard.json", "--trace-out", "trace.json"]);
+    let mut forged = f.get("trace.json");
+    forged["steps"][0]["state"]["sold"] = json!(3);
+    f.put("forged.json", &forged);
+    let (code, _) = f.json(&["shrink", "noguard.json", "forged.json", "--trace-out", "t2.json"]);
+    assert_eq!(code, 1);
+    assert!(!f.has("t2.json"));
+}
+
+#[test]
+fn a_failed_write_is_an_error() {
+    let args: Vec<String> = ["check", "noguard.json", "--json", "--trace-out", "out.json"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let model = tickets_without_guard().to_string();
+    let read = |_: &str| Ok(model.clone());
+    let write = |_: &str, _: &str| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    let run = fmspec_cli::run(&args, &read, &write);
+    // 違反を見つけても、書き出せなければ終了コード2にする。入力の誤りとは区別する。
+    assert_eq!(run.code, 2);
+    let body: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(body["status"], json!("output_error"), "{body}");
+    assert!(body["message"].as_str().unwrap().starts_with("out.json: "), "{body}");
+}
+
+#[test]
+fn an_option_is_not_taken_as_the_value_of_another() {
+    let f = files();
+    // `--json` を `--trace-out` の値として読むと、結果は人間向けになり、`--json` という名前のファイルに書き出す。
+    for args in [
+        vec!["check", "noguard.json", "--trace-out", "--json"],
+        vec!["check", "--trace-out", "--json"],
+    ] {
+        let (code, out, err) = f.run(&args);
+        let body: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}\n{out}{err}"));
+        assert_eq!(
+            (code, &body["status"], &body["message"]),
+            (2, &json!("usage_error"), &json!("--trace-out には値が必要です")),
+            "{args:?}"
+        );
+    }
+    assert!(!f.has("--json"));
+    let (code, _, err) = f.run(&["check", "tickets.json", "--max-states", "--deadlock"]);
+    assert_eq!(
+        (code, err.as_str()),
+        (2, "usage_error: --max-states には値が必要です\n")
+    );
 }

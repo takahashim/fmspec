@@ -173,4 +173,24 @@ class CheckTest < Minitest::Test
       expected["steps"] ? assert_equal(expected["steps"], steps) : assert_nil(steps)
     end
   end
+
+  # 探索器の内部の不整合は、公開APIからは起こせない。エンジンが返す形の結果を読めることを確かめる。
+  def test_an_inconsistency_of_the_search_is_an_internal_error_with_its_content
+    inconsistency = { "kind" => "successors", "action" => "purchase", "state" => nil, "encoded_state" => [9],
+                      "message" => "状態での操作の遷移を列挙できません。操作が未定義か、状態が状態型に従いません" }
+    result = Fmspec::Result.new("status" => "internal_error", "model" => "tickets",
+                                "inconsistency" => inconsistency,
+                                "message" => "探索器の内部の不整合です。fmspec の不具合です")
+    assert result.internal_error?
+    assert_nil result.rejected
+    assert_nil result.reason
+    assert_equal "purchase", result.inconsistency["action"]
+    assert_equal <<~TEXT, result.to_s
+      InternalError: tickets
+        不整合: 状態での操作の遷移を列挙できません。操作が未定義か、状態が状態型に従いません
+          action: purchase
+          encoded_state: [9]
+        探索器の内部の不整合です。fmspec の不具合です
+    TEXT
+  end
 end

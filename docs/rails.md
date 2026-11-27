@@ -175,6 +175,81 @@ end
 このテストは環境変数 `FMSPEC_PG_DATABASE`（既定は `fmspec_rails_test`）と `FMSPEC_PG_HOST` のDBを使い、なければ作る。
 PostgreSQLに接続できなければskipする。
 
+## ジョブのステップとクラッシュ
+
+`Context#perform_next_job` は、ジョブを丸ごと1つの操作として実行する。
+ジョブの途中で落ちることや、ジョブの途中に他の操作が割り込むことを検査するには、`job` でジョブを仕様の `process` に結合する。
+設計は [rails_jobs_design.md](rails_jobs_design.md) にある。
+
+ジョブの側では、`Fmspec::Rails::Checkpoints` を include し、`perform` の中に `checkpoint` でステップの境界を書く。
+
+```ruby
+class ChargeJob < ApplicationJob
+  include Fmspec::Rails::Checkpoints
+  retry_on PaymentGateway::Timeout, attempts: 3
+
+  def perform(order_id)
+    order = Order.find(order_id)
+    PaymentGateway.client.charge(order_id: order.id)
+    checkpoint :save
+    order.update!(status: "paid")
+  end
+end
+```
+
+`perform` の始めから最初の `checkpoint` までが、仕様の最初のステップである。
+`checkpoint :save` から次の `checkpoint`（または `perform` の終わり）までが、ステップ `save` である。
+`job` の外（本番、普通のテスト）では、`checkpoint` は何もしない。
+`checkpoint` はトランザクションの外に書く。
+トランザクションの中に書くと、仕様の名前にない `checkpoint` と同じく、`Fmspec::Rails::CheckpointError`（`:execution_error`）になる。
+
+```ruby
+binding = Fmspec::Rails.bind(Checkout, records: [Order], isolation: :deletion) do
+  setup do |c|
+    c[:order] = Order.create!
+    c[:gateway] = PaymentGateway.client = FakeGateway.new
+  end
+  job :job, ChargeJob, crash: :exception, error: PaymentGateway::Timeout,
+                       enqueue: ->(c, _id) { ChargeJob.perform_later(c[:order].id) }
+  observe(:charges) { |c| [c[:gateway].charges.length, 2].min }
+end
+```
+
+`job(プロセス, ジョブのクラス, ...)` は、プロセスの `setup`、各ステップ、`crash` と、プログラムカウンタ `job[i].pc` の `observe` を組み立てる。
+`process` と同じく、`isolation: :transaction` では使えない。
+
+| オプション | 内容 |
+|---|---|
+| `crash:` | `:exception`（既定）か `:kill` |
+| `error:` | `crash: :exception` で上げる例外のクラス。メッセージを1つ受け取って作れるもの。既定は `Fmspec::Rails::InjectedFailure` |
+| `claim:` | `->(payload, id) { ... }`。インスタンスが取り出すジョブを選ぶ。既定は、そのクラスのまだ取り出していない最初のジョブ |
+| `enqueue:` | `->(context, id) { ... }`。インスタンスの最初の `setup` でジョブを積む。仕様にジョブを積む操作がないときに使う |
+| `timeout:` | `process` と同じ |
+
+各ステップは、`perform` を実行するFiberを、次の `checkpoint` まで進める。
+最初のステップで、キューからジョブを取り出す。
+ジョブがなければ `Fmspec::Rails::JobNotEnqueued`（`:execution_error`）になる。
+`perform` が終わったとき、同じ `job_id` のジョブがキューにあれば（`retry_on` が積み直した）、プログラムカウンタは最初のステップに戻り、次のステップで積み直されたジョブを取り出す。
+なければ `:done` である。
+
+クラッシュは、止まっている `checkpoint` から例外を上げる。
+
+- `crash: :exception` は、`error:` の例外を上げ、実装の `retry_on` と `discard_on` に処理させる。積み直されれば最初のステップ、例外が外へ出るか積み直されなければ `:crashed` になる。仕様の `crash: :restart` と `retries:` に対応する。
+- `crash: :kill` は、ワーカーのプロセスの停止を模す。止まっている `perform` を再開せずに捨てるので、`rescue`、`retry_on`、`ensure` のどれも動かない。`perform` が使っていたDBの接続は切るので、DBはその接続のロックを解放する。仕様が `:restart` ならジョブを同じ内容でキューに戻し（止まったワーカーのジョブを拾い直すバックエンド）、`:abort` なら戻さない。仕様の `max_crashes:` か `:abort` と組み合わせる。
+
+`job[i].pc` を観測するので、実装の `retry_on attempts:` と仕様の `retries:` の食い違い、`retry_on` が捕まえない例外、`checkpoint` の書き落としは、観測の不一致になる。
+
+テストのプロセスは止まらないので、`crash: :kill` のあとも、捨てた `perform` が持っていたRubyの資源（`Mutex` など）は残る。
+`checkpoint` をまたいで `Mutex` を持つジョブでは、他のインスタンスが待たされて `:step_timeout` になる。
+プロセスの間で共有するロックは、DBやRedisで持つ。
+
+`job` に結合したクラスのジョブを `perform_next_job` が取り出せば、`Fmspec::Rails::IsolationError` になる。
+`enqueued_jobs` は、`job` が取り出したジョブを含まない。
+
+テストは `fmspec-rails/test/job_test.rb` と `fmspec-rails/test/job_lock_test.rb`（PostgreSQLのadvisory lock）にある。
+`examples/crash/double_charge.rb` の仕様の反例を実装のジョブで再現し、`retry_on attempts:` の変異、`checkpoint` の誤りを検出する。
+ジョブはインスタンスのスレッドの接続で動くので、ファイルのSQLiteを使う。
+
 ## 代表例と変異
 
 `fmspec-rails/test` に、注文の決済のRailsアプリケーションと、その適合性検査がある。

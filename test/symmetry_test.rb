@@ -72,6 +72,26 @@ class SymmetryTest < Minitest::Test
     assert_predicate model.check(symmetry: false), :verified?
   end
 
+  def test_crashing_and_restarting_instances_are_symmetric
+    # 3つのジョブが、それぞれ決済してから保存する。保存の前に落ちると、再試行で決済し直す。
+    model = ->(symmetric) do
+      Fmspec.define(:jobs) do
+        state :charges, int(0..6), initial: 0
+        process :job, count: 3, crash: :restart, symmetric: symmetric do
+          local :paid, bool, initial: false
+          step(:charge) { |s| update charges: Fmspec.min(s.charges + 1, 6) }
+          step(:save) { |_s| update paid: true }
+        end
+        invariant(:at_most_two_charges_each) { |s| s.charges <= 6 }
+      end
+    end
+    full = model.(false).check
+    reduced = model.(true).check
+    assert_predicate full, :verified?, full.to_s
+    assert_predicate reduced, :verified?, reduced.to_s
+    assert_operator reduced.visited_states, :<, full.visited_states
+  end
+
   def test_explicit_blocks
     model = Fmspec.define(:pairs) do
       state :a, int(0..2), initial: 0

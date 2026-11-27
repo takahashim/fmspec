@@ -177,6 +177,14 @@ pub fn human(body: &Value) -> String {
             }
         }
     }
+    if let Some(inconsistency) = body.get("inconsistency") {
+        let _ = writeln!(out, "  不整合: {}", plain(&inconsistency["message"]));
+        for key in ["action", "state", "encoded_state"] {
+            if let Some(v) = inconsistency.get(key).filter(|v| !v.is_null()) {
+                let _ = writeln!(out, "    {key}: {}", pairs(v));
+            }
+        }
+    }
     if let Some(message) = body.get("message") {
         let _ = writeln!(out, "  {}", plain(message));
     }

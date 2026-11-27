@@ -36,7 +36,7 @@ fn pair(max_a: i64, max_b: i64) -> Model {
 fn the_gate_checks_the_symmetry_itself() {
     let m = pair(2, 1);
     let cond = default_conditions(&m, false);
-    let full = bfs(m.checked(), &cond, &BfsOptions::default()).evidence;
+    let full = bfs(m.checked(), &cond, &BfsOptions::default()).evidence.unwrap();
     let v = decide_symmetric(m.checked(), &cond, &m.names.symmetry, &full);
     assert_eq!(v.kind(), VerdictKind::Rejected);
     assert_eq!(v.reject(), Some(Reject::NotSymmetric(0)));
@@ -52,12 +52,13 @@ fn representatives_and_supersets_are_accepted_and_missing_representatives_are_re
     let cond = default_conditions(&m, false);
     let sw = fmspec_core::sym::symmetry(m.raw(), &cond, &m.names.symmetry).unwrap();
     let (reduced, stats) = bfs_sym(m.checked(), &cond, &sw, &BfsOptions::default());
+    let reduced = reduced.unwrap();
     assert_eq!(stats.visited_states, 6);
     let v = decide_symmetric(m.checked(), &cond, &m.names.symmetry, &reduced);
     assert_eq!(v.kind(), VerdictKind::Verified);
 
     // すべての状態を含む証明書も、代表元の証明書として受理する。
-    let full = bfs(m.checked(), &cond, &BfsOptions::default()).evidence;
+    let full = bfs(m.checked(), &cond, &BfsOptions::default()).evidence.unwrap();
     let v = decide_symmetric(m.checked(), &cond, &m.names.symmetry, &full);
     assert_eq!(v.kind(), VerdictKind::Verified);
 

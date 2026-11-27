@@ -132,9 +132,6 @@ name = "fmspec-cli"
 version = "0.1.0"
 dependencies = [
  "fmspec-api",
- "fmspec-core",
- "fmspec-ir",
- "fmspec-search",
  "serde_json",
 ]
 
@@ -159,8 +156,10 @@ name = "fmspec-search"
 version = "0.1.0"
 dependencies = [
  "fmspec-core",
+ "fmspec-ir",
  "hashbrown",
  "rustc-hash",
+ "serde_json",
 ]
 
 [[package]]

@@ -33,6 +33,7 @@ pub open spec fn in_cert(cert: Seq<Vec<i64>>, s: Seq<i64>) -> bool {
 ```
 
 `verus!` の外には、`use`、属性、コメントしか置かない（`rake verus:coverage` が確かめる）。
+`lib.rs` はモジュールの宣言だけを持つので、この検査の対象外である。
 例外は `impls.rs` で、`Clone` や `PartialEq` などの標準トレイトを `verus!` の外に手で書いている。
 Verusは、再帰的な型や `Vec` を持つ型の `derive` に仕様を付けられないためである。
 `impls.rs` は証明の対象外で、判定の経路からは呼ばない。
@@ -47,6 +48,8 @@ Verusは、再帰的な型や `Vec` を持つ型の `derive` に仕様を付け�
 したがって、`cargo build` や `cargo test` だけでは証明は検査されない。
 証明を変えたら `rake verus` を実行する。
 `Cargo.toml` の `cfg(verus_keep_ghost)` は、Verusがghostコードを残すときに使う設定で、cargoビルドの警告を抑えるために書いてある。
+ghostコードでだけ使う `use` には `#[cfg(verus_keep_ghost)]` を付ける（付けないと、cargoビルドで使われない `use` の警告が出る）。
+付けた `use` は、使われなくなってもcargoビルドでもVerusでも警告されないので、`rake verus:imports`（`rake verus:proof` に含まれる）が検査する。
 
 ## 3種類の関数
 
@@ -66,7 +69,7 @@ exec の関数の `ensures` が、実装の結果が spec の定義と一致す�
 | `eval_spec`、`eval_l` | `eval`、`eval_in` | `eval.rs` |
 | `step_spec` | `step`、`enumerate` | `step.rs` |
 | `wf` | `validate_raw` | `typing.rs` |
-| `inductive`、`safe` | `check_certificate` | `cert.rs` |
+| `inductive`、`safe` | `check_certificate` | `cert.rs`（`safe` は `semantics.rs`） |
 | `trace_ok`、`claim_holds` | `check_trace` | `trace.rs` |
 | `verdict_sound` | `decide` | `gate.rs` |
 
@@ -531,7 +534,8 @@ VERUS_MUTANTS_FILES=cert.rs rake verus:mutants
 2. `verus:trusted`：信頼する項目がない。
 3. `verus:coverage`：`verus!` の外にコードがない（`impls.rs` を除く）。
 4. `verus:contract`：公開関数が `requires` を持たない。
-5. `verus --crate-type=lib crates/fmspec-core/src/lib.rs` で証明を検査し、エラーも警告もない。
+5. `verus:imports`：使われない `use` がない（ghost コードでだけ使う `use` も含む）。
+6. `verus --crate-type=lib crates/fmspec-core/src/lib.rs` で証明を検査し、エラーも警告もない。
 
 Verusの版は `rakelib/verus.rake` の `VERUS_VERSION` に固定している。
 リリースは [Verusのリリースページ](https://github.com/verus-lang/verus/releases) から取得する。

@@ -7,6 +7,7 @@
 
 ```sh
 cargo build --release
+rake compile                         # bench/models.rb がDSLでモデルを作るのに使う native extension
 ruby -Ilib bench/run.rb              # 各モデルを3回検査し、最小の時間を表にする
 ruby -Ilib bench/run.rb --repeat 5 --fmspec PATH/TO/fmspec
 ruby -Ilib bench/models.rb DIR       # モデルのIRを DIR に書く
@@ -85,6 +86,6 @@ cargo test -p fmspec-core --release --test lowering_size -- --include-ignored --
 ## 残っている課題
 
 - 時間の大半は、下ろした式の評価（`eval_in`）と、遷移ごとの状態と引数の列の確保である。
-  複合型の式は、スロットごとの式と正規形の判定に下ろすので、式が大きい。下ろし方の改善は、`preserve.rs` の証明の更新を伴う。
+  複合型の式は、スロットごとの式と正規形の判定に下ろすので、式が大きい。下ろし方の改善は、`preserve.rs` と `preserve_*.rs` の証明の更新を伴う。
 - 証明書の検査は探索と同じ量の計算をする。証明書の圧縮や、検査の並列化は後続の課題である（仕様書§14.2）。
 - 状態の圧縮、構造共有、バイトコードVM、並列探索、Partial Order Reduction は未着手である（仕様書§13）。

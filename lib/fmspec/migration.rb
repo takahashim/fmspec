@@ -31,7 +31,7 @@ module Fmspec
         raise BuildError, "移行 #{@name}: 最初の段階 #{phase} へは進めません" if phase == @phases.first
         raise BuildError, "移行 #{@name}: advance #{phase} は定義済みです" if @advances.key?(phase)
 
-        Lint.check!(block, "移行 #{@name} の advance #{phase}")
+        Lint.check!(block, "移行 #{@name} の advance #{phase}", statements: :effect)
         @advances[phase] = [block, caller_locations(1, 1)&.first]
         nil
       end

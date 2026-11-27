@@ -10,12 +10,13 @@
 //!
 //! - IR、オプション、証拠、結果は、いずれもJSON文字列で受け渡す。CLIと同じ `fmspec-api` を呼ぶ。
 //! - 拡張は Ruby のブロックやメソッドを呼び出さない。
-//! - 探索と証拠の検査は GVL を解放して実行し、Ruby の中断要求で探索を打ち切る。
-//!   割り込みは Ruby の例外として伝わり、例外が発生しなかった場合は `inconclusive` の結果を返す。
+//! - 探索と証拠の検査は GVL を解放して実行する。検査、シミュレーション、証明書の検査、カバレッジ、テスト経路は、
+//!   Ruby の中断要求で打ち切る。割り込みは Ruby の例外として伝わり、例外が発生しなかった場合は `inconclusive` の結果を返す。
+//!   `replay` と `shrink` は打ち切らない。
 //! - panic は `Fmspec::InternalError` になる。`Exception` の子で、`rescue => e` では捕まらない。
 
 use nupur::args::string_arg;
-use nupur::rb::{prelude::*, Builtin, DataClass, Error, ExceptionClass, RbConst, Ruby, Value};
+use nupur::rb::{prelude::*, Builtin, DataClass, Error, RbConst, Ruby, Value};
 use nupur::string::ReadError;
 use nupur::typed::{Birth, Payload, TypedType};
 use nupur::{function, method};
@@ -47,7 +48,6 @@ static MODEL: TypedType<ModelBox, 0> = TypedType::base(c"Fmspec::Native::Model")
 static MODEL_CLASS: RbConst<DataClass> = RbConst::new();
 static SESSION: TypedType<SessionBox, 0> = TypedType::base(c"Fmspec::Native::Session");
 static SESSION_CLASS: RbConst<DataClass> = RbConst::new();
-static INTERNAL: RbConst<ExceptionClass> = RbConst::new();
 
 fn read(ruby: &Ruby, v: Value) -> Result<String, Error> {
     let copy = nupur::string::read_utf8(ruby, string_arg(v)?, |_| None::<()>).map_err(|e| match e {
@@ -88,11 +88,11 @@ fn model_describe(ruby: &Ruby, this: Value) -> Result<Value, Error> {
     text(ruby, &fmspec_api::describe(&handle.data().model).to_string())
 }
 
-/// `#check(options_json)`: 幅優先探索で検査し、結果のJSON文字列を返す。
-fn model_check(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error> {
-    let handle = MODEL.check(this)?;
-    let options = read_json(ruby, options)?;
-    let model: &fmspec_api::Model = &handle.data().model;
+/// GVL を解放して探索を実行し、結果のJSON文字列を返す。Ruby の中断要求で探索を打ち切る。
+fn search<F>(ruby: &Ruby, run: F) -> Result<Value, Error>
+where
+    F: FnOnce(fmspec_api::Interrupt<'_>) -> Result<Json, String> + Send,
+{
     // `Cancel::requested` は、GVL を解放した処理が中断要求を問い合わせるための Nupur の関数で、
     // アトミックな値を読むだけである。nupur_lints は Nupur の関数を一律に Ruby-free でないものと
     // 扱うので、ここで例外にする。lint が直れば、この expect が満たされなくなって検査に失敗する。
@@ -102,9 +102,17 @@ fn model_check(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error>
     )]
     let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
         let interrupt = || cancel.requested();
-        fmspec_api::to_text(fmspec_api::check(model, &options, Some(&interrupt)))
+        fmspec_api::to_text(run(Some(&interrupt)))
     })?;
     text(ruby, &result)
+}
+
+/// `#check(options_json)`: 幅優先探索で検査し、結果のJSON文字列を返す。
+fn model_check(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(this)?;
+    let options = read_json(ruby, options)?;
+    let model: &fmspec_api::Model = &handle.data().model;
+    search(ruby, move |interrupt| fmspec_api::check(model, &options, interrupt))
 }
 
 /// `#simulate(options_json)`: ランダムシミュレーションで検査し、結果のJSON文字列を返す。
@@ -112,16 +120,7 @@ fn model_simulate(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Err
     let handle = MODEL.check(this)?;
     let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    // `model_check` と同じ理由の例外。
-    #[cfg_attr(
-        dylint_lib = "nupur_lints",
-        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
-    )]
-    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
-        let interrupt = || cancel.requested();
-        fmspec_api::to_text(fmspec_api::simulate(model, &options, Some(&interrupt)))
-    })?;
-    text(ruby, &result)
+    search(ruby, move |interrupt| fmspec_api::simulate(model, &options, interrupt))
 }
 
 /// `#verify_certificate(certificate_json, options_json)`: 提示された証明書を検査する。
@@ -130,21 +129,9 @@ fn model_verify_certificate(ruby: &Ruby, this: Value, certificate: Value, option
     let certificate = read(ruby, certificate)?;
     let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    // `model_check` と同じ理由の例外。
-    #[cfg_attr(
-        dylint_lib = "nupur_lints",
-        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
-    )]
-    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
-        let interrupt = || cancel.requested();
-        fmspec_api::to_text(fmspec_api::verify_certificate(
-            model,
-            &certificate,
-            &options,
-            Some(&interrupt),
-        ))
-    })?;
-    text(ruby, &result)
+    search(ruby, move |interrupt| {
+        fmspec_api::verify_certificate(model, &certificate, &options, interrupt)
+    })
 }
 
 /// `#coverage(options_json)`: テストで確実に通った状態と遷移を、到達可能な状態と遷移と比べる。
@@ -152,16 +139,7 @@ fn model_coverage(ruby: &Ruby, this: Value, options: Value) -> Result<Value, Err
     let handle = MODEL.check(this)?;
     let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    // `model_check` と同じ理由の例外。
-    #[cfg_attr(
-        dylint_lib = "nupur_lints",
-        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
-    )]
-    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
-        let interrupt = || cancel.requested();
-        fmspec_api::to_text(fmspec_api::coverage(model, &options, Some(&interrupt)))
-    })?;
-    text(ruby, &result)
+    search(ruby, move |interrupt| fmspec_api::coverage(model, &options, interrupt))
 }
 
 /// `#test_paths(options_json)`: 到達可能な状態と入力の組を覆うテスト経路を作る。
@@ -169,16 +147,9 @@ fn model_test_paths(ruby: &Ruby, this: Value, options: Value) -> Result<Value, E
     let handle = MODEL.check(this)?;
     let options = read_json(ruby, options)?;
     let model: &fmspec_api::Model = &handle.data().model;
-    // `model_check` と同じ理由の例外。
-    #[cfg_attr(
-        dylint_lib = "nupur_lints",
-        expect(ruby_in_gvl_released_body, reason = "Cancel::requested only loads an atomic")
-    )]
-    let result = nupur::gvl::without_gvl_cancellable(ruby, move |cancel| {
-        let interrupt = || cancel.requested();
-        fmspec_api::to_text(fmspec_api::test_paths(model, &options, Some(&interrupt)))
-    })?;
-    text(ruby, &result)
+    search(ruby, move |interrupt| {
+        fmspec_api::test_paths(model, &options, interrupt)
+    })
 }
 
 /// `#replay(trace_json)`: 提示されたトレースを再生する。
@@ -187,6 +158,18 @@ fn model_replay(ruby: &Ruby, this: Value, trace: Value) -> Result<Value, Error> 
     let trace = read(ruby, trace)?;
     let model: &fmspec_api::Model = &handle.data().model;
     let result = nupur::gvl::without_gvl(ruby, move || fmspec_api::replay(model, &trace).to_string())?;
+    text(ruby, &result)
+}
+
+/// `#shrink(trace_json, options_json)`: モデル違反のトレースを縮小する。
+fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Result<Value, Error> {
+    let handle = MODEL.check(this)?;
+    let trace = read(ruby, trace)?;
+    let options = read_json(ruby, options)?;
+    let model: &fmspec_api::Model = &handle.data().model;
+    let result = nupur::gvl::without_gvl(ruby, move || {
+        fmspec_api::to_text(fmspec_api::shrink(model, &trace, &options))
+    })?;
     text(ruby, &result)
 }
 
@@ -249,18 +232,6 @@ fn session_candidates(ruby: &Ruby, this: Value) -> Result<Value, Error> {
     text(ruby, &candidates.to_string())
 }
 
-/// `#shrink(trace_json, options_json)`: モデル違反のトレースを縮小する。
-fn model_shrink(ruby: &Ruby, this: Value, trace: Value, options: Value) -> Result<Value, Error> {
-    let handle = MODEL.check(this)?;
-    let trace = read(ruby, trace)?;
-    let options = read_json(ruby, options)?;
-    let model: &fmspec_api::Model = &handle.data().model;
-    let result = nupur::gvl::without_gvl(ruby, move || {
-        fmspec_api::to_text(fmspec_api::shrink(model, &trace, &options))
-    })?;
-    text(ruby, &result)
-}
-
 /// `Native.refine(refinement_json, options_json)`: 詳細化の文書を読み込んで検査し、結果のJSON文字列を返す。
 /// 読み込めなければ、理由を書いたJSON文字列（`status` が `invalid_model`）を返す。
 fn refine(ruby: &Ruby, document: Value, options: Value) -> Result<Value, Error> {
@@ -308,7 +279,6 @@ fn check(ruby: &Ruby) -> Result<(), Error> {
 fn init(ruby: &Ruby) -> Result<(), Error> {
     let fmspec = ruby.define_module("Fmspec")?;
     let internal = fmspec.define_error("InternalError", ruby.exception_exception())?;
-    INTERNAL.set(internal)?;
     nupur::rb::error::INTERNAL_ERROR.set(internal)?;
 
     let native = fmspec.define_module("Native")?;

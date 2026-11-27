@@ -315,13 +315,37 @@ Rubyの `Enumerable` の `all?` や `select` も、ブロックが返す記号�
 - 記号ブロックの中の構文すべてが対象で、記号式に使っているかどうかは区別しない。静的な分岐や繰り返しは、記号ブロックの外に書く。
 - ブロックから呼ぶメソッドの中は見ない。`==`、`!=`、`!` は記号式の演算子が実行時に拒否するが、メソッドの中の `if` や `&&` は検出できない。
 - `all?`、`any?`、`include?` は、記号式にもある。Rubyのリテラルの `Array`、`Hash`、`Range`、`Set[...]` と、`map` や `select` などの結果に対する呼び出しだけを拒否する。変数に入れたRubyの配列の `all?` は、記号式と区別できないので検出できない。
+- ソースを読めないブロック（`eval` した文字列の中など）は検査できないので拒否する。
+- 同じ行で始まるブロックが複数あれば、すべて検査する。
+
+式を書いても、その結果が使われなければ仕様に残らない。
+記号ブロックの中で、記号式の演算やメソッドの呼び出し、`ite` や `all` などの関数の呼び出し、リテラル、変数の読み出しだけの文は、次の場合に `Fmspec::BuildError` で拒否する。
+
+| ブロック | 拒否する文 | 典型的な誤り |
+|---|---|---|
+| `action`、`step`、`advance`、`on_accept`、`on_reject` | 式だけの文（最後の文を含む） | `guard` の書き忘れ（`s.n < 3` だけの行） |
+| `invariant`、`terminal`、`initially`、`ensures`、`holds` など | 最後の文より前の、式だけの文 | 条件を2行に分けて書く（ブロックの値は最後の式だけ） |
+
+```ruby
+action :buy do |s|
+  s.stock > 0              # 拒否する。guard s.stock > 0 と書く
+  update stock: s.stock - 1
+end
+
+invariant(:bounded) do |s|
+  s.n >= 0                 # 拒否する。(s.n >= 0) & (s.n <= 3) と書く
+  s.n <= 3
+end
+```
+
+代入（`x = s.n + 1`）と、ヘルパーの lambda やメソッドの呼び出しは、効果を持つかもしれないので拒否しない。
+文の検査はブロックの最上位の文だけが対象で、中の Ruby のブロック（`map` など）の文は調べない。
+同じ行で始まるブロックが複数あるときは、ブロックの引数の名前で対象のブロックを1つに決められる場合だけ、文を検査する。
 
 Rubyの `true`、`false`、`nil` の `&`、`|`、`^` に記号式を渡すと（`true & s.on`、`(x ? false : true) & 記号式`）、
 Rubyの真偽値の演算になり、記号式は式に残らない。
 これは記号ブロックの外のヘルパー（lambda やメソッド）でも起きるので、構文検査ではなく、実行時に `Fmspec::BuildError` で拒否する。
 記号式を左に書くか（`s.on & true`）、`all(...)` や `any(...)` を使う。
-- ソースを読めないブロック（`eval` した文字列の中など）は検査できないので拒否する。
-- 同じ行で始まるブロックが複数あれば、すべて検査する。
 
 ## モデル合成
 
@@ -434,6 +458,79 @@ end
 
 read、write、commit などのどこでステップを区切るかは、仕様を書く人が決める。
 DBの分離レベル、ロック、制約は、ステップのguardと更新で表す仕様の仮定であり、エンジンがDBの意味を保証するものではない。
+
+### クラッシュ
+
+`process` に `crash:` を書くと、ステップの境界でインスタンスがクラッシュする操作を自動で加える（設計は [crash_design.md](crash_design.md)）。
+試験的な機能である。
+
+```ruby
+Checkout = Fmspec.define(:checkout) do
+  state :charges, int(0..2), initial: 0 # 決済サービス側の決済の回数
+  state :paid, bool, initial: false     # DBの注文の支払い済みフラグ
+
+  process :job, crash: :restart do
+    step(:charge) { |s| update charges: min(s.charges + 1, 2) }
+    step(:save) { |_s| update paid: true }
+  end
+
+  invariant(:charged_at_most_once) { |s| s.charges <= 1 }
+end
+
+Checkout.check.trace.steps.map(&:action)
+# => [:"job[0].charge", :"job[0].crash", :"job[0].charge"]
+```
+
+| オプション | 内容 |
+|---|---|
+| `crash: :abort` | クラッシュしたインスタンスは、そこで終わる。再試行のないWebリクエストにあたる |
+| `crash: :restart` | クラッシュしたインスタンスは、最初のステップからやり直す。Active Jobの再試行にあたる |
+| `crash_at: [ステップ, ...]` | クラッシュしうる位置。プログラムカウンタがそのステップのとき（そのステップを実行する前）に落ちうる。既定は、最初のステップを除くすべてのステップ |
+| `max_crashes: n` | `:restart` のとき、インスタンスごとのクラッシュの回数の上限。既定は1。環境についての仮定で、上限を超えて落ちる実行は検査しない |
+| `retries: n` | `:restart` のとき、実装が再試行する回数。尽きたあとに落ちると、インスタンスは `:crashed` で終わる（ジョブを捨てる）。`max_crashes:` とは一緒に書けない |
+
+`process` のブロックでは、次の語彙も使える。
+
+| 語彙 | 内容 |
+|---|---|
+| `local(名前, 型, initial: 値, durable: true)` | `:restart` のクラッシュで初期値に戻らないローカル変数。ジョブの引数のように、永続化された値にあたる |
+| `on_crash { \|s\| ... }` | クラッシュで環境に起きること。`update`、`unchanged`、`choose`、`guard`、`ensures`、`preserves` を使える。`returns`、`accept_if`、`goto` は使えず、ローカル変数は更新できない |
+
+```ruby
+process :worker, count: 2, crash: :abort do |id|
+  step(:lock) { |s| guard s.holder.eq(-1); update holder: id }
+  step(:work) { |s| update count: s.count + 1 }
+  step(:unlock) { |_s| update holder: -1 }
+  # 接続が切れると、DBはロックを解放する。
+  on_crash { |s| update holder: ite(s.holder.eq(id), -1, s.holder) }
+end
+```
+
+仕様は、基本のIRに次のように展開する。
+
+- インスタンスごとに、操作 `worker[0].crash` を加える。guard は「プログラムカウンタが `crash_at:` のどれか」と、`on_crash` のguardの連言である。
+- `:abort` では、プログラムカウンタの列挙型にラベル `:crashed` を加え、クラッシュでプログラムカウンタを `:crashed` にする。`terminal` を書かなければ、終端条件は「すべてのインスタンスが `:done` か `:crashed`」になる。
+- `:restart` では、状態変数 `job[0].crashes`（`int(0..max_crashes)`）を加え、guard に「回数が上限未満」を加える。クラッシュで、プログラムカウンタを最初のステップに、`durable: true` でないローカル変数を初期値に戻し、回数を1増やす。初期値の候補が複数あるローカル変数は、同じ名前の内部選択で選び直す。
+- `retries: n` では、回数 `job[0].crashes`（`int(0..n)`）とラベル `:crashed` を加え、guard に回数を含めない。回数が `n` 未満なら `:restart` と同じく更新し、そうでなければプログラムカウンタを `:crashed` にする。
+- `on_crash` の更新は、そのままクラッシュの操作の更新になる。`on_crash` を書かなければ、共有の状態変数は変わらない。
+
+記号ブロックからは、`s.worker[0].crashed`（`:abort` か `retries:` でクラッシュして終えた）と `s.job[0].crashes`（`:restart` でクラッシュした回数）を参照できる。
+`s.worker[0].done` は、最後のステップまで実行して終えたときだけ真である。
+`crash`、`crashed`、`crashes` は、ステップとローカル変数の名前に使えない。
+
+`crash:` を使うべきなのは、トランザクションの外の副作用（外部APIの呼び出し、ジョブの投入、メールの送信）を持つプロセスである。
+落ちたあとに再試行する（Active Job、キューのワーカー）なら `:restart` と `retries:`、再試行しない（Webリクエスト）なら `:abort` を使う。
+全体のクラッシュの回数の上限（「どれか1つだけが1回落ちる」）は、共有の状態変数と `on_crash` の guard で書く。
+例は `examples/crash/` にある。
+
+クラッシュはステップの間でだけ起きる。
+ステップはatomicなので、ステップの途中で落ちることは、そのステップが起きなかったことと同じとみなす。
+トランザクションの外の副作用（外部APIの呼び出し、ジョブの投入）の前後で落ちる場合を見たければ、そこでステップを分ける。
+
+クラッシュの操作は普通の操作なので、検査条件 `actions:` で検査の対象から外せる。
+有界応答性と組み合わせると、`:abort` で義務を残したまま終わることを違反として見つけられる。
+`Fmspec.compose` では接頭辞が付き、`sync` には使えない。
+実装との適合性検査では、bindingの `process` の `crash` でクラッシュを結合する（「並行するプロセスの実装」）。
 
 ## 有界応答性
 
@@ -638,7 +735,9 @@ Workers.check(symmetry: false)     # 削減しない
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
 | `reason` | `:inconclusive` の理由 |
-| `visited_states`、`search`、`simulation` | 探索器の報告。検査済みの値ではない |
+| `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
+| `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
+| `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
 | `to_s` | 人間向けの報告 |
 | `to_h` | エンジンの結果（[ir.md](ir.md)の形式） |
 
@@ -649,8 +748,13 @@ Workers.check(symmetry: false)     # 削減しない
 シミュレーションで見つけたトレースに使う。
 幅優先探索の反例は、不変条件の違反については最初から最短である。
 
+`:internal_error` は fmspec の不具合を示す。
+探索器が生成した証拠を判定ゲートが拒否した場合は `rejected` に理由があり、
+探索器が内部の不整合で証拠を生成できなかった場合は `inconsistency` に内容がある（[ir.md](ir.md)）。
+
 エンジン内部のpanicは `Fmspec::InternalError` になる。
 これは `Exception` の子で、`rescue => e` では捕まらない。
+カバレッジとテスト経路のグラフを集める途中で探索器の内部の不整合を見つけた場合も、`Fmspec::InternalError` になる。
 
 ## 実装との適合性検査
 
@@ -692,6 +796,7 @@ Railsアプリケーションとの結合と合わせて、[rails.md](rails.md) 
 
 値の対応は次のとおりである。
 仕様の値にならない値（別の型の値、`option` でない型の `nil`、範囲外の整数、未定義のラベル）は、仕様のどの値とも一致しない。
+`set_of` の値として返した Array は集合として扱い、重複した要素はまとめる（`[:apple, :apple]` は `Set[:apple]` と同じ値である）。
 
 | 仕様の型 | 実装の値（`observe` と戻り値） | `command` に渡す値 |
 |---|---|---|
@@ -770,6 +875,7 @@ end
 | `setup { \|context, id\| ... }` | インスタンスのコンテキスト（DBの接続など）を返す。省略すると、テストケースのコンテキストを使う |
 | `teardown { \|instance\| ... }` | インスタンスの終わりに呼ばれる。失敗したケースでも呼ばれる |
 | `step(:ステップ) { \|instance\| ... }` | ステップのハンドラ。`method:` と `inject:` は `command` と同じ |
+| `crash { \|instance\| ... }` | クラッシュのハンドラ（仕様の `process` に `crash:` があるとき）。`method:` と `inject:` は `command` と同じ |
 
 テストは、ケースごとにインスタンスごとの専用のスレッドを立て、そのスレッドで `setup`、各ステップ、`teardown` を実行する。
 ステップは、テストが選んだ順に1つずつ実行する。
@@ -782,6 +888,27 @@ end
 実装のロックで待たされたステップが典型である。
 待たされているスレッドは、他のスレッドの `teardown` がロックを解放すれば終わることがあるので、最後に終える。
 それでも終わらなければ、スレッドを止める。
+
+クラッシュの操作を選ぶと、テストはインスタンスのスレッドで `crash` のハンドラを実行し、そのスレッドを終える。
+落ちたインスタンスのコンテキストに `teardown` は呼ばないので、接続を閉じるなどの資源の解放はハンドラで行う。
+仕様が `crash: :restart` で再試行が残っていれば、新しいスレッドで `setup` を同じ番号でもう一度呼び、以後のステップをそのスレッドで実行する。
+`:abort` と、`retries:` が尽きたあとは、`setup` を呼ばない。
+再起動の `setup` が例外を上げれば `:execution_error` になる。
+
+```ruby
+binding = Checkout.bind do
+  setup { Store.new(FakeGateway.new) }
+
+  process :job do
+    setup { |store, id| CheckoutJob.new(store, id) }
+    step(:charge, method: :charge)
+    step(:save, method: :save)
+    crash(method: :abandon!) # メモリ上の状態を捨て、接続を閉じる
+  end
+
+  observe(:charges) { |store| store.gateway.charges }
+end
+```
 
 モデル検査の反例のトレースを `replay:` に渡すと、反例のスケジュールを実装で再現する。
 

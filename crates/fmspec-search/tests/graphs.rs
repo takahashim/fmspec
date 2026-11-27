@@ -2,14 +2,15 @@
 //!
 //! 探索器は証明の対象外なので、訪問状態、最短性、上限の扱いをここで検査する。
 //! 比較の相手は、辺の一覧を直接たどる独立した全列挙である。
+//! シミュレーション、縮小、状態と遷移のグラフも、同じグラフで検査する。
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_core::evidence::{Claim, Evidence, Limit};
-use fmspec_core::gate::{validate, CheckedModel};
+use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
+use fmspec_core::gate::{decide, validate, CheckedModel, VerdictKind};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
 use fmspec_core::semantics::Conditions;
-use fmspec_search::{check, BfsOptions, Outcome, Status};
+use fmspec_search::{check, explore, sample, shrink, simulate, test_paths, BfsOptions, Outcome, SimOptions, Status};
 use std::collections::{BTreeSet, VecDeque};
 
 fn int(x: i64) -> Expr {
@@ -75,9 +76,14 @@ fn run(m: &CheckedModel, deadlock: bool, max_states: Option<usize>) -> Outcome {
 
 /// 辺の一覧を直接たどって、頂点0からの最短距離を求める。
 fn distances(n: i64, edges: &[(i64, i64)]) -> Vec<Option<usize>> {
+    distances_from(0, n, edges)
+}
+
+/// 辺の一覧を直接たどって、頂点 `source` からの最短距離を求める。
+fn distances_from(source: i64, n: i64, edges: &[(i64, i64)]) -> Vec<Option<usize>> {
     let mut dist = vec![None; n as usize];
-    dist[0] = Some(0);
-    let mut queue = VecDeque::from([0i64]);
+    dist[source as usize] = Some(0);
+    let mut queue = VecDeque::from([source]);
     while let Some(u) = queue.pop_front() {
         for (from, to) in edges {
             if *from == u && dist[*to as usize].is_none() {
@@ -299,4 +305,306 @@ fn a_larger_state_space_is_explored_completely() {
         Status::Inconclusive(Limit::MaxStates)
     );
     assert_eq!(run(&m, false, Some(8000)).status, Status::Verified);
+}
+
+// ---- ランダムシミュレーション（仕様書 §9）----
+
+/// 比較の相手の SplitMix64。探索器の実装を使わずに、標準のアルゴリズムをここに書く。
+struct Mix(u64);
+
+impl Mix {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        let n = n as u64;
+        let threshold = n.wrapping_neg() % n;
+        loop {
+            let x = self.next();
+            if x >= threshold {
+                return (x % n) as usize;
+            }
+        }
+    }
+}
+
+/// 期待するシミュレーションの結果。見つけた違反（開始頂点、たどった辺の添字、主張）と、完了したトレース数、総ステップ数。
+type Expected = (Option<(i64, Vec<usize>, Claim)>, usize, usize);
+
+/// 辺の一覧を直接たどる、独立したシミュレーション。
+/// 初期状態が複数なら乱数で1つ選び、各ステップでは、定義順に並べた出る辺から1つを一様に選ぶ。
+fn expected_simulation(
+    inits: &[i64],
+    edges: &[(i64, i64)],
+    bad: &[i64],
+    deadlock: bool,
+    opts: &SimOptions,
+) -> Expected {
+    let mut rng = Mix(opts.seed);
+    let (mut completed, mut total) = (0, 0);
+    let violated = |v: i64| bad.iter().position(|b| *b == v).map(Claim::Invariant);
+    for _ in 0..opts.traces {
+        let start = if inits.len() > 1 {
+            inits[rng.below(inits.len())]
+        } else {
+            inits[0]
+        };
+        if let Some(claim) = violated(start) {
+            return (Some((start, vec![], claim)), completed, total);
+        }
+        let (mut at, mut taken) = (start, Vec::new());
+        for _ in 0..opts.max_steps {
+            let out: Vec<usize> = (0..edges.len()).filter(|e| edges[*e].0 == at).collect();
+            if out.is_empty() {
+                if deadlock {
+                    return (Some((start, taken, Claim::Deadlock)), completed, total);
+                }
+                break;
+            }
+            let e = out[rng.below(out.len())];
+            total += 1;
+            taken.push(e);
+            at = edges[e].1;
+            if let Some(claim) = violated(at) {
+                return (Some((start, taken, claim)), completed, total);
+            }
+        }
+        completed += 1;
+    }
+    (None, completed, total)
+}
+
+fn with_inits(m: &CheckedModel, inits: &[i64]) -> CheckedModel {
+    let mut raw = m.raw().clone();
+    raw.inits = inits.iter().map(|v| vec![*v]).collect();
+    validate(raw).unwrap()
+}
+
+#[test]
+fn simulations_follow_the_seed_like_an_independent_sampler() {
+    let mut found = 0;
+    for seed in 0..300u64 {
+        let n = 3 + (seed % 8) as i64;
+        let edges = random_graph(seed, n, 3 + (seed % 12) as usize);
+        let bad: Vec<i64> = if seed % 3 == 0 { vec![] } else { vec![n - 1, n - 2] };
+        // 初期状態が1つのモデルは乱数を消費しない。2つのモデルは、トレースごとに1回消費する。
+        let inits: Vec<i64> = if seed % 2 == 0 { vec![0] } else { vec![0, 1] };
+        let deadlock = seed % 5 == 0;
+        let m = with_inits(&graph(n, &edges, &bad), &inits);
+        let cond = conditions(&m, deadlock);
+        let opts = SimOptions {
+            seed: seed.wrapping_mul(0x2545_F491_4F6C_DD1D),
+            traces: 1 + (seed % 4) as usize,
+            max_steps: (seed % 9) as usize,
+            interrupt: None,
+        };
+        let (expected, completed, total) = expected_simulation(&inits, &edges, &bad, deadlock, &opts);
+        let result = simulate(&m, &cond, &opts);
+        assert_eq!(
+            (result.stats.traces, result.stats.steps),
+            (completed, total),
+            "seed {seed}"
+        );
+        match (&expected, &result.evidence) {
+            (None, Ok(None)) => {}
+            (Some((start, taken, claim)), Ok(Some(Evidence::Trace(s, steps, c)))) => {
+                assert_eq!((s, c), (&vec![*start], claim), "seed {seed}");
+                assert_eq!(
+                    steps.iter().map(|st| st.action).collect::<Vec<_>>(),
+                    *taken,
+                    "seed {seed}"
+                );
+                found += 1;
+            }
+            (e, r) => panic!("seed {seed}: expected {e:?}, got {r:?}"),
+        }
+        // 判定ゲートは、見つけたトレースをすべて受理する。
+        let sampled = sample(&m, &cond, &opts);
+        assert_eq!(sampled.stats, result.stats, "seed {seed}");
+        let status = sampled.found.map(|o| o.status);
+        assert_eq!(status, expected.map(|_| Status::Violated), "seed {seed}");
+    }
+    assert!(found > 50, "違反を見つけたシミュレーションが少なすぎる: {found}");
+}
+
+#[test]
+fn an_interrupt_request_stops_the_simulation() {
+    let m = graph(3, &[(0, 1), (1, 0)], &[]);
+    let opts = SimOptions {
+        seed: 0,
+        traces: 10,
+        max_steps: 10,
+        interrupt: Some(&|| true),
+    };
+    let sampled = sample(&m, &conditions(&m, false), &opts);
+    let o = sampled.found.unwrap();
+    assert_eq!(o.status, Status::Inconclusive(Limit::Interrupted));
+    assert_eq!(sampled.stats.traces, 0);
+}
+
+#[test]
+fn an_interrupt_request_stops_a_simulation_without_steps() {
+    // 最大ステップ数が0でも、トレースごとに中断要求を確かめる。完了したトレースを数えるだけで止まらない、ということがない。
+    let m = graph(3, &[(0, 1), (1, 0)], &[]);
+    let opts = SimOptions {
+        seed: 0,
+        traces: 10,
+        max_steps: 0,
+        interrupt: Some(&|| true),
+    };
+    let result = simulate(&m, &conditions(&m, false), &opts);
+    assert!(matches!(
+        result.evidence,
+        Ok(Some(Evidence::Unavailable(Limit::Interrupted)))
+    ));
+    assert_eq!(result.stats.traces, 0);
+}
+
+// ---- トレースの縮小（仕様書 §10）----
+
+/// 辺の添字の列を、開始頂点から再実行したトレースのステップ。無効な辺があれば `None`。
+fn walk(edges: &[(i64, i64)], start: i64, taken: &[usize]) -> Option<Vec<TraceStep>> {
+    let mut at = start;
+    let mut steps = Vec::new();
+    for e in taken {
+        if edges[*e].0 != at {
+            return None;
+        }
+        at = edges[*e].1;
+        steps.push(TraceStep {
+            action: *e,
+            args: vec![],
+            output: None,
+            state: vec![at],
+        });
+    }
+    Some(steps)
+}
+
+#[test]
+fn shrunk_traces_keep_the_claim_and_no_single_step_can_be_removed() {
+    let mut shrunk = 0;
+    for seed in 0..300u64 {
+        let n = 4 + (seed % 7) as i64;
+        let edges = random_graph(seed, n, 6 + (seed % 10) as usize);
+        let bad = [n - 1];
+        let m = graph(n, &edges, &bad);
+        let cond = conditions(&m, false);
+        let opts = SimOptions {
+            seed,
+            traces: 20,
+            max_steps: 30,
+            interrupt: None,
+        };
+        let Ok(Some(Evidence::Trace(start, steps, claim))) = simulate(&m, &cond, &opts).evidence else {
+            continue;
+        };
+        // 試す候補がなければ、元のトレースを返す。
+        assert_eq!(shrink(&m, &cond, &start, &steps, &claim, 0), steps, "seed {seed}");
+
+        let best = shrink(&m, &cond, &start, &steps, &claim, 10_000);
+        let accepted = |steps: Vec<TraceStep>| {
+            decide(&m, &cond, &Evidence::Trace(start.clone(), steps, claim.clone())).kind() == VerdictKind::Violated
+        };
+        assert!(accepted(best.clone()), "seed {seed}");
+        let shortest = distances_from(start[0], n, &edges)[bad[0] as usize].unwrap();
+        assert!(shortest <= best.len() && best.len() <= steps.len(), "seed {seed}");
+        // 局所最小：どの1ステップを除いても、同じ主張のトレースにならない。
+        let taken: Vec<usize> = best.iter().map(|s| s.action).collect();
+        for i in 0..taken.len() {
+            let mut fewer = taken.clone();
+            fewer.remove(i);
+            if let Some(candidate) = walk(&edges, start[0], &fewer) {
+                assert!(!accepted(candidate), "seed {seed}: step {i} of {taken:?}");
+            }
+        }
+        if best.len() < steps.len() {
+            shrunk += 1;
+        }
+    }
+    assert!(shrunk > 30, "縮小できたトレースが少なすぎる: {shrunk}");
+}
+
+// ---- 状態と遷移のグラフ（仕様書 §11.3）----
+
+#[test]
+fn the_explored_graph_matches_an_independent_enumeration() {
+    for seed in 0..200u64 {
+        let n = 2 + (seed % 9) as i64;
+        let edges = random_graph(seed, n, (seed % 14) as usize);
+        let m = graph(n, &edges, &[]);
+        let cond = conditions(&m, false);
+        let dist = distances(n, &edges);
+        let reachable: BTreeSet<i64> = (0..n).filter(|v| dist[*v as usize].is_some()).collect();
+        let reachable_edges = edges.iter().filter(|(from, _)| reachable.contains(from)).count();
+
+        let g = explore(&m, &cond, None, None);
+        assert!(g.complete, "seed {seed}");
+        assert_eq!(g.states[0], vec![0], "seed {seed}");
+        assert_eq!(
+            g.states.iter().map(|s| s[0]).collect::<BTreeSet<_>>(),
+            reachable,
+            "seed {seed}"
+        );
+        assert_eq!(g.edges.len(), reachable_edges, "seed {seed}");
+        for (id, s) in g.states.iter().enumerate() {
+            assert_eq!(g.index[s], id, "seed {seed}");
+            // 最初に到達した遷移の列は、最短の経路である。
+            let path = g.path_to(id);
+            assert_eq!(Some(path.len()), dist[s[0] as usize], "seed {seed}");
+            assert_eq!(g.root(id), 0, "seed {seed}");
+        }
+        for e in &g.edges {
+            let (from, to) = edges[e.action];
+            assert_eq!(
+                (g.states[e.from][0], e.to.map(|t| g.states[t][0])),
+                (from, Some(to)),
+                "seed {seed}"
+            );
+        }
+
+        // 状態数の上限では、幅優先の訪問順の先頭だけを保持し、保持しない状態への辺は遷移先を持たない。
+        if g.states.len() > 1 {
+            let max = g.states.len() - 1;
+            let limited = explore(&m, &cond, Some(max), None);
+            assert!(!limited.complete, "seed {seed}");
+            assert_eq!(limited.states, g.states[..max], "seed {seed}");
+            assert!(limited.edges.iter().any(|e| e.to.is_none()), "seed {seed}");
+        }
+
+        // テスト経路は、到達できるすべての状態と入力の組を覆う。各経路は実際の辺をたどる。
+        let max_steps = n as usize + 2;
+        let p = test_paths(&m, &cond, &vec![vec![]; edges.len()], None, max_steps, None);
+        assert_eq!(
+            (p.targets, p.covered),
+            (reachable_edges, reachable_edges),
+            "seed {seed}"
+        );
+        for path in &p.paths {
+            assert_eq!(path.start, 0, "seed {seed}");
+            assert!(!path.inputs.is_empty() && path.inputs.len() <= max_steps, "seed {seed}");
+            let taken: Vec<usize> = path.inputs.iter().map(|(a, _)| *a).collect();
+            assert!(walk(&edges, 0, &taken).is_some(), "seed {seed}: {taken:?}");
+        }
+        // 1入力の経路で覆えるのは、初期状態から出る辺だけである。
+        let p = test_paths(&m, &cond, &vec![vec![]; edges.len()], None, 1, None);
+        assert_eq!(
+            p.covered,
+            edges.iter().filter(|(from, _)| *from == 0).count(),
+            "seed {seed}"
+        );
+    }
+}
+
+#[test]
+fn an_interrupt_request_leaves_the_graph_incomplete() {
+    let m = graph(3, &[(0, 1), (1, 2)], &[]);
+    let g = explore(&m, &conditions(&m, false), None, Some(&|| true));
+    assert!(!g.complete);
+    assert!(g.edges.is_empty());
 }

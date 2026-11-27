@@ -58,7 +58,9 @@ fn header<'a>(
     if map.get(version_key).and_then(Value::as_i64) != Some(version) {
         return format(format!("未対応の {version_key} です（対応しているのは {version}）"));
     }
-    let found = map.get("model_digest").and_then(Value::as_str).unwrap_or("");
+    let Some(found) = map.get("model_digest").and_then(Value::as_str) else {
+        return format("model_digest（文字列）が必要です");
+    };
     if found != model.digest {
         return Err(TraceError::DigestMismatch {
             expected: model.digest.clone(),
@@ -161,12 +163,12 @@ pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::mod
 
 /// `Expr::Fail` の番号と、その名前。番号はIRの下ろし方が決める。
 const FAILURES: [(i64, &str); 6] = [
-    (crate::lower::FAIL_NONE, "none"),
-    (crate::lower::FAIL_MISSING_KEY, "missing_key"),
-    (crate::lower::FAIL_INDEX, "index_out_of_range"),
-    (crate::lower::FAIL_FULL, "full"),
-    (crate::lower::FAIL_EMPTY, "empty"),
-    (crate::lower::FAIL_NOT_IN_DOMAIN, "not_in_domain"),
+    (fmspec_core::source::FAIL_NONE, "none"),
+    (fmspec_core::source::FAIL_MISSING_KEY, "missing_key"),
+    (fmspec_core::source::FAIL_INDEX, "index_out_of_range"),
+    (fmspec_core::source::FAIL_FULL, "full"),
+    (fmspec_core::source::FAIL_EMPTY, "empty"),
+    (fmspec_core::source::FAIL_NOT_IN_DOMAIN, "not_in_domain"),
 ];
 
 fn failure_name(code: i64) -> Option<&'static str> {
@@ -296,7 +298,14 @@ fn claim_from_json(model: &Model, v: Option<&Value>) -> Result<Claim, TraceError
                 "output" => Site::Output,
                 _ => {
                     let target = map.get("target").and_then(Value::as_str).unwrap_or("");
-                    let slot = map.get("slot").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    // slot は範囲外更新にだけ付く。省略すると状態変数の最初のスロットとする。
+                    let slot = match map.get("slot") {
+                        None => 0,
+                        Some(v) => match v.as_u64().and_then(|n| usize::try_from(n).ok()) {
+                            Some(slot) => slot,
+                            None => return format("claim.slot は0以上の整数です"),
+                        },
+                    };
                     let index = names.state_index(target);
                     let update = index.and_then(|t| {
                         names.actions[a]
@@ -392,7 +401,14 @@ pub fn trace_from_json(model: &Model, json: &str) -> Result<Trace, TraceError> {
         });
     }
     let claim = claim_from_json(model, map.get("claim"))?;
-    let seed = map.get("seed").and_then(Value::as_u64);
+    // seed は表示と記録のためのもので、再生には使わない。省略と null は、seed なしとする。
+    let seed = match map.get("seed") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v.as_u64() {
+            Some(seed) => Some(seed),
+            None => return format("seed は null か0以上の整数です"),
+        },
+    };
     Ok(Trace {
         conditions,
         start,

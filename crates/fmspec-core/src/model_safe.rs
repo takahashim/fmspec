@@ -9,11 +9,11 @@
 #[cfg(verus_keep_ghost)]
 use crate::canon::slot_tys_seq;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, enc_seq, member, members, sty, stys, wf_stypes, width, STy, SType, SVal};
+use crate::encoding::{enc, enc_seq, member, sty, wf_stypes, width, STy, SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::equality::smalls;
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, decode, eval_l, prop_spec, Env, ErrKind};
+use crate::eval::{decode, eval_l, prop_spec, Env};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::{Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
@@ -25,7 +25,7 @@ use crate::semantics::*;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, src_bool, SEnv, TExpr};
+use crate::source::{eval_src, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
 use crate::step::{act_env, all_disabled, args_ok, step_spec, vals_ok, Step};
 use vstd::prelude::*;

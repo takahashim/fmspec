@@ -4,6 +4,8 @@
 //! 探索の順序は幅優先探索（`bfs`）と同じで、初期状態は与えられた順、操作は定義順、引数は辞書順である。
 //! 性質は検査しない。モデルの検査は `check` が判定ゲートを通して行う。
 
+use crate::claim::selected;
+use crate::inconsistency::{successors, Inconsistency};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
@@ -27,8 +29,10 @@ pub struct Graph {
     pub parent: Vec<Option<usize>>,
     /// 遷移。遷移元の訪問順、操作の定義順、引数の辞書順に並ぶ。
     pub edges: Vec<Edge>,
-    /// 到達できるすべての状態と遷移を集めたか。状態数の上限、評価エラー、中断で集めきれなければ偽。
+    /// 到達できるすべての状態と遷移を集めたか。状態数の上限、評価エラー、中断、内部の不整合で集めきれなければ偽。
     pub complete: bool,
+    /// 探索器の内部の不整合。見つけたら探索をやめる。このグラフをカバレッジの分母やテスト経路に使ってはならない。
+    pub inconsistency: Option<Inconsistency>,
 }
 
 /// 到達可能な状態と遷移を集める。評価エラーになる遷移は集めない。
@@ -38,12 +42,27 @@ pub fn explore(
     max_states: Option<usize>,
     interrupt: Option<&dyn Fn() -> bool>,
 ) -> Graph {
+    collect(model, cond, max_states, interrupt, |a, s| successors(model, a, s))
+}
+
+/// `explore` の本体。遷移の列挙 `successors` を引数に取るのは、列挙の不整合を記録することをテストするためである。
+fn collect<F>(
+    model: &CheckedModel,
+    cond: &Conditions,
+    max_states: Option<usize>,
+    interrupt: Option<&dyn Fn() -> bool>,
+    successors: F,
+) -> Graph
+where
+    F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
+{
     let mut g = Graph {
         states: Vec::new(),
         index: HashMap::new(),
         parent: Vec::new(),
         edges: Vec::new(),
         complete: true,
+        inconsistency: None,
     };
     let full = |g: &Graph| max_states.is_some_and(|max| g.states.len() >= max);
     for init in model.initials() {
@@ -54,9 +73,7 @@ pub fn explore(
             g.complete = false;
             break;
         }
-        g.index.insert(init.clone(), g.states.len());
-        g.states.push(init.clone());
-        g.parent.push(None);
+        g.add(init.clone(), None);
     }
     let mut cur = 0;
     while cur < g.states.len() {
@@ -66,14 +83,22 @@ pub fn explore(
         }
         let state = g.states[cur].clone();
         for a in 0..model.raw().actions.len() {
-            if !cond.actions.get(a).copied().unwrap_or(false) {
+            if !selected(&cond.actions, a) {
                 continue;
             }
-            let ts = match model.successors(a, &state) {
-                Some(Enumerated::Ok(ts)) => ts,
-                _ => {
+            let ts = match successors(a, &state) {
+                Ok(Enumerated::Ok(ts)) => ts,
+                // 評価エラーになる遷移は集めず、残りの遷移を集める。
+                Ok(Enumerated::Fail(..)) => {
                     g.complete = false;
                     continue;
+                }
+                // 集めた状態は型に従い、操作の添字は範囲内なので、ここには来ないはずである。
+                // 来たら、評価エラーと区別して記録し、探索をやめる。
+                Err(inconsistency) => {
+                    g.complete = false;
+                    g.inconsistency = Some(inconsistency);
+                    return g;
                 }
             };
             for t in ts {
@@ -84,11 +109,8 @@ pub fn explore(
                         None
                     }
                     None => {
-                        let id = g.states.len();
-                        g.index.insert(t.state.clone(), id);
-                        g.states.push(t.state);
-                        g.parent.push(Some(g.edges.len()));
-                        Some(id)
+                        let parent = g.edges.len();
+                        Some(g.add(t.state, Some(parent)))
                     }
                 };
                 g.edges.push(Edge {
@@ -117,6 +139,15 @@ pub fn input_of(model: &CheckedModel, injected: &[Vec<usize>], action: usize, ar
 }
 
 impl Graph {
+    /// 未訪問の状態を加え、その添字を返す。`parent` は最初に到達した遷移（`edges` の添字）である。
+    fn add(&mut self, state: Vec<i64>, parent: Option<usize>) -> usize {
+        let id = self.states.len();
+        self.index.insert(state.clone(), id);
+        self.states.push(state);
+        self.parent.push(parent);
+        id
+    }
+
     /// 初期状態から状態 `id` までの、最初に到達した遷移の列（`edges` の添字）。
     pub fn path_to(&self, mut id: usize) -> Vec<usize> {
         let mut path = Vec::new();
@@ -144,6 +175,14 @@ pub struct TestPath {
     pub inputs: Vec<(usize, Vec<i64>)>,
 }
 
+/// テスト経路で覆う対象。状態と入力の組と、その最初の遷移の遷移先。
+struct Target {
+    from: usize,
+    action: usize,
+    input: Vec<i64>,
+    to: usize,
+}
+
 pub struct Paths {
     pub graph: Graph,
     pub paths: Vec<TestPath>,
@@ -167,20 +206,25 @@ pub fn test_paths(
     interrupt: Option<&dyn Fn() -> bool>,
 ) -> Paths {
     let graph = explore(model, cond, max_states, interrupt);
-    // 状態と入力の組ごとに、最初の遷移。
-    let mut targets: Vec<(usize, usize, Vec<i64>, usize)> = Vec::new();
+    // 状態と入力の組ごとに、最初の遷移。`target_of` は、各遷移の組（`targets` の添字）である。
+    let mut targets: Vec<Target> = Vec::new();
+    let mut target_of: Vec<Option<usize>> = vec![None; graph.edges.len()];
     let mut seen: HashMap<(usize, usize, Vec<i64>), usize> = HashMap::new();
     let mut by_state: Vec<Vec<usize>> = vec![Vec::new(); graph.states.len()];
-    for e in &graph.edges {
+    for (i, e) in graph.edges.iter().enumerate() {
         let Some(to) = e.to else { continue };
         let input = input_of(model, injected, e.action, &e.args);
-        let key = (e.from, e.action, input.clone());
-        if seen.contains_key(&key) {
-            continue;
-        }
-        seen.insert(key, targets.len());
-        by_state[e.from].push(targets.len());
-        targets.push((e.from, e.action, input, to));
+        let k = *seen.entry((e.from, e.action, input.clone())).or_insert_with(|| {
+            by_state[e.from].push(targets.len());
+            targets.push(Target {
+                from: e.from,
+                action: e.action,
+                input,
+                to,
+            });
+            targets.len() - 1
+        });
+        target_of[i] = Some(k);
     }
     let mut covered = vec![false; targets.len()];
     let mut paths = Vec::new();
@@ -188,32 +232,29 @@ pub fn test_paths(
         if covered[t] {
             continue;
         }
-        let prefix = graph.path_to(targets[t].0);
+        let prefix = graph.path_to(targets[t].from);
         if prefix.len() + 1 > max_steps {
             continue;
         }
+        // 最初に到達した遷移は遷移先を持つので、その組がある。
         let mut inputs = Vec::new();
-        for e in prefix {
-            let edge = &graph.edges[e];
-            let input = input_of(model, injected, edge.action, &edge.args);
-            if let Some(k) = seen.get(&(edge.from, edge.action, input.clone())) {
-                covered[*k] = true;
-            }
-            inputs.push((edge.action, input));
+        for k in prefix.into_iter().filter_map(|e| target_of[e]) {
+            covered[k] = true;
+            inputs.push((targets[k].action, targets[k].input.clone()));
         }
         let mut next = Some(t);
         while let Some(k) = next {
             covered[k] = true;
-            let (_, action, input, to) = &targets[k];
-            inputs.push((*action, input.clone()));
+            let target = &targets[k];
+            inputs.push((target.action, target.input.clone()));
             next = if inputs.len() < max_steps {
-                by_state[*to].iter().copied().find(|j| !covered[*j])
+                by_state[target.to].iter().copied().find(|j| !covered[*j])
             } else {
                 None
             };
         }
         paths.push(TestPath {
-            start: graph.root(targets[t].0),
+            start: graph.root(targets[t].from),
             inputs,
         });
     }
@@ -224,5 +265,49 @@ pub fn test_paths(
         paths,
         targets: n,
         covered: done,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{collect, explore};
+    use crate::inconsistency::tests::counter;
+    use crate::inconsistency::{successors, Inconsistency};
+    use fmspec_ir::default_conditions;
+
+    #[test]
+    fn an_inconsistent_enumeration_is_recorded_and_stops_the_exploration() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        let g = collect(m.checked(), &cond, None, None, |a, s| {
+            if s == &vec![1] {
+                Err(Inconsistency::Successors {
+                    action: a,
+                    state: s.clone(),
+                })
+            } else {
+                successors(m.checked(), a, s)
+            }
+        });
+        assert!(!g.complete);
+        assert_eq!(
+            g.inconsistency,
+            Some(Inconsistency::Successors {
+                action: 0,
+                state: vec![1]
+            })
+        );
+        assert_eq!(g.states, vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn a_consistent_exploration_records_no_inconsistency() {
+        let m = counter();
+        let g = explore(m.checked(), &default_conditions(&m, false), None, None);
+        assert!(g.complete);
+        assert_eq!(g.inconsistency, None);
+        assert_eq!(g.states.len(), 4);
     }
 }

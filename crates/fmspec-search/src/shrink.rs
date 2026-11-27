@@ -16,6 +16,9 @@ fn replay(model: &CheckedModel, start: &[i64], inputs: &[(usize, Vec<i64>)]) -> 
     let mut state = start.to_vec();
     let mut steps = Vec::new();
     for (action, args) in inputs {
+        // 評価エラー（`Fail`）なら、候補は無効である。`None`（操作の添字が範囲外か、状態が状態型に従わない）は、
+        // 操作が判定ゲートの受理したトレースのもので、状態が開始状態か列挙した遷移先なので来ないはずである。
+        // 来ても候補を採用しないだけで、縮小の結果は元のトレースか、判定ゲートが受理した候補のままである。
         let Some(Enumerated::Ok(transitions)) = model.successors(*action, &state) else {
             return None;
         };

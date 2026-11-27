@@ -1,7 +1,8 @@
 //! 詳細化の検査（docs/ir.md の「詳細化」）。
 
-use crate::report::{limit_name, reject_json_in};
-use crate::{count, options, Interrupt};
+use crate::options::{count, options};
+use crate::report::{inconsistency_json, limit_name, reject_json_in, INCONSISTENCY_MESSAGE};
+use crate::Interrupt;
 use fmspec_core::evidence::TraceStep;
 use fmspec_core::refine::{map_state, Mapped, RefClaim, RefEvidence};
 use fmspec_core::semantics::Conditions;
@@ -9,7 +10,7 @@ use fmspec_ir::{
     args_to_json, claim_to_json, conditions_to_json, error_to_json, output_to_json, state_to_json, Model, Refinement,
     ENGINE_VERSION, IR_VERSION,
 };
-use fmspec_search::{refine as search_refine, BfsOptions, RefOutcome, RefStatus};
+use fmspec_search::{refine as search_refine, BfsOptions, Internal, RefOutcome, RefStatus};
 use serde_json::{json, Value};
 
 /// 詳細化の検査条件。具体モデルの対象の操作だけを選ぶ。不変条件、遷移契約、デッドロックは検査しない。
@@ -34,7 +35,7 @@ fn ref_conditions(model: &Model, opts: &serde_json::Map<String, Value>) -> Resul
     Ok(c)
 }
 
-fn status_name(status: RefStatus) -> &'static str {
+fn status_name(status: &RefStatus) -> &'static str {
     match status {
         RefStatus::Refines => "refines",
         RefStatus::NotRefines => "not_refines",
@@ -111,7 +112,7 @@ fn trace_json(r: &Refinement, start: &[i64], steps: &[TraceStep]) -> Value {
 /// 詳細化の検査結果のJSON。
 pub(crate) fn refine_report(r: &Refinement, cond: &Conditions, outcome: &RefOutcome) -> Value {
     let mut body = json!({
-        "status": status_name(outcome.status),
+        "status": status_name(&outcome.status),
         "refinement": r.name,
         "refinement_digest": r.digest,
         "concrete": r.concrete.names.model,
@@ -140,13 +141,21 @@ pub(crate) fn refine_report(r: &Refinement, cond: &Conditions, outcome: &RefOutc
             body["reason"] = json!(limit_name(*limit));
         }
     }
-    if let RefStatus::InternalError(reject) = outcome.status {
-        let states = match &outcome.evidence {
-            RefEvidence::Certificate(cert) => Some(&cert.states),
-            _ => None,
-        };
-        body["rejected"] = reject_json_in(&r.concrete, states, reject);
-        body["message"] = json!("探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です");
+    match &outcome.status {
+        RefStatus::InternalError(Internal::Rejected(reject)) => {
+            let states = match &outcome.evidence {
+                RefEvidence::Certificate(cert) => Some(&cert.states),
+                _ => None,
+            };
+            body["rejected"] = reject_json_in(&r.concrete, states, *reject);
+            body["message"] = json!("探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です");
+        }
+        RefStatus::InternalError(Internal::Inconsistent(i)) => {
+            body["inconsistency"] = inconsistency_json(&r.concrete, i);
+            body["message"] = json!(INCONSISTENCY_MESSAGE);
+            body.as_object_mut().map(|m| m.remove("reason"));
+        }
+        _ => {}
     }
     body
 }

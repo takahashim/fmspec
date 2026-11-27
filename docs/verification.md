@@ -38,7 +38,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | Type Soundness | `lemma_type_sound`：型の付いた式の評価は、型どおりの値になるか、オーバーフロー、0による除算、明示的な失敗（`Fail`）のいずれかで失敗する。局所変数と量化を含む式は `lemma_type_sound_l` が扱う。`lemma_step_typed`：整形式なモデルでは、型に従う状態からの遷移先は型に従い、失敗は式の評価の失敗か範囲外更新である | `typing.rs` |
 | Evaluation Correctness | `eval` の結果は、意味論 `eval_spec` と一致する。除算と剰余は床除算で、絶対値の符号なし除算で計算した結果が意味論の `floor_div`、`floor_mod` と一致する | `eval.rs` |
 | Transition Soundness / Completeness | `step` の結果は `step_spec` と一致する。`enumerate` は、有効な遷移だけを、ドメイン内のすべての引数について漏れなく返すか、評価エラーになる引数を1つ返す | `step.rs` |
-| Lowering Preservation（§14.1の表の外） | `lemma_safe`：`lower_model` が返した中核のモデルが安全であることと、名前を解決したモデルが値の意味論で安全であることは同値である。式ごとの意味保存は `preserve.rs` にある。詳しくは「信頼基盤」の節で述べる | `model_safe.rs` |
+| Lowering Preservation（§14.1の表の外） | `lemma_safe`：`lower_model` が返した中核のモデルが安全であることと、名前を解決したモデルが値の意味論で安全であることは同値である。式ごとの意味保存は `preserve.rs` と `preserve_*.rs` にある。詳しくは「信頼基盤」の節で述べる | `model_safe.rs` |
 | Lowering Totality（§14.1の表の外） | `lower_model` は、まず `check_model` でモデルの式の型と大きさの条件（`model_typed`）を確かめる。事後条件：失敗するなら、利用者の誤り（値の評価の失敗、初期状態の数、式が大きすぎること）か、`model_typed` が偽のときの型の誤り（状態変数と引数の型の `State`、`Args` と、それ以外の `Type`）である。式ごとには、`lower_prop` と `lower_stored` は、文脈が整形式で（`cx_wf`）、式に型が付き（`type_of`）、部分式の型が大きさの条件を満たす（`lim_ok`）なら、束縛の深さの上限（`Fail::Depth`）でしか失敗せず、置く値は型の幅だけのスロットになる | `model_lower.rs`、`lowering.rs`、`total.rs`、`model_total.rs` |
 | State Equality | 状態は符号化列そのもので、等価性は列の一致である。`lemma_decode_injective`：型に属する符号は値と一対一に対応する | `step.rs` |
 | Certificate Soundness | `check_certificate` が受理したなら、証明書は帰納的で、`safe` が成り立つ | `cert.rs` |
@@ -70,6 +70,7 @@ MBTの「応答と矛盾しない」は、観測するスロットの値の一�
 - 信頼する項目（`assume`、`admit`、`external_body`、`assume_specification` など）が `fmspec-core` に1つもない。
 - 証明の対象外のコードは `impls.rs`（標準トレイトの手書き実装）だけで、判定の経路から呼ばれない。
 - 公開関数が `requires` を持たない。
+- 使われない `use` がない（`rake verus:imports`）。ghost コードでだけ使う `#[cfg(verus_keep_ghost)]` の `use` は、cargoビルドでは消え、Verus も警告しないので、Verus に ghost コードを残した型検査だけを行わせ、`--force-warn unused_imports` で警告させる。
 
 `rake verus:mutants` は、さらに次を検査する。
 
@@ -86,7 +87,7 @@ CI では回さず、証明を変えたときに手元で、変えたファイ�
 
 | 対象 | 検査 |
 |---|---|
-| 幅優先探索（`fmspec-search`） | 手作りのグラフでの訪問状態と最短性、状態数の上限、参照実装との比較 |
+| 幅優先探索（`fmspec-search`） | 手作りのグラフでの訪問状態と最短性、状態数の上限、参照実装との比較。内部の不整合（遷移を列挙できない状態）を、中断と区別して `internal_error` にすること |
 | シミュレータ（`fmspec-search`） | 同じ乱数列を使う参照実装との、トレースの比較 |
 | 縮小（`fmspec-search`） | 縮小結果は判定ゲートが受理したトレースに限る。最短の反例に達することの確認 |
 | MBTのセッション（`fmspec-search`） | 入力の無作為な選択と不適合の診断（モデルが許す結果の列挙）。仕様書§17.2.1の境界ケース、参照実装との候補集合の比較 |
@@ -99,10 +100,11 @@ CI では回さず、証明を変えたときに手元で、変えたファイ�
 | Rails統合（`fmspec-rails/`） | 決済、ジョブ、Webhookを持つアプリケーションでの4種類の変異の検出、隔離の失敗の検出。PostgreSQLでの分離レベル別の適合と不適合（READ COMMITTED、REPEATABLE READ、SERIALIZABLE）、行のロックを書き落とした仕様のスケジュールの未完了 |
 | IRと証拠の読み書き（`fmspec-ir`） | 不正なIRの拒否、往復、参照実装との比較 |
 | 複合型の下ろし（`fmspec-ir`） | 複合型の値を直接解釈する参照実装との比較。ランダムに生成したモデルと、評価の順序、検査の順序、範囲外更新の位置を決める境界のモデル |
+| JSONレベルのAPI（`fmspec-api`） | オプションの誤りの文、結果のJSONの項目と人間向けの表示、セッションの応答の形、資源上限と中断。3状態の全有向グラフでの、IR変換、探索、証拠の検査の照合 |
 | CLI（`fmspec-cli`） | 終了コードと出力 |
 | Ruby DSL（`lib/`） | 生成したIRと期待するIRの比較、参照実装による意味の確認、誤用の拒否。仕様のブロックを具体的な値で実行した結果との比較（後述） |
 | native extension（`ext/fmspec`） | 中断、他スレッドの動作、複数スレッドからの検査、panicの例外化、引数の検査 |
-| 仕様書§17.1.1の境界ケース | Rustのテストと、参照実装のテストの両方 |
+| 仕様書§17.1.1の境界ケース | Rustのテスト（`fmspec-search`）と、参照実装のテストの両方 |
 
 参照実装（`reference/fmspec_reference.rb`）は、IRを直接解釈する小さなEvaluator、幅優先探索、証明書検査器で、Rustの実装とは独立に書いてある。
 複合型の値は、スロットに下ろさず、RubyのArray、Hash、Setに近い値として扱う。
@@ -196,6 +198,7 @@ DSLに意図的な誤り（比較演算子、Setの `&`、単項の `-`、`impli
 
 探索器に不具合があっても、誤った `Verified` や `Violated` にはならない。
 探索器が保証しないのは、判定への到達、反例の最短性、探索統計の正しさである。
+探索器が内部の不整合を見つけたときは、判定ゲートに証拠がないことだけを渡し（判定は `Inconclusive`）、結果は `internal_error` になる。
 
 ## 信頼基盤
 
@@ -231,7 +234,7 @@ Listの要素をたどる量化では、位置は添字で、スロットの式�
 `fmspec-ir` は、`LowerError::Type` を「`fmspec-ir` と中核の型検査が食い違います」という内部エラーとして、`Depth` を式が大きすぎるという誤りとして報告する。
 ランダムに生成した型の合うIRで、`fmspec-ir` が受理したモデルを中核も受理することをテストしている（`crates/fmspec-ir/tests/random_ir.rs`）。
 
-すべての種類の式について、下ろしが意味を保つことを証明した（`preserve.rs`）。
+すべての種類の式について、下ろしが意味を保つことを証明した（`preserve.rs` と `preserve_*.rs`）。
 対象は、リテラル、状態変数、遷移後の状態変数、引数、出力、局所変数、定数の参照、整数の算術と比較、等価比較、否定、含意、`all` と `any`、条件式、`let`、TupleとRecordの構成と要素の取り出し、Optionの構成と有無の検査と中身の取り出し、Setのリテラル、要素を含むかの検査、要素の追加と削除、和、積、差、部分集合の判定、Mapのリテラル、`Map#get`、`Map#put`、`Map#delete`、キーを持つかの検査とキーの集合、Listのリテラル、添字での参照、先頭と末尾、`push`、`pop`、`shift`、要素を含むかの検査、Set、Map、Listの大きさと空かの判定、量化（型の全体、Setの要素、Mapのキー、Listの要素をたどるもの）を組み合わせた式である。
 ここで「環境が対応する」とは、中核の環境にある状態、引数、出力、定数のスロットの値が、意味論の環境の値の符号化であることをいう。
 
@@ -323,7 +326,7 @@ lintが直れば `expect` が満たされなくなり、`rake nupur:lint` が失
 | Rust | 1.100.0（cargoビルド）、1.99.1（Verus）、nightly-2026-08-20（`nupur_lints`） |
 | Nupur | Makiri v0.17.0.rc3（`rakelib/nupur.rake` の `NUPUR_COMMIT`） |
 | Ruby | 3.3以上。開発は4.0.10 |
-| Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite |
+| Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite。分離レベル別のテストは PostgreSQL（CIでは17） |
 | json_schemer（IRのスキーマのテスト） | 2.5.0 |
 | TLC（TLCとの比較テスト） | tla2tools.jar v1.7.4（`rakelib/tlc.rake` の `TLA2TOOLS_VERSION`）。Java 11以上 |
 

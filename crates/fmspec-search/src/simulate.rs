@@ -6,6 +6,8 @@
 //! 乱数は SplitMix64 で、遷移の列挙順は幅優先探索と同じ（操作の定義順、引数の辞書順）である。
 //! 同じモデル、検査条件、seed、トレース数、最大ステップ数に対して、結果は同じになる。
 
+use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
+use crate::inconsistency::{successors, Inconsistency};
 use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
@@ -62,33 +64,37 @@ pub struct SimStats {
 
 pub struct SimResult {
     /// 違反または評価エラーに至るトレース、または中断。すべてのサンプルを検査し終えたら `None`。
-    pub evidence: Option<Evidence>,
+    /// 探索器の内部の不整合を見つけたら、証拠の代わりに不整合（`Err`）。
+    pub evidence: Result<Option<Evidence>, Inconsistency>,
     pub stats: SimStats,
-}
-
-fn property_claim(
-    index: usize,
-    value: Result<bool, fmspec_core::eval::ErrKind>,
-    violated: fn(usize) -> Claim,
-    failed: fn(usize, fmspec_core::eval::ErrKind) -> Claim,
-) -> Claim {
-    match value {
-        Err(e) => failed(index, e),
-        Ok(_) => violated(index),
-    }
 }
 
 /// ランダムシミュレーションで証拠を探す。
 pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> SimResult {
+    run(model, cond, opts, |a, s| successors(model, a, s))
+}
+
+/// `simulate` の本体。遷移の列挙 `successors` を引数に取るのは、列挙の不整合をシミュレータが返すことをテストするためである。
+fn run<F>(model: &CheckedModel, cond: &Conditions, opts: &SimOptions, successors: F) -> SimResult
+where
+    F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
+{
     let n_actions = model.raw().actions.len();
     let mut rng = SplitMix64::new(opts.seed);
     let mut stats = SimStats::default();
     let found = |evidence: Evidence, stats: SimStats| SimResult {
-        evidence: Some(evidence),
+        evidence: Ok(Some(evidence)),
         stats,
     };
+    // 有効な遷移の作業用の列。ステップごとに空にして使い回す。
+    let mut enabled: Vec<(usize, Transition)> = Vec::new();
 
+    let interrupted = || opts.interrupt.is_some_and(|requested| requested());
     for _ in 0..opts.traces {
+        // 最大ステップ数が0で、ステップのないトレースが続いても打ち切れるように、トレースごとにも確かめる。
+        if interrupted() {
+            return found(Evidence::Unavailable(Limit::Interrupted), stats);
+        }
         // 初期状態が1つなら乱数を消費しない。同じシードで、初期状態が1つのモデルの結果を変えないためである。
         let inits = model.initials();
         let start = if inits.len() > 1 {
@@ -96,39 +102,43 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
         } else {
             inits[0].clone()
         };
-        let mut state = start.clone();
         let mut steps: Vec<TraceStep> = Vec::new();
-        if let Some((i, v)) = model.invariants(cond, &state) {
-            let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+        if let Some(claim) = invariant_claim(model, cond, &start) {
             return found(Evidence::Trace(start, steps, claim), stats);
         }
         for _ in 0..opts.max_steps {
-            if opts.interrupt.is_some_and(|requested| requested()) {
+            if interrupted() {
                 return found(Evidence::Unavailable(Limit::Interrupted), stats);
             }
-            let mut enabled: Vec<(usize, Transition)> = Vec::new();
+            // 現在の状態は、最後のステップの遷移先である。状態を複製して別に持たない。
+            let state = steps.last().map_or(&start, |step| &step.state);
+            enabled.clear();
             for a in 0..n_actions {
-                if !cond.actions.get(a).copied().unwrap_or(false) {
+                if !selected(&cond.actions, a) {
                     continue;
                 }
-                match model.successors(a, &state) {
-                    // 到達した状態は型に従い、操作の添字は範囲内なので、ここには来ない。
-                    None => return found(Evidence::Unavailable(Limit::Interrupted), stats),
-                    Some(Enumerated::Fail(args, site, kind)) => {
+                match successors(a, state) {
+                    // 到達した状態は型に従い、操作の添字は範囲内なので、ここには来ないはずである。
+                    // 来たら中断とは報告せず、不整合として返す。
+                    Err(inconsistency) => {
+                        return SimResult {
+                            evidence: Err(inconsistency),
+                            stats,
+                        }
+                    }
+                    Ok(Enumerated::Fail(args, site, kind)) => {
                         return found(
                             Evidence::Trace(start, steps, Claim::StepError(a, args, site, kind)),
                             stats,
                         );
                     }
-                    Some(Enumerated::Ok(ts)) => enabled.extend(ts.into_iter().map(|t| (a, t))),
+                    Ok(Enumerated::Ok(ts)) => enabled.extend(ts.into_iter().map(|t| (a, t))),
                 }
             }
             if enabled.is_empty() {
                 if cond.deadlock {
-                    match model.terminal(&state) {
-                        Ok(true) => {}
-                        Ok(false) => return found(Evidence::Trace(start, steps, Claim::Deadlock), stats),
-                        Err(e) => return found(Evidence::Trace(start, steps, Claim::TerminalError(e)), stats),
+                    if let Some(claim) = deadlock_claim(model, state) {
+                        return found(Evidence::Trace(start, steps, claim), stats);
                     }
                 }
                 break;
@@ -136,24 +146,93 @@ pub fn simulate(model: &CheckedModel, cond: &Conditions, opts: &SimOptions) -> S
             let pick = rng.below(enabled.len() as u64) as usize;
             let (a, t) = enabled.swap_remove(pick);
             stats.steps += 1;
-            let violation = model.contracts(cond, a, &state, &t.args, &t.state, &t.output);
+            // 遷移契約を先に検査し、満たせば遷移先の不変条件を検査する。
+            let violation = contract_claim(model, cond, a, state, &t.args, &t.state, &t.output)
+                .or_else(|| invariant_claim(model, cond, &t.state));
             steps.push(TraceStep {
                 action: a,
                 args: t.args,
                 output: t.output,
-                state: t.state.clone(),
+                state: t.state,
             });
-            if let Some((k, v)) = violation {
-                let claim = property_claim(k, v, Claim::Contract, Claim::ContractError);
-                return found(Evidence::Trace(start, steps, claim), stats);
-            }
-            state = t.state;
-            if let Some((i, v)) = model.invariants(cond, &state) {
-                let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+            if let Some(claim) = violation {
                 return found(Evidence::Trace(start, steps, claim), stats);
             }
         }
         stats.traces += 1;
     }
-    SimResult { evidence: None, stats }
+    SimResult {
+        evidence: Ok(None),
+        stats,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{run, simulate, SimOptions, SplitMix64};
+    use crate::inconsistency::tests::counter;
+    use crate::inconsistency::{successors, Inconsistency};
+    use fmspec_ir::default_conditions;
+
+    fn options() -> SimOptions<'static> {
+        SimOptions {
+            seed: 0,
+            traces: 3,
+            max_steps: 10,
+            interrupt: None,
+        }
+    }
+
+    #[test]
+    fn an_inconsistent_enumeration_is_returned_instead_of_evidence() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        // 状態 x = 1 で、列挙が状態を受け付けなかったものとする。
+        let result = run(m.checked(), &cond, &options(), |a, s| {
+            if s == &vec![1] {
+                Err(Inconsistency::Successors {
+                    action: a,
+                    state: s.clone(),
+                })
+            } else {
+                successors(m.checked(), a, s)
+            }
+        });
+        assert_eq!(
+            result.evidence.err(),
+            Some(Inconsistency::Successors {
+                action: 0,
+                state: vec![1]
+            })
+        );
+        assert_eq!(result.stats.traces, 0);
+        assert_eq!(result.stats.steps, 1);
+    }
+
+    #[test]
+    fn a_consistent_simulation_samples_every_trace() {
+        let m = counter();
+        let result = simulate(m.checked(), &default_conditions(&m, false), &options());
+        assert!(matches!(result.evidence, Ok(None)));
+        assert_eq!(result.stats.traces, 3);
+    }
+
+    /// 結果に記録する乱数の名前 `PRNG_NAME` のとおり、標準の SplitMix64 の列を作る。
+    /// 参照実装と同じ seed で同じトレースをたどることは、この列に依存する。
+    #[test]
+    fn the_generator_produces_the_standard_splitmix64_sequence() {
+        let mut rng = SplitMix64::new(0);
+        let first: Vec<u64> = (0..4).map(|_| rng.next()).collect();
+        assert_eq!(
+            first,
+            [
+                0xE220_A839_7B1D_CDAF,
+                0x6E78_9E6A_A1B9_65F4,
+                0x06C4_5D18_8009_454F,
+                0xF88B_B8A8_724C_81EC
+            ]
+        );
+    }
 }

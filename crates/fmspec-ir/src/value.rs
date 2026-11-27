@@ -8,12 +8,13 @@
 //! | Tuple | 要素の配列 |
 //! | Record | フィールド名をキーとするオブジェクト |
 //! | Option | 空なら `null`、そうでなければ `{"some": 値}` |
-//! | Set | 要素の配列。正規順に並べる |
+//! | Set | 要素の配列。正規順に並べ、重複を含めない |
 //! | Map | `[キー, 値]` の配列。キーの正規順に並べる |
 //! | List | 要素の配列 |
 //!
 //! 読み込みは宣言した型に従って行う。整数の範囲は検査しない（判定ゲートが状態の型を検査する）。
 //! ただし、Setの要素とMapのキーは番号に変換するので、型に属さなければ誤りとする。
+//! 読み込みでは順序を問わないが、番号に変換して同じになるSetの要素やMapのキーが重複していれば誤りとする。
 
 use crate::model::{EnumNames, Model, Names};
 use crate::types::SType;
@@ -51,11 +52,16 @@ pub fn type_to_json(names: &Names, ty: &SType) -> Value {
     }
 }
 
-fn parts<'s>(enums: &[EnumNames], tys: impl Iterator<Item = &'s SType>, slots: &[i64]) -> Vec<(&'s SType, Vec<i64>)> {
+/// 要素の型ごとに、スロットの列を分ける。足りなければ空の列にする。
+fn parts<'s, 'v>(
+    enums: &[EnumNames],
+    tys: impl Iterator<Item = &'s SType>,
+    slots: &'v [i64],
+) -> Vec<(&'s SType, &'v [i64])> {
     let mut at = 0;
     tys.map(|t| {
         let w = t.width(enums);
-        let part = slots.get(at..at + w).map(<[i64]>::to_vec).unwrap_or_default();
+        let part = slots.get(at..at + w).unwrap_or(&[]);
         at += w;
         (t, part)
     })
@@ -87,7 +93,7 @@ pub fn value_to_json(names: &Names, ty: &SType, slots: &[i64]) -> Value {
         SType::Record(fs) => {
             let values = parts(enums, fs.iter().map(|(_, t)| t), slots);
             let mut map = Map::new();
-            for ((name, _), (t, s)) in fs.iter().zip(&values) {
+            for ((name, _), (t, s)) in fs.iter().zip(values) {
                 map.insert(name.clone(), value_to_json(names, t, s));
             }
             Value::Object(map)
@@ -208,6 +214,9 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
             let mut bits = vec![0i64; n];
             for x in items {
                 let r = key_rank(enums, t, x)?;
+                if bits[r] != 0 {
+                    return Err(format!("要素 {x} が重複しています"));
+                }
                 bits[r] = 1;
             }
             out.extend(bits);

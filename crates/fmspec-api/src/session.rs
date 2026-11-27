@@ -3,7 +3,8 @@
 //! Ruby 側のドライバが `setup`、`command`、`observe` を実行し、その結果の値だけをここに渡す。
 //! セッションは Ruby のコードを呼び出さない。
 
-use crate::conditions;
+use crate::inject::{inject_slots, input_json, parse_inject};
+use crate::options::{conditions, count, options, size};
 use fmspec_core::evidence::Claim;
 use fmspec_ir::{
     claim_to_json, output_to_json, output_value_from_json, state_to_json, value_from_json, value_to_json, Model,
@@ -35,76 +36,6 @@ fn seen(model: &Model, var: usize, v: Option<&Value>) -> Vec<Seen> {
     }
 }
 
-/// `inject` オプション（操作名から、注入する内部選択の名前の配列へのオブジェクト）を、
-/// 操作ごとの内部選択の添字（昇順）にする。
-pub(crate) fn parse_inject(model: &Model, v: Option<&Value>) -> Result<Vec<Vec<usize>>, String> {
-    let mut injected: Vec<Vec<usize>> = vec![Vec::new(); model.names.actions.len()];
-    let Some(v) = v.filter(|v| !v.is_null()) else {
-        return Ok(injected);
-    };
-    let message = "inject は、操作名から内部選択の名前の配列へのオブジェクトです";
-    for (action_name, choices) in v.as_object().ok_or(message)? {
-        let a = model
-            .names
-            .action_index(action_name)
-            .ok_or(format!("未定義の操作 {action_name:?}"))?;
-        for choice in choices.as_array().ok_or(message)? {
-            let choice = choice.as_str().ok_or(message)?;
-            let k = model.names.actions[a]
-                .choices
-                .iter()
-                .position(|n| n == choice)
-                .ok_or(format!("操作 {action_name:?} に内部選択 {choice:?} はありません"))?;
-            if !injected[a].contains(&k) {
-                injected[a].push(k);
-            }
-        }
-        injected[a].sort_unstable();
-    }
-    Ok(injected)
-}
-
-/// 注入する内部選択の、引数の列（公開引数に続けて内部選択）での添字。
-pub(crate) fn inject_slots(model: &Model, injected: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    injected
-        .iter()
-        .enumerate()
-        .map(|(a, ks)| {
-            let act = &model.names.actions[a];
-            ks.iter()
-                .flat_map(|k| {
-                    let i = act.params.len() + k;
-                    let start = act.arg_offsets[i];
-                    start..start + act.arg_types[i].width(&model.names.enums)
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// 入力（公開引数に、注入する選択の値を続けた列）を、公開引数（`args`）と注入する選択（`choices`）の
-/// 名前付きのJSONにする。
-pub(crate) fn input_json(model: &Model, injected: &[Vec<usize>], action: usize, values: &[i64]) -> Value {
-    let enums = &model.names.enums;
-    let names = &model.names.actions[action];
-    let mut args = Map::new();
-    let mut choices = Map::new();
-    let mut at = 0;
-    let order = (0..names.params.len()).chain(injected[action].iter().map(|k| names.params.len() + k));
-    for i in order {
-        let ty = &names.arg_types[i];
-        let w = ty.width(enums);
-        let v = value_to_json(&model.names, ty, values.get(at..at + w).unwrap_or(&[]));
-        at += w;
-        if i < names.params.len() {
-            args.insert(names.params[i].clone(), v);
-        } else {
-            choices.insert(names.choices[i - names.params.len()].clone(), v);
-        }
-    }
-    json!({"action": names.name, "args": args, "choices": choices})
-}
-
 impl Session {
     /// セッションを作る。
     ///
@@ -112,10 +43,10 @@ impl Session {
     /// `observe`（観測する状態変数の名前。省略時はすべて）、
     /// `inject`（操作名から、注入する内部選択の名前の配列へのオブジェクト）、`max_candidates`。
     pub fn new(model: Arc<Model>, opts: &Value) -> Result<Session, String> {
-        let map = crate::options(opts, &["seed", "observe", "inject", "max_candidates"])?;
+        let map = options(opts, &["seed", "observe", "inject", "max_candidates"])?;
         let cond = conditions(&model, map)?;
-        let seed = crate::count(map, "seed", 0)?.unwrap_or(0);
-        let max = crate::count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);
+        let seed = count(map, "seed", 0)?.unwrap_or(0);
+        let max = count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);
         let names = &model.names.states;
         let observed = match map.get("observe") {
             None | Some(Value::Null) => (0..names.len()).collect(),
@@ -136,9 +67,8 @@ impl Session {
             }
         };
         let injected = parse_inject(&model, map.get("inject"))?;
-        let max = usize::try_from(max).unwrap_or(usize::MAX);
         let slots: Vec<usize> = observed.iter().flat_map(|v| model.names.state_slots(*v)).collect();
-        let inner = fmspec_search::Session::new(cond, slots, inject_slots(&model, &injected), seed, max);
+        let inner = fmspec_search::Session::new(cond, slots, inject_slots(&model, &injected), seed, size(max));
         Ok(Session {
             model,
             inner,
@@ -176,13 +106,33 @@ impl Session {
         Value::Object(map)
     }
 
+    /// モデル自身の誤り（`model_error`、`model_violation`）の応答。主張と、それが起きた状態を示す。
+    fn property_at(&self, status: &str, claim: &Claim, state: &[i64]) -> Value {
+        json!({
+            "status": status,
+            "property": claim_to_json(&self.model, claim),
+            "state": state_to_json(&self.model, state),
+        })
+    }
+
     fn model_error(&self, e: &ModelError) -> Value {
         let claim = Claim::StepError(e.action, e.args.clone(), e.site, e.kind);
+        self.property_at("model_error", &claim, &e.state)
+    }
+
+    /// 照合が続くことの応答。
+    fn continued(&self) -> Value {
         json!({
-            "status": "model_error",
-            "property": claim_to_json(&self.model, &claim),
-            "state": state_to_json(&self.model, &e.state),
+            "status": "continue",
+            "candidates": self.inner.candidates(),
+            "matched": self.inner.matched(),
+            "covered": self.covered(),
         })
+    }
+
+    /// 候補数が上限を超えたことの応答。
+    fn too_many_candidates(&self) -> Value {
+        json!({"status": "inconclusive", "reason": "max_candidates", "matched": self.inner.matched()})
     }
 
     /// 入力（`{"action", "args", "choices"}`）を読む。`choices` は注入する選択の値である。
@@ -274,14 +224,8 @@ impl Session {
         let seen = self.observation(observation)?;
         self.started = true;
         let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.shared(), &seen) {
-            Observed::Continue => {
-                return Ok(
-                    json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0, "covered": self.covered()}),
-                );
-            }
-            Observed::TooManyCandidates => {
-                return Ok(json!({"status": "inconclusive", "reason": "max_candidates", "matched": 0}));
-            }
+            Observed::Continue => return Ok(self.continued()),
+            Observed::TooManyCandidates => return Ok(self.too_many_candidates()),
             Observed::Failure { possible } => possible,
             _ => return Err("初期観測の照合で想定しない結果になりました".to_string()),
         };
@@ -351,9 +295,7 @@ impl Session {
         let step = self.inner.matched() + 1;
         let before = self.inner.candidates();
         Ok(match self.inner.observe(action, &params, output, &seen) {
-            Observed::Continue => {
-                json!({"status": "continue", "candidates": self.inner.candidates(), "matched": self.inner.matched(), "covered": self.covered()})
-            }
+            Observed::Continue => self.continued(),
             Observed::Failure { possible } => {
                 let mut expected: Vec<Value> = Vec::new();
                 for p in &possible {
@@ -379,9 +321,7 @@ impl Session {
                 body
             }
             Observed::InvalidInput => json!({"status": "invalid_input"}),
-            Observed::TooManyCandidates => {
-                json!({"status": "inconclusive", "reason": "max_candidates", "matched": self.inner.matched()})
-            }
+            Observed::TooManyCandidates => self.too_many_candidates(),
             Observed::ModelError(e) => self.model_error(&e),
             Observed::ModelViolation {
                 invariant,
@@ -393,11 +333,7 @@ impl Session {
                 } else {
                     Claim::Contract(index)
                 };
-                json!({
-                    "status": "model_violation",
-                    "property": claim_to_json(&self.model, &claim),
-                    "state": state_to_json(&self.model, &state),
-                })
+                self.property_at("model_violation", &claim, &state)
             }
         })
     }

@@ -5,10 +5,11 @@
 //! 判定ゲートには普通のトレースとして渡す。どちらも判定ゲート（`decide_symmetric`）が検査し直す。
 
 use crate::bfs::{BfsOptions, Stats};
-use crate::check::{Outcome, Status};
+use crate::check::{inconsistent, status_of, Outcome};
+use crate::inconsistency::{successors, Inconsistency};
 use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
-use fmspec_core::gate::{decide_symmetric, CheckedModel, VerdictKind};
+use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
+use fmspec_core::gate::{decide_symmetric, CheckedModel};
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
 use fmspec_core::sym::{canonicalize, SwapMaps};
@@ -106,9 +107,9 @@ fn evidence_for(
     nodes: &[Node],
     id: usize,
     found: Found,
-) -> Evidence {
+) -> Result<Evidence, Inconsistency> {
     let Some((start, mut steps, u)) = concretize(model, sw, nodes, id) else {
-        return Evidence::Unavailable(Limit::Interrupted);
+        return Err(Inconsistency::SymmetryTrace);
     };
     let last = steps.last().map_or(start.clone(), |s| s.state.clone());
     // 対応する具体的な事象が見つからなければ、任意の主張を付ける。判定ゲートが拒否し、探索器の不具合として報告される。
@@ -153,11 +154,16 @@ fn evidence_for(
             Ok(_) => Claim::Deadlock,
         },
     };
-    Evidence::Trace(start, steps, claim)
+    Ok(Evidence::Trace(start, steps, claim))
 }
 
 /// 対称性による削減を使う幅優先探索で、証拠を生成する。`sw` は判定ゲートの `symmetry` が返した入れ替え。
-pub fn bfs_sym(model: &CheckedModel, cond: &Conditions, sw: &Vec<SwapMaps>, opts: &BfsOptions) -> (Evidence, Stats) {
+pub fn bfs_sym(
+    model: &CheckedModel,
+    cond: &Conditions,
+    sw: &Vec<SwapMaps>,
+    opts: &BfsOptions,
+) -> (Result<Evidence, Inconsistency>, Stats) {
     let n_actions = model.raw().actions.len();
     let mut stats = Stats::default();
     let mut nodes: Vec<Node> = Vec::new();
@@ -170,7 +176,7 @@ pub fn bfs_sym(model: &CheckedModel, cond: &Conditions, sw: &Vec<SwapMaps>, opts
             continue;
         }
         if opts.max_states.is_some_and(|max| seen.len() >= max) {
-            return (Evidence::Unavailable(Limit::MaxStates), stats);
+            return (Ok(Evidence::Unavailable(Limit::MaxStates)), stats);
         }
         let id = nodes.len();
         let bad = model.invariants(cond, &rep).is_some();
@@ -188,7 +194,7 @@ pub fn bfs_sym(model: &CheckedModel, cond: &Conditions, sw: &Vec<SwapMaps>, opts
 
     while let Some(cur) = queue.pop_front() {
         if opts.interrupt.is_some_and(|requested| requested()) {
-            return (Evidence::Unavailable(Limit::Interrupted), stats);
+            return (Ok(Evidence::Unavailable(Limit::Interrupted)), stats);
         }
         let state = nodes[cur].state.clone();
         let mut enabled = false;
@@ -196,12 +202,12 @@ pub fn bfs_sym(model: &CheckedModel, cond: &Conditions, sw: &Vec<SwapMaps>, opts
             if !cond.actions.get(a).copied().unwrap_or(false) {
                 continue;
             }
-            let transitions = match model.successors(a, &state) {
-                None => return (Evidence::Unavailable(Limit::Interrupted), stats),
-                Some(Enumerated::Fail(..)) => {
+            let transitions = match successors(model, a, &state) {
+                Err(inconsistency) => return (Err(inconsistency), stats),
+                Ok(Enumerated::Fail(..)) => {
                     return (evidence_for(model, cond, sw, &nodes, cur, Found::Step(a)), stats);
                 }
-                Some(Enumerated::Ok(ts)) => ts,
+                Ok(Enumerated::Ok(ts)) => ts,
             };
             for t in transitions {
                 enabled = true;
@@ -217,7 +223,7 @@ pub fn bfs_sym(model: &CheckedModel, cond: &Conditions, sw: &Vec<SwapMaps>, opts
                     continue;
                 }
                 if opts.max_states.is_some_and(|max| seen.len() >= max) {
-                    return (Evidence::Unavailable(Limit::MaxStates), stats);
+                    return (Ok(Evidence::Unavailable(Limit::MaxStates)), stats);
                 }
                 let id = nodes.len();
                 let bad = model.invariants(cond, &rep).is_some();
@@ -242,10 +248,10 @@ pub fn bfs_sym(model: &CheckedModel, cond: &Conditions, sw: &Vec<SwapMaps>, opts
     let mut states: Vec<Vec<i64>> = nodes.into_iter().map(|n| n.state).collect();
     states.sort();
     (
-        Evidence::Certificate(Certificate {
+        Ok(Evidence::Certificate(Certificate {
             conditions: cond.clone(),
             states,
-        }),
+        })),
         stats,
     )
 }
@@ -260,25 +266,23 @@ pub fn check_sym(
 ) -> Result<Outcome, usize> {
     let sw = fmspec_core::sym::symmetry(model.raw(), cond, swaps)?;
     let started = Instant::now();
-    let (evidence, stats) = bfs_sym(model, cond, &sw, opts);
+    let (found, stats) = bfs_sym(model, cond, &sw, opts);
     let search_time = started.elapsed();
-    let started = Instant::now();
-    let verdict = decide_symmetric(model, cond, swaps, &evidence);
-    let gate_time = started.elapsed();
-    let status = match verdict.kind() {
-        VerdictKind::Verified => Status::Verified,
-        VerdictKind::Violated => Status::Violated,
-        VerdictKind::Error => Status::Error,
-        VerdictKind::Inconclusive => Status::Inconclusive(verdict.limit().unwrap_or(Limit::Interrupted)),
-        VerdictKind::Rejected => Status::InternalError(verdict.reject().unwrap_or(Reject::ClaimNotReproduced)),
-        VerdictKind::InvalidModel => Status::InternalError(Reject::ClaimNotReproduced),
+    let mut outcome = match found {
+        Ok(evidence) => {
+            let started = Instant::now();
+            let verdict = decide_symmetric(model, cond, swaps, &evidence);
+            Outcome {
+                status: status_of(&verdict),
+                verdict,
+                evidence,
+                stats,
+                search_time,
+                gate_time: started.elapsed(),
+            }
+        }
+        Err(inconsistency) => inconsistent(model, cond, inconsistency, stats),
     };
-    Ok(Outcome {
-        status,
-        verdict,
-        evidence,
-        stats,
-        search_time,
-        gate_time,
-    })
+    outcome.search_time = search_time;
+    Ok(outcome)
 }

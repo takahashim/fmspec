@@ -4,7 +4,7 @@
 //! 終了コードは次のとおり。成功の種類は出力の `status` で区別する。
 //!
 //! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`、`refines`）
-//! - `1`: 反例（`violated`、`not_refines`）、または提示された証明書やトレースの拒否
+//! - `1`: 反例、または提示された証明書やトレースの拒否
 //! - `2`: 評価エラー、不正な入力、内部エラー
 //! - `3`: 探索未完了
 
@@ -20,6 +20,24 @@ pub struct Run {
     pub code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+impl Run {
+    fn stdout(code: i32, stdout: String) -> Run {
+        Run {
+            code,
+            stdout,
+            stderr: String::new(),
+        }
+    }
+
+    fn stderr(code: i32, stderr: String) -> Run {
+        Run {
+            code,
+            stdout: String::new(),
+            stderr,
+        }
+    }
 }
 
 const USAGE: &str = "\
@@ -42,8 +60,8 @@ const USAGE: &str = "\
   --json                 結果を機械可読のJSONで出力する
 ";
 
-/// 値を取るオプション。[フラグ, オプションのキー, 種類]。
-const VALUED: [(&str, &str, Kind); 9] = [
+/// fmspec-api に渡す、値を取るオプション。[フラグ, オプションのキー, 種類]。
+const VALUED: [(&str, &str, Kind); 8] = [
     ("--max-states", "max_states", Kind::Count),
     ("--max-check-cost", "max_check_cost", Kind::Count),
     ("--traces", "traces", Kind::Count),
@@ -52,14 +70,12 @@ const VALUED: [(&str, &str, Kind); 9] = [
     ("--actions", "actions", Kind::Names),
     ("--invariants", "invariants", Kind::Names),
     ("--contracts", "contracts", Kind::Names),
-    ("--strategy", "strategy", Kind::Text),
 ];
 
 #[derive(Clone, Copy)]
 enum Kind {
     Count,
     Names,
-    Text,
 }
 
 struct Args {
@@ -90,34 +106,36 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         if arg.starts_with("--") && arg != "--json" && !parsed.flags.iter().any(|f| f == arg) {
             parsed.flags.push(arg.to_string());
         }
+        // `--` で始まる語は値として読まない。`--trace-out --json` の `--json` を値として消費すると、
+        // run が引数全体から判定する出力の形式と食い違う。
         let mut value = || -> Result<String, String> {
-            i += 1;
-            args.get(i).cloned().ok_or_else(|| format!("{arg} には値が必要です"))
+            match args.get(i + 1) {
+                Some(next) if !next.starts_with("--") => {
+                    i += 1;
+                    Ok(next.clone())
+                }
+                _ => Err(format!("{arg} には値が必要です")),
+            }
         };
         match arg {
             "--json" => parsed.json = true,
             "--deadlock" => {
                 parsed.options.insert("deadlock".to_string(), json!(true));
             }
+            "--strategy" => parsed.strategy = Some(value()?),
             "--certificate-out" => parsed.certificate_out = Some(value()?),
             "--trace-out" => parsed.trace_out = Some(value()?),
             _ => match VALUED.iter().find(|(name, _, _)| *name == arg) {
                 Some((_, key, kind)) => {
                     let text = value()?;
-                    match kind {
+                    let option = match kind {
                         Kind::Count => match text.parse::<u64>() {
-                            Ok(n) => parsed.options.insert(key.to_string(), json!(n)),
+                            Ok(n) => json!(n),
                             Err(_) => return Err(format!("{arg} は0以上の整数です（{text:?}）")),
                         },
-                        Kind::Names => {
-                            let names: Vec<&str> = text.split(',').filter(|s| !s.is_empty()).collect();
-                            parsed.options.insert(key.to_string(), json!(names))
-                        }
-                        Kind::Text => {
-                            parsed.strategy = Some(text);
-                            None
-                        }
+                        Kind::Names => json!(text.split(',').filter(|s| !s.is_empty()).collect::<Vec<_>>()),
                     };
+                    parsed.options.insert(key.to_string(), option);
                 }
                 None if arg.starts_with("--") => return Err(format!("未知のオプション {arg}")),
                 None => parsed.positional.push(arg.to_string()),
@@ -137,18 +155,15 @@ struct Io<'a> {
 fn failure(json: bool, status: &str, message: String) -> Run {
     if json {
         let body = json!({"status": status, "message": message});
-        Run {
-            code: EXIT_ERROR,
-            stdout: format!("{body}\n"),
-            stderr: String::new(),
-        }
+        Run::stdout(EXIT_ERROR, format!("{body}\n"))
     } else {
-        Run {
-            code: EXIT_ERROR,
-            stdout: String::new(),
-            stderr: format!("{status}: {message}\n"),
-        }
+        Run::stderr(EXIT_ERROR, format!("{status}: {message}\n"))
     }
+}
+
+/// 使い方の誤り。fmspec-api がオプションを拒否したときにも使う。
+fn usage(json: bool, message: impl Into<String>) -> Run {
+    failure(json, "usage_error", message.into())
 }
 
 fn exit_code(body: &Value) -> i32 {
@@ -160,17 +175,14 @@ fn exit_code(body: &Value) -> i32 {
     }
 }
 
+/// 整形したJSONの文字列。末尾に改行を付ける。
+fn pretty(body: &Value) -> String {
+    format!("{}\n", serde_json::to_string_pretty(body).unwrap_or_default())
+}
+
 fn finish(json: bool, body: Value) -> Run {
-    let stdout = if json {
-        format!("{}\n", serde_json::to_string_pretty(&body).unwrap_or_default())
-    } else {
-        fmspec_api::human(&body)
-    };
-    Run {
-        code: exit_code(&body),
-        stdout,
-        stderr: String::new(),
-    }
+    let stdout = if json { pretty(&body) } else { fmspec_api::human(&body) };
+    Run::stdout(exit_code(&body), stdout)
 }
 
 fn read(io: &Io, path: &str, json: bool) -> Result<String, Run> {
@@ -183,22 +195,51 @@ fn load_model(io: &Io, path: &str, json: bool) -> Result<Model, Run> {
 }
 
 fn write_file(io: &Io, path: &str, body: &Value, json: bool) -> Result<(), Run> {
-    let text = format!("{}\n", serde_json::to_string_pretty(body).unwrap_or_default());
-    (io.write)(path, &text).map_err(|e| failure(json, "input_error", format!("{path}: {e}")))
-}
-
-fn usage<T>(json: bool, message: impl Into<String>) -> Result<T, Run> {
-    Err(failure(json, "usage_error", message.into()))
+    (io.write)(path, &pretty(body)).map_err(|e| failure(json, "output_error", format!("{path}: {e}")))
 }
 
 /// 検査条件のオプション。
 const CONDITION_FLAGS: [&str; 4] = ["--actions", "--invariants", "--contracts", "--deadlock"];
 
+type Command = fn(&Io, &Args) -> Result<Run, Run>;
+
+/// コマンドの一覧。[名前, 受け付けるオプション, 検査条件を受け付けるか, 実行する関数]。
+const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
+    ("validate", &[], false, cmd_validate),
+    (
+        "check",
+        &[
+            "--strategy",
+            "--max-states",
+            "--max-check-cost",
+            "--certificate-out",
+            "--trace-out",
+        ],
+        true,
+        cmd_check,
+    ),
+    (
+        "simulate",
+        &["--traces", "--max-steps", "--seed", "--trace-out"],
+        true,
+        cmd_simulate,
+    ),
+    (
+        "verify-certificate",
+        &["--max-check-cost"],
+        true,
+        cmd_verify_certificate,
+    ),
+    ("replay", &[], false, cmd_replay),
+    ("shrink", &["--trace-out"], false, cmd_shrink),
+    ("refine", &["--max-states", "--actions"], false, cmd_refine),
+];
+
 /// コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
 fn accepts(a: &Args, command: &str, allowed: &[&str], conditions: bool) -> Result<(), Run> {
     for flag in &a.flags {
         if !allowed.contains(&flag.as_str()) && !(conditions && CONDITION_FLAGS.contains(&flag.as_str())) {
-            return usage(a.json, format!("{command} は {flag} を受け付けません"));
+            return Err(usage(a.json, format!("{command} は {flag} を受け付けません")));
         }
     }
     Ok(())
@@ -216,38 +257,24 @@ fn save_trace(io: &Io, a: &Args, body: &Value) -> Result<(), Run> {
 }
 
 fn cmd_validate(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(a, "validate", &[], false)?;
     let [path] = a.positional.as_slice() else {
-        return usage(a.json, "validate にはモデルのファイルを1つ指定します");
+        return Err(usage(a.json, "validate にはモデルのファイルを1つ指定します"));
     };
     let model = load_model(io, path, a.json)?;
     Ok(finish(a.json, fmspec_api::describe(&model)))
 }
 
 fn cmd_check(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(
-        a,
-        "check",
-        &[
-            "--strategy",
-            "--max-states",
-            "--max-check-cost",
-            "--certificate-out",
-            "--trace-out",
-        ],
-        true,
-    )?;
     let [path] = a.positional.as_slice() else {
-        return usage(a.json, "check にはモデルのファイルを1つ指定します");
+        return Err(usage(a.json, "check にはモデルのファイルを1つ指定します"));
     };
     if let Some(s) = a.strategy.as_deref().filter(|s| *s != "bfs") {
-        return usage(a.json, format!("未対応の探索方式 {s:?}（対応しているのは bfs）"));
+        return Err(usage(a.json, format!("未対応の探索方式 {s:?}（対応しているのは bfs）")));
     }
     let model = load_model(io, path, a.json)?;
     let mut options = a.options.clone();
     options.insert("certificate".to_string(), json!(a.certificate_out.is_some()));
-    let mut body =
-        fmspec_api::check(&model, &Value::Object(options), None).map_err(|e| failure(a.json, "usage_error", e))?;
+    let mut body = fmspec_api::check(&model, &Value::Object(options), None).map_err(|e| usage(a.json, e))?;
     if let Some(certificate) = body.as_object_mut().and_then(|map| map.remove("certificate")) {
         if let Some(out) = &a.certificate_out {
             write_file(io, out, &certificate, a.json)?;
@@ -258,38 +285,32 @@ fn cmd_check(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_simulate(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(
-        a,
-        "simulate",
-        &["--traces", "--max-steps", "--seed", "--trace-out"],
-        true,
-    )?;
     let [path] = a.positional.as_slice() else {
-        return usage(a.json, "simulate にはモデルのファイルを1つ指定します");
+        return Err(usage(a.json, "simulate にはモデルのファイルを1つ指定します"));
     };
     let model = load_model(io, path, a.json)?;
-    let body = fmspec_api::simulate(&model, &Value::Object(a.options.clone()), None)
-        .map_err(|e| failure(a.json, "usage_error", e))?;
+    let body = fmspec_api::simulate(&model, &Value::Object(a.options.clone()), None).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
     Ok(finish(a.json, body))
 }
 
 fn cmd_verify_certificate(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(a, "verify-certificate", &["--max-check-cost"], true)?;
     let [model_path, cert_path] = a.positional.as_slice() else {
-        return usage(a.json, "verify-certificate にはモデルと証明書のファイルを指定します");
+        return Err(usage(
+            a.json,
+            "verify-certificate にはモデルと証明書のファイルを指定します",
+        ));
     };
     let model = load_model(io, model_path, a.json)?;
     let certificate = read(io, cert_path, a.json)?;
     let body = fmspec_api::verify_certificate(&model, &certificate, &Value::Object(a.options.clone()), None)
-        .map_err(|e| failure(a.json, "usage_error", e))?;
+        .map_err(|e| usage(a.json, e))?;
     Ok(finish(a.json, body))
 }
 
 fn cmd_replay(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(a, "replay", &[], false)?;
     let [model_path, trace_path] = a.positional.as_slice() else {
-        return usage(a.json, "replay にはモデルとトレースのファイルを指定します");
+        return Err(usage(a.json, "replay にはモデルとトレースのファイルを指定します"));
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
@@ -297,26 +318,23 @@ fn cmd_replay(io: &Io, a: &Args) -> Result<Run, Run> {
 }
 
 fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(a, "shrink", &["--trace-out"], false)?;
     let [model_path, trace_path] = a.positional.as_slice() else {
-        return usage(a.json, "shrink にはモデルとトレースのファイルを指定します");
+        return Err(usage(a.json, "shrink にはモデルとトレースのファイルを指定します"));
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
-    let body = fmspec_api::shrink(&model, &trace, &json!({})).map_err(|e| failure(a.json, "usage_error", e))?;
+    let body = fmspec_api::shrink(&model, &trace, &json!({})).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
     Ok(finish(a.json, body))
 }
 
 fn cmd_refine(io: &Io, a: &Args) -> Result<Run, Run> {
-    accepts(a, "refine", &["--max-states", "--actions"], false)?;
     let [path] = a.positional.as_slice() else {
-        return usage(a.json, "refine には詳細化の文書のファイルを1つ指定します");
+        return Err(usage(a.json, "refine には詳細化の文書のファイルを1つ指定します"));
     };
     let text = read(io, path, a.json)?;
     let r = fmspec_api::load_refinement(&text).map_err(|e| failure(a.json, "invalid_model", format!("{path}: {e}")))?;
-    let body = fmspec_api::refine(&r, &Value::Object(a.options.clone()), None)
-        .map_err(|e| failure(a.json, "usage_error", e))?;
+    let body = fmspec_api::refine(&r, &Value::Object(a.options.clone()), None).map_err(|e| usage(a.json, e))?;
     Ok(finish(a.json, body))
 }
 
@@ -328,42 +346,25 @@ pub fn run(
 ) -> Run {
     let io = Io { read, write };
     let Some((command, rest)) = args.split_first() else {
-        return Run {
-            code: EXIT_ERROR,
-            stdout: String::new(),
-            stderr: USAGE.to_string(),
-        };
+        return Run::stderr(EXIT_ERROR, USAGE.to_string());
     };
     if command == "--help" || command == "-h" || command == "help" {
-        return Run {
-            code: EXIT_OK,
-            stdout: USAGE.to_string(),
-            stderr: String::new(),
-        };
+        return Run::stdout(EXIT_OK, USAGE.to_string());
     }
     if command == "--version" {
-        return Run {
-            code: EXIT_OK,
-            stdout: format!("fmspec {}\n", env!("CARGO_PKG_VERSION")),
-            stderr: String::new(),
-        };
+        return Run::stdout(EXIT_OK, format!("fmspec {}\n", env!("CARGO_PKG_VERSION")));
     }
+    // parse_args は `--json` を値として消費しないので、引数の解析に失敗したときも、成功したときの
+    // `Args::json` と同じ形式になる。
     let json = rest.iter().any(|a| a == "--json");
     let parsed = match parse_args(rest) {
         Ok(a) => a,
-        Err(e) => return failure(json, "usage_error", e),
+        Err(e) => return usage(json, e),
     };
-    let result = match command.as_str() {
-        "validate" => cmd_validate(&io, &parsed),
-        "check" => cmd_check(&io, &parsed),
-        "simulate" => cmd_simulate(&io, &parsed),
-        "verify-certificate" => cmd_verify_certificate(&io, &parsed),
-        "replay" => cmd_replay(&io, &parsed),
-        "shrink" => cmd_shrink(&io, &parsed),
-        "refine" => cmd_refine(&io, &parsed),
-        _ => usage(json, format!("未知のコマンド {command:?}\n{USAGE}")),
+    let Some(&(name, allowed, conditions, cmd)) = COMMANDS.iter().find(|(name, ..)| name == command) else {
+        return usage(json, format!("未知のコマンド {command:?}\n{USAGE}"));
     };
-    match result {
+    match accepts(&parsed, name, allowed, conditions).and_then(|()| cmd(&io, &parsed)) {
         Ok(run) | Err(run) => run,
     }
 }

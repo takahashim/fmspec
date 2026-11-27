@@ -158,4 +158,19 @@ class CoverageTest < Minitest::Test
     assert_equal :passed, result.status
     assert_equal [3, 3], result.coverage.transitions.to_a
   end
+
+  # 探索器の内部の不整合で集めきれなかったグラフは、カバレッジの分母やテスト経路に使わない。
+  # 不整合は公開APIからは起こせないので、エンジンが返す形の結果で確かめる。
+  def test_an_inconsistency_while_collecting_the_graph_is_an_internal_error
+    body = { "status" => "internal_error", "model" => "tickets",
+             "inconsistency" => { "kind" => "successors", "action" => "purchase", "encoded_state" => [9] },
+             "message" => "探索器の内部の不整合です。fmspec の不具合です" }
+    error = assert_raises(Fmspec::InternalError) { Fmspec::TestRun.graph_body(JSON.generate(body)) }
+    assert_match(/探索器の内部の不整合です/, error.message)
+    assert_match(/"encoded_state":\[9\]/, error.message)
+
+    usage = { "status" => "usage_error", "message" => "max_steps は1以上の整数です" }
+    assert_raises(ArgumentError) { Fmspec::TestRun.graph_body(JSON.generate(usage)) }
+    assert_equal [], Fmspec::TestRun.graph_body(JSON.generate("status" => "ok", "paths" => []))["paths"]
+  end
 end

@@ -6,6 +6,7 @@
 #
 # - verus:trusted   信頼する項目（assume、admit、external_body など）が1つもない。
 # - verus:contract  未検証コードから呼べる公開関数が、前提条件（requires）を持たない（仕様書 §3.1）。
+# - verus:imports   使われない use がない。ghost コードでだけ使う #[cfg(verus_keep_ghost)] の use も調べる。
 # - verus:mutants   検査を1つ壊した変異と、到達点に assert(false) を置いた変種が、証明に失敗する。
 #
 # `rake verus` と `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
@@ -353,49 +354,49 @@ VERUS_CANARIES = [
   ["mbt.rs", "            return Update::Failure;", "observe の不適合"],
   ["mbt.rs", "        self.cands = Candidates { states: next, hist: Ghost(h1) };", "observe の更新"],
   ["mbt.rs", "            assert(consistent(m, c, obs, inj, first, h1, t));", "lemma_next_exact の構成"],
-  ["lowering.rs", "assert(key_rank(l3, rank_local) == rk as int);", "lemma_get のキーの番号"],
+  ["preserve_map.rs", "assert(key_rank(l3, rank_local) == rk as int);", "lemma_get のキーの番号"],
   ["lowering.rs", "assert(store_ok(_c, stored@, env, l, v, sty(*st), se.enums));", "lower_stored の値の場合"],
   ["lowering.rs", "assert(slot_vals(slots@, env, l) =~= seq![eval_l(slots@[0], env, l)->Ok_0]);", "scalar_in の値の場合"],
-  ["lowering.rs", "            assert(ctx_ok(cx, sc2, env, se, l2, sls2));", "lemma_let の局所変数の対応"],
-  ["lowering.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
-  ["lowering.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
-  ["lowering.rs", "            lemma_pad_eval(k, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
+  ["preserve_ops.rs", "            assert(ctx_ok(cx, sc2, env, se, l2, sls2));", "lemma_let の局所変数の対応"],
+  ["preserve_ops.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
+  ["preserve_ops.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
+  ["preserve_ops.rs", "            lemma_pad_eval(k, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
   ["lowering.rs", "                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(*tx), xa@);", "low_ite のスロットの束縛"],
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
-  ["lowering.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
-  ["lowering.rs", "        lemma_guard_pick(g, fs, bits, env, l);", "lemma_over_map_at の値の場合"],
-  ["lowering.rs", "            lemma_list_quant_at(st, max, w, cs, us, g, items, env, l, enums);", "lemma_over_list の値の場合"],
-  ["lowering.rs", "        lemma_models_enc(item, st, enums);", "lemma_list_quant_at の要素"],
-  ["lowering.rs", "        lemma_scalar_bool(eval_src(body, se, sls2), eval_l(b, env, lx), se.enums);", "lemma_quant_step の選ぶ位置"],
+  ["preserve_quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
+  ["preserve_quant.rs", "        lemma_guard_pick(g, fs, bits, env, l);", "lemma_over_map_at の値の場合"],
+  ["preserve_quant.rs", "            lemma_list_quant_at(st, max, w, cs, us, g, items, env, l, enums);", "lemma_over_list の値の場合"],
+  ["preserve_quant.rs", "        lemma_models_enc(item, st, enums);", "lemma_list_quant_at の要素"],
+  ["preserve_quant.rs", "        lemma_scalar_bool(eval_src(body, se, sls2), eval_l(b, env, lx), se.enums);", "lemma_quant_step の選ぶ位置"],
   ["quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);\n        } else if s is Err {", "lemma_qscan の帰納"],
   ["quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);\n        } else {", "lemma_qscan の失敗を保留する帰納"],
   ["quant.rs", "        assert(bits.take(n) =~= bits.take(bits.len() as int));", "lemma_qscan のたどり終えた場合"],
   ["lowering.rs", "                    lemma_setlit_step(es@.take(i + 1), *cx, sc0, b0, b1, *blk, sty(*t), bv, r, bits@);", "Setのリテラルのループ"],
-  ["lowering.rs", "                    lemma_mark(true, bits, r, out, p, i as i64, env, l2);\n                    let q", "lemma_insert の値の場合"],
-  ["lowering.rs", "                lemma_count_none(bits);", "lemma_is_empty の空の場合"],
-  ["lowering.rs", "            lemma_count_some(v->Map_0);\n            }\n            lemma_one_denotes(x, env, l2", "lemma_size のMap"],
-  ["lowering.rs", "                lemma_one_denotes(out[0], env, l, Value::Bool((va == vb) == positive), XTy::Bool, se.enums);", "lemma_eq の値の場合"],
+  ["preserve_set.rs", "                    lemma_mark(true, bits, r, out, p, i as i64, env, l2);\n                    let q", "lemma_insert の値の場合"],
+  ["preserve_set.rs", "                lemma_count_none(bits);", "lemma_is_empty の空の場合"],
+  ["preserve_set.rs", "            lemma_count_some(v->Map_0);\n            }\n            lemma_one_denotes(x, env, l2", "lemma_size のMap"],
+  ["preserve_ops.rs", "                lemma_one_denotes(out[0], env, l, Value::Bool((va == vb) == positive), XTy::Bool, se.enums);", "lemma_eq の値の場合"],
   ["equality.rs", "            lemma_inj_items(i1, i2, *e, enums);", "lemma_enc_inj のList"],
   ["equality.rs", "            lemma_kinds_rows(rows, *x, enums);", "lemma_kinds のMap"],
   ["equality.rs", "            lemma_enc_inj(vx, vy, st, enums);", "lemma_eq_coll の等しい場合"],
   ["equality.rs", "            lemma_and(e0, imp, env, l, true, w1 == w2);", "lemma_eq_option の中身がある場合"],
-  ["lowering.rs", "assert(slot_vals(out, env, l2) =~= seq![Value::Int(n)] + enc_items(items, st, enums));", "lemma_listlit_step の値の場合"],
-  ["lowering.rs", "lemma_clean_concat(o2, lits(tail), env, l);", "lemma_listlit_done の値の場合"],
-  ["lowering.rs", "lemma_select(rows, y, out, pad_vals(items, st, max as nat, enums), env, l4, n);", "lemma_at の範囲内の場合"],
-  ["lowering.rs", "lemma_items_member(items, st, enums, 0);", "lemma_first の値の場合"],
-  ["lowering.rs", "lemma_select(rows, i, out, pad_vals(items, st, max as nat, enums), env, l3, n);", "lemma_last の値の場合"],
-  ["lowering.rs", "lemma_list_join(new_len, out, env, l4, items2, st, max, enums);", "lemma_push の値の場合"],
-  ["lowering.rs", "lemma_ite_rows(out, rows, new_len, defs, pad_vals(items, st, max as nat, enums), dv, env, l3, (m - 1) as i64);", "lemma_pop の値の場合"],
-  ["lowering.rs", "lemma_items_drop_first(items, st, enums);", "lemma_shift の値の場合"],
-  ["lowering.rs", "lemma_any_of(hits, env, l2);", "lemma_list_contains の値の場合"],
-  ["lowering.rs", "lemma_none_rows(keys_or_zero(kt, enums), vt, enums);", "lemma_maplit_base"],
-  ["lowering.rs", "assert(denotes(s1, env, l1, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums));", "lemma_maplit_step の値の場合"],
-  ["lowering.rs", "lemma_rows_update(rows, vt, enums, rk as int, Some(vv));", "lemma_put の値の場合"],
-  ["lowering.rs", "assert(denotes(ms, env, l1, SVal::Map(rows), mt, se.enums));", "lemma_put_expr の値の場合"],
-  ["lowering.rs", "assert(slot_vals(h, env, l1) =~= enc(SVal::Set(bits), STy::Set(Box::new(kt)), enums));", "lemma_keys の値の場合"],
-  ["lowering.rs", "assert(eval_src(e, se, sls) == eval_src(es, se, sls));", "lemma_has_key の意味の一致"],
-  ["lowering.rs", "lemma_rows_update(rows, vt, enums, rkk, None);", "lemma_delete のキーがある場合"],
+  ["preserve_list.rs", "assert(slot_vals(out, env, l2) =~= seq![Value::Int(n)] + enc_items(items, st, enums));", "lemma_listlit_step の値の場合"],
+  ["preserve_list.rs", "lemma_clean_concat(o2, lits(tail), env, l);", "lemma_listlit_done の値の場合"],
+  ["preserve_list.rs", "lemma_select(rows, y, out, pad_vals(items, st, max as nat, enums), env, l4, n);", "lemma_at の範囲内の場合"],
+  ["preserve_list.rs", "lemma_items_member(items, st, enums, 0);", "lemma_first の値の場合"],
+  ["preserve_list.rs", "lemma_select(rows, i, out, pad_vals(items, st, max as nat, enums), env, l3, n);", "lemma_last の値の場合"],
+  ["preserve_list.rs", "lemma_list_join(new_len, out, env, l4, items2, st, max, enums);", "lemma_push の値の場合"],
+  ["preserve_list.rs", "lemma_ite_rows(out, rows, new_len, defs, pad_vals(items, st, max as nat, enums), dv, env, l3, (m - 1) as i64);", "lemma_pop の値の場合"],
+  ["preserve_list.rs", "lemma_items_drop_first(items, st, enums);", "lemma_shift の値の場合"],
+  ["preserve_list.rs", "lemma_any_of(hits, env, l2);", "lemma_list_contains の値の場合"],
+  ["preserve_map.rs", "lemma_none_rows(keys_or_zero(kt, enums), vt, enums);", "lemma_maplit_base"],
+  ["preserve_map.rs", "assert(denotes(s1, env, l1, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), se.enums));", "lemma_maplit_step の値の場合"],
+  ["preserve_map.rs", "lemma_rows_update(rows, vt, enums, rk as int, Some(vv));", "lemma_put の値の場合"],
+  ["preserve_map.rs", "assert(denotes(ms, env, l1, SVal::Map(rows), mt, se.enums));", "lemma_put_expr の値の場合"],
+  ["preserve_map.rs", "assert(slot_vals(h, env, l1) =~= enc(SVal::Set(bits), STy::Set(Box::new(kt)), enums));", "lemma_keys の値の場合"],
+  ["preserve_map.rs", "assert(eval_src(e, se, sls) == eval_src(es, se, sls));", "lemma_has_key の意味の一致"],
+  ["preserve_map.rs", "lemma_rows_update(rows, vt, enums, rkk, None);", "lemma_delete のキーがある場合"],
   ["maps.rs", "lemma_enc_rows_index(rows, vt, enums, p, j);", "lemma_map_parts の各スロット"],
   ["maps.rs", "lemma_flat_rows(a, b, t, env, l, enums);", "lemma_flat_rows の帰納"],
   ["maps.rs", "lemma_rows_update(rows.drop_last(), t, enums, r, o);", "lemma_rows_update の帰納"],
@@ -539,6 +540,24 @@ namespace :verus do
     puts "verus: 公開関数は前提条件を持たない"
   end
 
+  # ghost コードだけで使う use には #[cfg(verus_keep_ghost)] を付けるので、cargoビルドでは消えて警告されない。
+  # Verus も unused_imports を止めている（#![allow] を足す）ので、使われなくなっても残る。
+  # ここでは、ghost コードを残したビルドの型検査だけを Verus に行わせ（証明と寿命の検査はしない）、
+  # --force-warn で、その allow と、ソースの #[allow(unused_imports)] を越えて警告させる。
+  # 寿命の検査では ghost コードを消したビルドも型検査するので、--no-lifetime を付けないと誤検出が出る。
+  desc "使われない use（ghost コードでだけ使う use も含めて）がないことを確かめる"
+  task imports: :version do
+    out, status = Open3.capture2e(verus_bin, "--crate-type=lib", "--no-verify", "--no-lifetime",
+                                  File.join(VERUS_CRATE, "src/lib.rs"), "--force-warn", "unused_imports")
+    out.force_encoding(Encoding::UTF_8)
+    abort "verus: 型検査に失敗した\n#{out}" unless status.success?
+    found = out.scan(/^warning: (unused imports?: .*)\n\s*--> (\S+)/).map do |message, at|
+      "#{at.delete_prefix("#{ROOT}/")}: #{message}"
+    end
+    abort "verus: 使われない use がある\n#{found.join("\n")}" unless found.empty?
+    puts "verus: 使われない use は0件"
+  end
+
   desc "検査を壊した変異と assert(false) が、証明に失敗することを確かめる"
   task mutants: :version do
     # VERUS_MUTANTS_FILES（カンマ区切りのファイル名）があれば、そのファイルの変異と assert(false) だけを検査する。
@@ -573,7 +592,7 @@ end
 namespace :verus do
   # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行する。
   desc "中核の証明だけを検証する（変異と assert(false) の検査を除く）"
-  task proof: %w[verus:version verus:trusted verus:coverage verus:contract] do
+  task proof: %w[verus:version verus:trusted verus:coverage verus:contract verus:imports] do
     ok, verified, errors, out = verus_run(VERUS_CRATE)
     puts out.lines.grep(/verification results|^(error|warning)/)
     abort "verus: 証明に失敗した\n#{out}" unless ok && errors&.zero?
