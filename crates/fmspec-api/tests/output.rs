@@ -213,3 +213,21 @@ fn every_kind_of_property_reads_as_text() {
         assert_eq!(headline(status, property), expected);
     }
 }
+
+#[test]
+fn replaying_or_shrinking_a_trace_keeps_its_seed() {
+    let m = orders();
+    let found = simulate(&m, &json!({"seed": 5, "traces": 10}), None).unwrap();
+    assert_eq!(found["status"], "error", "{found}");
+    assert_eq!(found["trace"]["seed"], 5);
+    let trace = found["trace"].to_string();
+    // 再現の手がかり（seed、モデルの digest、操作列）は、再生しても縮小しても失わない。
+    assert_eq!(replay(&m, &trace)["trace"]["seed"], 5);
+    assert_eq!(shrink(&m, &trace, &json!({})).unwrap()["trace"]["seed"], 5);
+    // 判定ゲートが受理しないトレースは縮小しないが、示すトレースの seed は同じである。
+    let mut forged = found["trace"].clone();
+    forged["claim"] = json!({"violation": "deadlock"});
+    let rejected = shrink(&m, &forged.to_string(), &json!({})).unwrap();
+    assert_eq!(rejected["status"], "rejected", "{rejected}");
+    assert_eq!(rejected["trace"]["seed"], 5);
+}
