@@ -8,7 +8,11 @@
 # - verus:contract  未検証コードから呼べる公開関数が、前提条件（requires）を持たない（仕様書 §3.1）。
 # - verus:mutants   検査を1つ壊した変異と、到達点に assert(false) を置いた変種が、証明に失敗する。
 #
-# `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
+# `rake verus` と `rake verus:proof` は、変異の検査を除いて、証明とその他の検査だけを行う。
+# 変異の検査は、変種ごとに crate 全体を検証し直すので、すべて回すと数時間かかる。CI では回さない。
+# 証明を変えたときに手元で、変えたファイルに絞って実行する。
+#
+#   VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants
 #
 # Verus の実行ファイルは環境変数 VERUS で指定する（なければ PATH の verus）。
 # バージョンは VERUS_VERSION に固定する。更新は証明の再確認とあわせて行う。
@@ -486,10 +490,20 @@ namespace :verus do
 
   desc "検査を壊した変異と assert(false) が、証明に失敗することを確かめる"
   task mutants: :version do
-    jobs = VERUS_MUTANTS.each_with_index.map do |(file, from, to, description), n|
+    # VERUS_MUTANTS_FILES（カンマ区切りのファイル名）があれば、そのファイルの変異と assert(false) だけを検査する。
+    files = ENV.fetch("VERUS_MUTANTS_FILES", "").split(",").map(&:strip).reject(&:empty?)
+    unless files.empty?
+      known = (VERUS_MUTANTS + VERUS_CANARIES).map(&:first).uniq
+      unknown = files - known
+      abort "verus: VERUS_MUTANTS_FILES の #{unknown.join(', ')} には変異も assert(false) もない" unless unknown.empty?
+    end
+    selected = ->(file) { files.empty? || files.include?(file) }
+    mutants = VERUS_MUTANTS.each_with_index.select { |(file, *), _| selected.(file) }
+    canaries = VERUS_CANARIES.each_with_index.select { |(file, *), _| selected.(file) }
+    jobs = mutants.map do |(file, from, to, description), n|
       -> { verus_variant("mutant#{n}", file, description) { |src| verus_replace_once(src, from, to, description) } }
     end
-    jobs += VERUS_CANARIES.each_with_index.map do |(file, anchor, description), n|
+    jobs += canaries.map do |(file, anchor, description), n|
       lambda do
         verus_variant("canary#{n}", file, "assert(false): #{description}") do |src|
           verus_replace_once(src, anchor, "assert(false);\n#{anchor}", description)
@@ -501,13 +515,12 @@ namespace :verus do
       puts failures
       abort "verus: #{failures.length} 件の変異または assert(false) が証明を通った。証明が検査を捉えていない"
     end
-    puts "verus: 変異 #{VERUS_MUTANTS.length} 件と assert(false) #{VERUS_CANARIES.length} 件は、すべて証明に失敗した"
+    puts "verus: 変異 #{mutants.length} 件と assert(false) #{canaries.length} 件は、すべて証明に失敗した"
   end
 end
 
 namespace :verus do
-  # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行し、
-  # 変異の検査は main への PR と定期実行で行う（.github/workflows/ci.yml）。
+  # 変異と assert(false) の検査（verus:mutants）を除いたもの。CI では push と PR ごとにこれを実行する。
   desc "中核の証明だけを検証する（変異と assert(false) の検査を除く）"
   task proof: %w[verus:version verus:trusted verus:coverage verus:contract] do
     ok, verified, errors, out = verus_run(VERUS_CRATE)
@@ -518,5 +531,6 @@ namespace :verus do
   end
 end
 
-desc "中核の証明と、証明が空虚でないことの検査（Verus #{VERUS_VERSION} が必要）"
-task verus: %w[verus:proof verus:mutants]
+# 変異の検査（verus:mutants）は数時間かかるので含めない。
+desc "中核の証明（Verus #{VERUS_VERSION} が必要）"
+task verus: %w[verus:proof]

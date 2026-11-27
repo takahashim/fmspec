@@ -4,7 +4,7 @@
 #
 #   rake            テストと Verus の検証をすべて実行する
 #   rake test       Rust のテスト、参照実装のテスト、比較テスト、Ruby のテスト、fmspec-rails のテスト
-#   rake verus      中核の証明と、証明が空虚でないことの検査
+#   rake verus      中核の証明（変異の検査 verus:mutants は数時間かかるので含めない）
 #   rake compile    native extension をビルドして lib/fmspec に置く
 #   rake nupur:check  Nupur の写しが、固定したコミットの内容と一致することの検査
 ROOT = __dir__

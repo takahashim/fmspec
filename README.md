@@ -81,14 +81,15 @@ IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
 ```sh
 rake compile       # native extension をビルドして lib/fmspec に置く
 rake test          # Rustのテスト、参照実装のテスト、参照実装との比較テスト、Rubyのテスト、fmspec-railsのテスト
-rake verus         # 中核の証明と、証明が空虚でないことの検査
-rake verus:proof   # 中核の証明だけ（変異と assert(false) の検査を除く）
+rake verus         # 中核の証明（rake verus:proof と同じ。変異と assert(false) の検査を除く）
+rake verus:mutants # 変異と assert(false) が証明に失敗することの検査（すべて回すと数時間かかる）
 rake lint          # rustfmt と clippy
 rake nupur:check   # Nupurの写しが、固定したコミットの内容と一致することの検査
 rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 ```
 
 `rake test:rails` の前に、`fmspec-rails` で `bundle install` を実行しておく。
+`rake verus:mutants` は変種ごとに crate 全体を検証し直すので、証明を変えたときに、変えたファイルに絞って実行する（例：`VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants`）。
 `rake verus` には Verus 0.2026.11.02.8bf68ee が必要で、実行ファイルを環境変数 `VERUS` で指定する。
 `rake nupur:lint` には、Makiriのチェックアウト（環境変数 `MAKIRI`、既定は `../makiri`）と cargo-dylint が必要である。
 何を証明し、何を信頼しているかは [docs/verification.md](docs/verification.md) にある。
@@ -96,7 +97,7 @@ rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 
 ## CI
 
-GitHub Actions（`.github/workflows/ci.yml`）で、上の検査をすべて実行する。
+GitHub Actions（`.github/workflows/ci.yml`）で、上の検査を実行する。`rake verus:mutants` は数時間かかるので、CI では回さない。
 
 | ジョブ | 内容 |
 |---|---|
@@ -104,7 +105,6 @@ GitHub Actions（`.github/workflows/ci.yml`）で、上の検査をすべて実�
 | `ruby` | native extension のビルドと Rubyのテスト。Ruby 3.3 と 4.0 |
 | `rails` | `fmspec-rails` のテスト。PostgreSQL を立て、分離レベル別のテストも skip させない |
 | `verus` | `rake verus:proof`（変異の検査を除いた証明）。Verus は `rakelib/verus.rake` の `VERUS_VERSION` のリリースを取得する |
-| `verus-mutants` | `rake verus:mutants`（変異と `assert(false)`）。重いので、main への PR、毎日の定期実行、手動実行でだけ回す |
 | `nupur` | `rake nupur:upstream` と `rake nupur:lint`。Makiri の固定コミット（`rakelib/nupur.rake` の `NUPUR_COMMIT`）を取得する |
 
 rakelib は UTF-8 のファイルを読むので、手元でもロケールを UTF-8 にしておく（例：`LANG=C.UTF-8`）。
