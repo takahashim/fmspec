@@ -90,21 +90,38 @@ fn sets_and_maps_are_read_in_any_order_and_written_in_canonical_order() {
     );
 }
 
-/// 現状の振る舞い：Setの要素の重複は、集合としては同じ値なので受理し、正規形にまとめる。
-/// Mapのキーの重複は、値が同じでも、どちらの値かが決まらないので拒否する。
+/// Setの要素とMapのキーの重複は拒否する。Setの値の表現は重複を含まない要素の配列で、
+/// Mapのキーの重複は、値が同じでも拒否するのとそろえる。
 #[test]
-fn duplicate_set_elements_collapse_but_duplicate_map_keys_are_rejected() {
+fn duplicate_set_elements_and_duplicate_map_keys_are_rejected() {
     let m = color_set();
     assert_eq!(
-        from(&m, json!(["green", "green"])).unwrap(),
-        from(&m, json!(["green"])).unwrap()
+        from(&m, json!(["green", "green"])).unwrap_err(),
+        "要素 \"green\" が重複しています"
+    );
+    assert_eq!(
+        from(&m, json!(["green", "red", "green"])).unwrap_err(),
+        "要素 \"green\" が重複しています"
+    );
+    // 番号に変換して同じになる要素も重複とする。
+    let m = model_of(
+        json!({"set": {"option": {"enum": "color"}}}),
+        json!({"set": {"of": {"option": {"enum": "color"}}, "items": []}}),
+    );
+    assert_eq!(
+        from(&m, json!([null, {"some": "red"}, null])).unwrap_err(),
+        "要素 null が重複しています"
     );
 
     let m = color_map();
-    let error = from(&m, json!([["red", 0], ["red", 1]])).unwrap_err();
-    assert!(error.contains("重複"), "{error}");
-    let error = from(&m, json!([["red", 0], ["red", 0]])).unwrap_err();
-    assert!(error.contains("重複"), "{error}");
+    assert_eq!(
+        from(&m, json!([["red", 0], ["red", 1]])).unwrap_err(),
+        "キー \"red\" が重複しています"
+    );
+    assert_eq!(
+        from(&m, json!([["red", 0], ["red", 0]])).unwrap_err(),
+        "キー \"red\" が重複しています"
+    );
 }
 
 #[test]

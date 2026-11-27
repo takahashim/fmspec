@@ -229,3 +229,39 @@ fn conditions_name_defined_items_only() {
     assert!(with("deadlock", json!(null)).contains("deadlock"));
     assert!(with("fairness", json!(true)).contains("未知のキー"));
 }
+
+/// 証拠の状態にあるSetの要素の重複は、形式の誤りとして拒否する。
+#[test]
+fn duplicate_set_elements_in_evidence_states_are_format_errors() {
+    let bit = json!({"int": {"min": 0, "max": 1}});
+    let ir = json!({
+        "ir_version": 1,
+        "name": "evidence_set",
+        "states": [{"name": "s", "type": {"set": bit}, "initial": {"set": {"of": bit, "items": []}}}],
+        "actions": [{"name": "noop"}]
+    });
+    let m = load(&ir.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    let mut json = trace_json(&m, Claim::Deadlock);
+    assert!(read_back(&m, &json).is_ok());
+    json["initial"] = json!({"s": [1, 1]});
+    assert_eq!(
+        format_error(&m, &json),
+        "initial: 状態変数 \"s\": 要素 1 が重複しています"
+    );
+    json["initial"] = json!({"s": []});
+    json["steps"] = json!([{"action": "noop", "args": {}, "choices": {}, "output": {"unit": true},
+                            "state": {"s": [0, 1, 0]}}]);
+    let message = format_error(&m, &json);
+    assert!(message.contains("状態変数 \"s\": 要素 0 が重複しています"), "{message}");
+
+    let cert = Certificate {
+        conditions: default_conditions(&m, false),
+        states: vec![vec![0, 0]],
+    };
+    let mut json = certificate_to_json(&m, &cert);
+    json["states"][0] = json!([[1, 1]]);
+    match certificate_from_json(&m, &json.to_string()) {
+        Err(TraceError::Format(message)) => assert_eq!(message, "states[0]: 要素 1 が重複しています"),
+        other => panic!("形式の誤りとして拒否されるはず: {other:?}"),
+    }
+}
