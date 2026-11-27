@@ -3,7 +3,7 @@
 `process` のステップの境界で、インスタンスがクラッシュする遷移を自動で加える機能の設計案である。
 §3と§4（検査側）は実装した。使い方は [dsl.md](dsl.md) の「クラッシュ」にある。
 §5（実装との適合性検査）は未実装である。
-語彙、既定値、名前は試作の段階で、§9の未決事項とともに変わりうる。
+§9に、例（`examples/crash/`）で決めたことを、§10に残りの未決事項を書く。
 
 ## 1. 動機
 
@@ -62,13 +62,14 @@ Checkout.check.trace.steps.map(&:action)
 | `crash: :abort` | クラッシュしたインスタンスは、そこで終わる。再試行のないWebリクエストにあたる |
 | `crash: :restart` | クラッシュしたインスタンスは、最初のステップからやり直す。ローカル変数は初期値に戻る。Active Jobの再試行にあたる |
 | `crash_at: [ステップ, ...]` | クラッシュしうる位置。プログラムカウンタがそのステップのとき（そのステップを実行する前）に落ちうる。既定は、最初のステップを除くすべてのステップ |
-| `max_crashes: n` | `:restart` のとき、インスタンスごとのクラッシュの回数の上限。既定は1 |
+| `max_crashes: n` | `:restart` のとき、インスタンスごとのクラッシュの回数の上限。既定は1。環境についての仮定で、上限を超えて落ちる実行は検査しない |
+| `retries: n` | `:restart` のとき、実装が再試行する回数。尽きたあとに落ちると、インスタンスは `:crashed` で終わる（Active Jobの `retry_on attempts:` で、ジョブを捨てること）。`max_crashes:` とは一緒に書けない |
 
 `crash:` を書かなければ、いままでと同じである。
 
 `crash_at:` の既定から最初のステップを除くのは、最初のステップの前に落ちることは、`:abort` ではプロセスが始まらなかったこと、`:restart` では何も変わらないことになるからである。
-ただし `goto` で最初のステップに戻るループでは、2周目以降の最初のステップの前も、意味のあるクラッシュの位置になる。
-その位置で落ちる場合を見たければ、`crash_at:` に最初のステップを含める。
+`goto` で最初のステップに戻るループでも、既定は変えない（§9.5）。
+最初のステップの前で落ちる場合を見たければ、`crash_at:` に最初のステップを含める。
 
 ### 3.2 ローカル変数とクラッシュの後始末
 
@@ -82,10 +83,10 @@ Checkout.check.trace.steps.map(&:action)
 
 ```ruby
 process :worker, count: 2, crash: :abort do |id|
-  step(:lock) { |s| guard s.holder.eq(nil); update holder: id }
+  step(:lock) { |s| guard s.holder.eq(-1); update holder: id }
   step(:work) { |s| update count: s.count + 1 }
-  step(:unlock) { |s| update holder: nil }
-  on_crash { |s| update holder: ite(s.holder.eq(id), nil, s.holder) }
+  step(:unlock) { |_s| update holder: -1 }
+  on_crash { |s| update holder: ite(s.holder.eq(id), -1, s.holder) }
 end
 ```
 
@@ -96,7 +97,7 @@ end
 
 | 書き方 | 内容 |
 |---|---|
-| `s.job[0].crashed` | `:abort` で、インスタンスがクラッシュして終わった |
+| `s.job[0].crashed` | `:abort` か `retries:` で、インスタンスがクラッシュして終わった |
 | `s.job[0].crashes` | `:restart` で、インスタンスがクラッシュした回数 |
 | `s.job[0].done` | いままでどおり、最後のステップまで実行して終えた。クラッシュして終わったときは偽 |
 
@@ -110,13 +111,14 @@ end
 |---|---|---|
 | `:abort` | プログラムカウンタの列挙型 `job.pc` に、ラベル `:crashed` を加える | guard は「`job[i].pc` が `crash_at:` のどれか」と `on_crash` のguardの連言。更新は `job[i].pc := :crashed` と `on_crash` の更新 |
 | `:restart` | `job[i].crashes`（`int(0..max_crashes)`、初期値0） | guard は「`job[i].pc` が `crash_at:` のどれか」、「`job[i].crashes < max_crashes`」、`on_crash` のguardの連言。更新は、`job[i].pc` を最初のステップに、`durable: true` でないローカル変数を初期値に、`job[i].crashes` を1増やす更新と、`on_crash` の更新 |
+| `:restart`、`retries: n` | `job.pc` にラベル `:crashed` を加え、`job[i].crashes`（`int(0..n)`、初期値0）を加える | guard は「`job[i].pc` が `crash_at:` のどれか」と `on_crash` のguardの連言（回数を含めない）。更新は、`job[i].crashes < n` なら `:restart` と同じ更新、そうでなければ `job[i].pc := :crashed`（ローカル変数と回数は変えない）。`on_crash` の更新は、どちらの場合も加える |
 
 ほかに、次のことを決める。
 
 - クラッシュの操作は公開引数を持たない。`on_crash` の `choose` は、操作の内部選択になる。
 - `initial_in:` のローカル変数を初期値に戻すときは、候補から選ぶ内部選択にする。内部選択の名前は、ローカル変数の名前である。
 - `on_crash` の更新とローカル変数の初期化が同じ変数を更新すれば、`Fmspec::BuildError` にする（ローカル変数は `on_crash` で更新できない）。
-- `terminal` を書かないときの終端条件は、「すべてのインスタンスが `:done` か `:crashed`」になる。`:restart` では、いままでどおり「すべてのインスタンスが `:done`」である。
+- `terminal` を書かないときの終端条件は、「すべてのインスタンスが `:done` か `:crashed`」になる。`:crashed` のない `:restart`（`max_crashes:`）では、いままでどおり「すべてのインスタンスが `:done`」である。
 - `on_crash` の `ensures` は、クラッシュの操作の遷移契約になる。名前には、ステップの遷移契約と同じくインスタンスの接頭辞が付く。
 
 クラッシュの操作は普通の操作なので、次のものはそのまま使える。
@@ -183,7 +185,7 @@ Railsでは、`fmspec-rails` の補助として、Active Jobを途中で落と�
 | クラッシュの位置 | `serial` の文と文の間。`atomic` の中では起きない | ステップの間。ステップは常にatomic |
 | 失われる状態 | ロールの `ephemeral` のフィールド（既定はすべてdurable） | `:restart` のローカル変数（既定は失われる。`durable: true` で残す）。共有の状態変数は残る |
 | 再起動 | ロールのクラッシュ後、ephemeralなフィールドを `Init` の値に戻す | `:restart` で最初のステップから。`:abort` では終わる |
-| 回数 | 公平性の仮定と `assume` で扱う | `max_crashes:` で上限を状態に持つ |
+| 回数 | 公平性の仮定と `assume` で扱う | `max_crashes:`（環境の仮定）か `retries:`（実装の再試行）で、回数を状態に持つ |
 | 環境の後始末 | なし（明示的にモデル化する） | `on_crash` |
 | メッセージの消失 | ロール間のRPCで自動 | 対象外。fmspecにRPCの語彙はない |
 | 結果の検査 | 検査器を信頼する | 判定ゲートが証明書とトレースを検査する（変わらない） |
@@ -191,11 +193,100 @@ Railsでは、`fmspec-rails` の補助として、Active Jobを途中で落と�
 FizzBeeが既定で有効にしているのは、「起きうる障害を書き忘れる」ことを防ぐためである。
 fmspecで既定を無効にする代わりに、`process` に `crash:` がないことを警告する仕組み（`Fmspec::Lint` か、検査の報告）を検討する（§9）。
 
-## 9. 未決事項
+## 9. 例で決めたこと
 
-- `max_crashes:` を、インスタンスごとにするか、プロセス全体の合計にするか。合計のほうが状態は少ないが、どのインスタンスが落ちたかの組み合わせが見えにくい。
-- `:restart` の再開位置。最初のステップ固定でよいか、`restart_at:` で選べるようにするか。Active Jobの `retry_on` は最初からだが、ステップの中で状態を見て処理を飛ばす（冪等にする）実装も多く、それは仕様のguardで書ける。
-- `:restart` でも、再試行の回数が尽きたら `:crashed` で終わる（Active Jobの `discard`）を表すか。表すなら `crash: :restart` に `then: :abort` のような指定を足す。
-- 既定を無効にしたとき、書き忘れをどう知らせるか。
-- `crash_at:` の既定に、`goto` で戻るループの最初のステップを含めるか。含めるには、そのステップを一度でも実行したかを状態に持つ必要がある。
-- bindingの `crash` で、Active Recordの接続とトランザクションをどう捨てるか。`fmspec-rails` の補助の設計。
+`examples/crash/` に、Railsでよく起きる4つの例を書き、`test/crash_examples_test.rb` で結果を固定した。
+状態数は、探索器が報告した到達状態の数である。
+
+| 例 | 内容 |
+|---|---|
+| `double_charge.rb` | 決済してから注文を保存するジョブ。素朴な版と、支払い済みを見て飛ばす版は二重に決済し、冪等キーの版は検査が通る |
+| `discarded_job.rb` | 再試行が尽きたジョブ。`max_crashes: 2` では検査が通り、`retries: 2` では注文が pending のまま残る反例が出る。捨てるときに注文を failed にすると通る |
+| `outbox.rb` | 注文の確認メール。保存してからジョブを積むとメールが漏れ（有界応答性の違反）、Outboxにするとリレーの再起動で二重に送り、メールサービスの冪等キーで通る |
+| `queue_worker.rb` | キューのワーカーのループ。落ちたときに処理中のメッセージをキューに戻さないと、メッセージが失われる |
+
+### 9.1 `max_crashes:` はインスタンスごとにする
+
+ワーカー2つの `queue_worker.rb` で、状態数は次のとおりだった。
+
+| 回数の上限 | 状態数（ワーカー2つ） | 状態数（ワーカー3つ） |
+|---|---|---|
+| ワーカーごとに1回 | 120 | 533 |
+| ワーカーごとに2回 | 382 | — |
+| 全体で1回（ワーカーごとは2回まで） | 75 | 189 |
+
+全体の上限のほうが状態は少ない。
+しかし、全体の上限は `on_crash` の guard と共有の状態変数で書ける（`queue_worker.rb` の `budget:`）。
+
+```ruby
+state :faults, int(0..1), initial: 0
+process :worker, count: 2, crash: :restart, max_crashes: 2 do
+  # ...
+  on_crash do |s|
+    guard s.faults < 1
+    update faults: s.faults + 1
+  end
+end
+```
+
+一方、再試行の回数（`retries:`）はジョブごとの性質で、インスタンスごとに数えるしかない。
+`max_crashes:` と `retries:` の数え方を揃え、インスタンスごとにする。
+全体の上限の語彙は、同じ書き方が繰り返し現れてから足す。
+
+### 9.2 再開の位置は最初のステップに固定する
+
+`double_charge.rb` の `:check_paid` は、最初のステップで注文が支払い済みかを見て、済んでいれば終える（`goto :done`）。
+それでも二重決済は防げない。
+決済のあと、保存の前に落ちると、注文は支払い済みになっていないからである。
+防げたのは、決済サービス側の状態（冪等キー）を見る `:idempotent` だけだった。
+
+途中から再開したように見える実装は、永続化された状態を見て処理を飛ばしている。
+それは仕様でも、最初のステップの guard と `goto` で書ける。
+Active Jobの再試行も `perform` の最初からやり直すので、`restart_at:` は足さない。
+
+### 9.3 再試行が尽きたあとを `retries:` で表す
+
+`discarded_job.rb` で、`max_crashes: 2` の版は検査が通り、`retries: 2` の版は反例が出た。
+`max_crashes:` は「3回目は落ちない」という環境の仮定で、ジョブは必ず最後まで進む。
+実装はそうではなく、3回目に落ちればジョブを捨てる。
+捨てられたジョブの注文が pending のまま残る不具合は、`max_crashes:` では見えない。
+
+そこで、`retries: n` を足した（設計案の `then: :abort` にあたる）。
+`max_crashes:` と一緒には書けない。
+両方を組み合わせる（再試行は3回だが、落ちるのは2回までと仮定する）必要が出たら、そのとき考える。
+
+捨てるときの後始末（Active Jobの `after_discard`）は、`on_crash` で回数を見て書ける。
+
+```ruby
+process :job, crash: :restart, retries: 2 do |id|
+  # ...
+  on_crash { |s| update order: ite(s.job[id].crashes.eq(2), :failed, s.order) }
+end
+```
+
+`on_crash` の式は遷移前の状態で評価するので、`crashes` が上限に達しているクラッシュが、捨てるときのクラッシュである。
+
+### 9.4 書き忘れは警告しない
+
+`process` を使う仕様には、クラッシュが意味を持たないものも多い。
+`examples/tlaplus/models` でプロセスを使う5つの仕様は、PlusCalのアルゴリズムを写したもので、どれもプロセスが落ちることを仮定していない。
+`fmspec-rails/test/support/withdrawal_spec.rb` のトランザクションも、分離レベルの検査が目的で、落ちることは別の問題である。
+これらで警告を出すと、警告を消すための指定が増えるだけになる。
+
+警告の代わりに、[dsl.md](dsl.md) の「クラッシュ」に、`crash:` を使うべき場面（外部への副作用と、トランザクションの外のステップを持つプロセス）を書く。
+
+### 9.5 ループの先頭は、既定ではクラッシュの位置にしない
+
+`queue_worker.rb` のワーカーは、`fetch`、`handle`、`ack` を繰り返す。
+`crash_at:` に `fetch` を含めても、状態数（120）も検査の結果も変わらなかった。
+`fetch` にいるとき、ローカル変数はすでに初期値に戻っており（`ack` で消す）、そこで落ちても回数が増えるだけだからである。
+
+ループの途中の値を次の周に持ち越すプロセスでは、先頭で落ちることが意味を持ちうる。
+そのときは `crash_at:` に先頭を含める。
+一度でも実行したかを状態に持つ既定は、状態を増やす割に得るものが少ないので採らない。
+
+## 10. 未決事項
+
+- bindingの `crash` で、Active Recordの接続とトランザクションをどう捨てるか。`fmspec-rails` の補助の設計（§5）。
+- `max_crashes:` と `retries:` を組み合わせる必要があるか。
+- 全体のクラッシュの回数の上限を、語彙にするか（§9.1）。

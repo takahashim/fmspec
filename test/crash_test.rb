@@ -129,6 +129,34 @@ class CrashTest < Minitest::Test
     assert_equal({ "int" => { "min" => 0, "max" => 2 } }, states.find { |s| s["name"] == "job[0].crashes" }["type"])
   end
 
+  # retries: は、再試行が尽きたあとのクラッシュで :crashed にする。max_crashes: と違い、クラッシュの guard に回数を含めない。
+  def test_retries_end_the_instance_when_exhausted
+    model = Fmspec.define(:retries) do
+      state :n, int(0..1), initial: 0
+      process :job, crash: :restart, retries: 2 do
+        local :tmp, int(0..1), initial: 0
+        step(:a) { |_s| update tmp: 1 }
+        step(:b) { |_s| unchanged }
+      end
+      invariant(:tries) { |s| s.job[0].crashed.implies(s.job[0].crashes.eq(2)) }
+    end
+    ir = model.to_ir
+    assert_equal %w[a b done crashed], ir["enums"].find { |e| e["name"] == "job.pc" }["variants"]
+    crash = ir["actions"].find { |a| a["name"] == "job[0].crash" }
+    assert_equal({ "eq" => [{ "var" => 1 }, { "enum" => { "type" => "job.pc", "variant" => "b" } }] }, crash["guard"])
+    pc = crash["updates"].find { |u| u["target"] == 1 }["expr"]
+    assert_equal "ite", pc.keys.first
+    assert_equal({ job: { count: 1, steps: %i[a b], crash: :restart, retries: 2 } }, model.processes)
+    assert model.check(deadlock: true).verified?
+    # 再試行の回数を超えて落ちる実行も検査する。
+    stuck = Fmspec.define(:never_done) do
+      state :n, int(0..1), initial: 0
+      process(:job, crash: :restart, retries: 1, crash_at: %i[a]) { step(:a) { |_s| unchanged } }
+      invariant(:not_discarded) { |s| s.job[0].crashed.not_ }
+    end
+    assert_equal %i[job[0].crash job[0].crash], stuck.check.trace.steps.map(&:action)
+  end
+
   def test_restart_resets_ephemeral_locals_and_keeps_durable_ones
     model = Fmspec.define(:locals) do
       state :out, int(0..3), initial: 0
@@ -163,6 +191,10 @@ class CrashTest < Minitest::Test
     assert_raises(Fmspec::BuildError) { define.call(crash: :abort, crash_at: %i[c]) }
     assert_raises(Fmspec::BuildError) { define.call(crash: :abort, max_crashes: 2) }
     assert_raises(Fmspec::BuildError) { define.call(crash: :restart, max_crashes: 0) }
+    assert_raises(Fmspec::BuildError) { define.call(crash: :restart, retries: 0) }
+    assert_raises(Fmspec::BuildError) { define.call(crash: :restart, retries: 1, max_crashes: 1) }
+    assert_raises(Fmspec::BuildError) { define.call(crash: :abort, retries: 1) }
+    assert_raises(Fmspec::BuildError) { define.call(retries: 1) }
     assert_raises(Fmspec::BuildError) { define.call(crash_at: %i[b]) }
     assert_raises(Fmspec::BuildError) { define.call { on_crash { |_s| unchanged } } }
     assert_raises(Fmspec::BuildError) { define.call(crash: :abort) { on_crash { |_s| returns true } } }

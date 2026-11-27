@@ -176,12 +176,13 @@ module Fmspec
     # - `:abort` なら、プログラムカウンタを `:crashed` にする。
     # - `:restart` なら、プログラムカウンタを最初のステップに、`durable: true` でないローカル変数を初期値に戻し、
     #   クラッシュの回数を1増やす。初期値の候補が複数あるローカル変数は、同じ名前の内部選択で選ぶ。
+    # - `retries:` なら、回数が上限未満のときは `:restart` と同じで、上限に達したあとはプログラムカウンタを `:crashed` にする。
     #
-    # guard は、プログラムカウンタが `crash_at:` のどれかであること（`:restart` なら、回数が上限未満であること）と、
+    # guard は、プログラムカウンタが `crash_at:` のどれかであること（`max_crashes:` なら、回数が上限未満であること）と、
     # on_crash の guard の連言である。
     class CrashBuilder < ActionBuilder
       # plan は、:mode、:pc（index と type）、:at（ラベルの配列）、:first、:locals（[名前, index, durable] の配列）、
-      # :crashes（回数の状態変数の index）、:max_crashes。
+      # :crashes（回数の状態変数の index）、:max_crashes、:discard（retries: のとき真）。
       def initialize(scope, name, source, plan)
         super(scope, name, {}, source)
         @plan = plan
@@ -203,7 +204,7 @@ module Fmspec
           reset(plan)
         end
         guards = [crash_point.node]
-        guards << (counter < plan[:max_crashes]).node if plan[:mode] == :restart
+        guards << (counter < plan[:max_crashes]).node if plan[:mode] == :restart && !plan[:discard]
         guards << action["guard"] unless action["guard"] == { "bool" => true }
         action["guard"] = guards.length == 1 ? guards[0] : { "all" => guards }
         [action, contracts.map { |c| c.merge("name" => @model.qualify(c["name"])) }]
@@ -230,13 +231,16 @@ module Fmspec
           return
         end
 
-        updates[plan[:pc][:index]] = plan[:pc][:type][plan[:first]]
+        # retries: なら、再試行が残っているときだけやり直し、尽きていれば :crashed で終える。
+        retry_left = plan[:discard] ? counter < plan[:max_crashes] : nil
+        pick = ->(restart, &discard) { retry_left ? ite(retry_left, restart, discard.call) : restart }
+        updates[plan[:pc][:index]] = pick.call(plan[:pc][:type][plan[:first]]) { plan[:pc][:type][:crashed] }
         plan[:locals].each do |name, index, durable|
           next if durable
 
-          updates[index] = initial_value(name, index)
+          updates[index] = pick.call(initial_value(name, index)) { Expr.new({ "var" => index }, @model.states[index][:type].kind) }
         end
-        updates[plan[:crashes]] = counter + 1
+        updates[plan[:crashes]] = pick.call(counter + 1) { counter }
       end
 
       def initial_value(name, index)
@@ -255,12 +259,14 @@ module Fmspec
 
     # 記号的な状態の `s.プロセス`。`s.プロセス[i]` でインスタンスの状態を参照する。
     class Ref
-      def initialize(model, name, count, ref, crash = nil)
+      # info は、Builder が記録したプロセスの情報（:count、:crash、:retries）。
+      def initialize(model, name, info, ref)
         @model = model
         @name = name
-        @count = count
+        @count = info[:count]
         @ref = ref
-        @crash = crash
+        @crash = info[:crash] == :abort || info.key?(:retries) ? :abort : info[:crash]
+        @counted = info[:crash] == :restart
       end
 
       def [](id)
@@ -268,29 +274,30 @@ module Fmspec
           raise BuildError, "プロセス #{@name} のインスタンスの番号は 0..#{@count - 1} です: #{id.inspect}"
         end
 
-        StateRef.new(Instance.new(@model, "#{@name}[#{id}]", @crash), @ref)
+        StateRef.new(Instance.new(@model, "#{@name}[#{id}]", crashed: @crash == :abort, counted: @counted), @ref)
       end
 
       def inspect = "#<Fmspec::Process::Ref #{@name}>"
     end
 
     # 1つのインスタンスの、プログラムカウンタとローカル変数。`done` は、最後のステップまで実行してプロセスを終えたこと。
-    # `crashed` は `crash: :abort` でクラッシュして終えたこと、`crashes` は `crash: :restart` でクラッシュした回数。
+    # `crashed` は `crash: :abort` か `retries:` でクラッシュして終えたこと、`crashes` は `crash: :restart` でクラッシュした回数。
     class Instance
-      def initialize(model, prefix, crash = nil)
+      def initialize(model, prefix, crashed: false, counted: false)
         @model = model
         @prefix = prefix
-        @crash = crash
+        @crashed = crashed
+        @counted = counted
       end
 
       def reference(name, ref)
         return @model.reference(:"#{@prefix}.pc", ref).eq(:done) if name == :done
         if name == :crashed
-          raise BuildError, "#{@prefix}.crashed は crash: :abort のプロセスで使えます" unless @crash == :abort
+          raise BuildError, "#{@prefix}.crashed は crash: :abort か retries: のプロセスで使えます" unless @crashed
 
           return @model.reference(:"#{@prefix}.pc", ref).eq(:crashed)
         end
-        if name == :crashes && @crash != :restart
+        if name == :crashes && !@counted
           raise BuildError, "#{@prefix}.crashes は crash: :restart のプロセスで使えます"
         end
 

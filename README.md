@@ -60,6 +60,7 @@ DSLの説明は [docs/dsl.md](docs/dsl.md) に、Railsアプリケーション�
 | `vendor/nupur` | MakiriのNupurの写し。編集しない |
 | `reference/` | 比較テスト用のRubyの参照実装と、IRからTLA+への変換 |
 | `examples/models/` | IRの例 |
+| `examples/crash/` | プロセスのクラッシュ（`crash:`）の例。Railsでよく起きる不具合を、変種ごとに書いたもの |
 | `examples/tlaplus/` | tlaplus/Examples のTLA+の仕様の写しと、同じモデルをDSLで書いたもの。TLCとの比較に使う |
 
 ## コマンド

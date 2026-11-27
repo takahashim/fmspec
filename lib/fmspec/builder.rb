@@ -144,7 +144,9 @@ module Fmspec
     #   crash        :abort（クラッシュしたインスタンスは終わる）か :restart（最初のステップからやり直す）
     #   crash_at     クラッシュしうる位置（そのステップを実行する前）。既定は最初のステップを除くすべてのステップ
     #   max_crashes  :restart のとき、インスタンスごとのクラッシュの回数の上限。既定は1
-    def process(name, count: 1, crash: nil, crash_at: nil, max_crashes: nil, &body)
+    #   retries      :restart のとき、実装が再試行する回数。尽きたあとのクラッシュでは、インスタンスは :crashed で終わる。
+    #                max_crashes: とは一緒に書けない
+    def process(name, count: 1, crash: nil, crash_at: nil, max_crashes: nil, retries: nil, &body)
       raise BuildError, "プロセス #{name} にはブロックが必要です" unless body
 
       claim(name, "プロセス")
@@ -158,8 +160,8 @@ module Fmspec
         raise BuildError, "プロセス #{name} のステップの名前と順序は、インスタンスごとに同じにします"
       end
 
-      crash = crash_options(name, labels, bodies, crash, crash_at, max_crashes)
-      pc = enum(:"#{name}.pc", *labels, :done, *(crash && crash[:mode] == :abort ? [:crashed] : []))
+      crash = crash_options(name, labels, bodies, crash, crash_at, max_crashes, retries)
+      pc = enum(:"#{name}.pc", *labels, :done, *(crash && crash[:crashed] ? [:crashed] : []))
       bodies.each_with_index do |b, id|
         state(:"#{name}[#{id}].pc", pc, initial: labels.first)
         b.locals.each { |local, type, initial, _| state(:"#{name}[#{id}].#{local}", type, **initial) }
@@ -167,6 +169,7 @@ module Fmspec
       end
       @processes[name] = { count: count, steps: labels }
       @processes[name][:crash] = crash[:mode] if crash
+      @processes[name][:retries] = crash[:max_crashes] if crash&.dig(:discard)
       location = caller_locations(1, 1)&.first
       bodies.each_with_index do |b, id|
         process_steps(name, id, b, pc)
@@ -275,7 +278,7 @@ module Fmspec
       index = @states.index { |s| s[:name] == name }
       return Expr.new({ ref => index }, @states[index][:type].kind) if index
       return @constants[name] if @constants.key?(name)
-      return Process::Ref.new(self, name, @processes[name][:count], ref, @processes[name][:crash]) if @processes.key?(name)
+      return Process::Ref.new(self, name, @processes[name], ref) if @processes.key?(name)
       return Migration::Ref.new(self, name, @migrations[name], ref) if @migrations.key?(name)
 
       raise BuildError, "未定義の状態変数または定数です: #{name}"
@@ -367,21 +370,28 @@ module Fmspec
     end
 
     # `crash:` の指定を検査し、展開に使う形にする。`crash:` がなければ nil。
-    def crash_options(name, labels, bodies, mode, at, max_crashes)
+    def crash_options(name, labels, bodies, mode, at, max_crashes, retries)
       if mode.nil?
-        raise BuildError, "プロセス #{name}: crash_at: と max_crashes: は crash: と一緒に書きます" unless at.nil? && max_crashes.nil?
+        unless at.nil? && max_crashes.nil? && retries.nil?
+          raise BuildError, "プロセス #{name}: crash_at:、max_crashes:、retries: は crash: と一緒に書きます"
+        end
         raise BuildError, "プロセス #{name}: on_crash は crash: と一緒に書きます" if bodies.any?(&:crash)
 
         return nil
       end
       raise BuildError, "プロセス #{name} の crash: は :abort か :restart です: #{mode.inspect}" unless %i[abort restart].include?(mode)
       if mode == :abort
-        raise BuildError, "プロセス #{name}: max_crashes: は crash: :restart で書きます" unless max_crashes.nil?
+        raise BuildError, "プロセス #{name}: max_crashes: と retries: は crash: :restart で書きます" unless max_crashes.nil? && retries.nil?
         if bodies.any? { |b| !b.durable.empty? }
           raise BuildError, "プロセス #{name}: durable: のローカル変数は crash: :restart で使います"
         end
       end
-      max_crashes = 1 if mode == :restart && max_crashes.nil?
+      raise BuildError, "プロセス #{name}: max_crashes: と retries: は一緒に書けません" unless max_crashes.nil? || retries.nil?
+      if retries && !(retries.is_a?(Integer) && retries >= 1)
+        raise BuildError, "プロセス #{name} の retries: は1以上の整数です（再試行しないなら crash: :abort）: #{retries.inspect}"
+      end
+
+      max_crashes = retries || max_crashes || 1 if mode == :restart
       if mode == :restart && !(max_crashes.is_a?(Integer) && max_crashes >= 1)
         raise BuildError, "プロセス #{name} の max_crashes: は1以上の整数です: #{max_crashes.inspect}"
       end
@@ -391,7 +401,7 @@ module Fmspec
       raise BuildError, "プロセス #{name} の crash_at: にないステップがあります: #{unknown.map(&:inspect).join(', ')}" unless unknown.empty?
       raise BuildError, "プロセス #{name}: クラッシュしうる位置がありません。crash_at: で指定します" if at.empty?
 
-      { mode: mode, at: labels & at, max_crashes: max_crashes }
+      { mode: mode, at: labels & at, max_crashes: max_crashes, discard: !retries.nil?, crashed: mode == :abort || !retries.nil? }
     end
 
     # プロセスのインスタンス `id` の、クラッシュの操作を加える。
@@ -405,7 +415,7 @@ module Fmspec
         [local, state_index(:"#{prefix}.#{local}"), body.durable.include?(local)]
       end
       plan = { mode: crash[:mode], pc: { index: state_index(:"#{prefix}.pc"), type: pc }, at: crash[:at],
-               first: labels.first, locals: locals, max_crashes: crash[:max_crashes] }
+               first: labels.first, locals: locals, max_crashes: crash[:max_crashes], discard: crash[:discard] }
       plan[:crashes] = state_index(:"#{prefix}.crashes") if crash[:mode] == :restart
       scope = Process::Scope.new(self, prefix, body.locals.map(&:first))
       built, contracts = Process::CrashBuilder.new(scope, action, source_of([location]), plan).build(&block)
@@ -414,14 +424,15 @@ module Fmspec
     end
 
     # 終端条件の既定。プロセスがあれば、すべてのインスタンスがプロセスを終えたこと。
-    # `crash: :abort` のプロセスでは、クラッシュして終えたことも含む。
+    # `crash: :abort` と `retries:` のプロセスでは、クラッシュして終えたことも含む。
     def processes_done
       return nil if @processes.empty?
 
       done = @processes.flat_map do |name, p|
         Array.new(p[:count]) do |id|
           pc = reference(:"#{name}[#{id}].pc", "var")
-          p[:crash] == :abort ? { "any" => [pc.eq(:done).node, pc.eq(:crashed).node] } : pc.eq(:done).node
+          crashed = p[:crash] == :abort || p.key?(:retries)
+          crashed ? { "any" => [pc.eq(:done).node, pc.eq(:crashed).node] } : pc.eq(:done).node
         end
       end
       done.length == 1 ? done[0] : { "all" => done }
