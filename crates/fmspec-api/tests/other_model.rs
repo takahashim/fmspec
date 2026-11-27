@@ -201,7 +201,7 @@ fn a_certificate_for_another_model_is_checked_against_the_current_model() {
 fn allow_other_model_is_a_boolean() {
     let m = counter(3, 1, |_| {});
     let trace = violation(&m);
-    let expected = "allow_other_model は真偽値です";
+    let expected = "allow_other_model は真偽値です（\"yes\"）";
     let bad = json!({"allow_other_model": "yes"});
     assert_eq!(replay_with(&m, &trace, &bad).unwrap_err(), expected);
     assert_eq!(shrink(&m, &trace, &bad, None).unwrap_err(), expected);

@@ -65,10 +65,11 @@ impl Session {
         let observed = match map.get("observe") {
             None | Some(Value::Null) => (0..names.len()).collect(),
             Some(v) => {
-                let list = v.as_array().ok_or("observe は状態変数の名前の配列です")?;
+                let not_names = || format!("observe は状態変数の名前の配列です（{v}）");
+                let list = v.as_array().ok_or_else(not_names)?;
                 let mut observed = Vec::new();
                 for name in list {
-                    let name = name.as_str().ok_or("observe は状態変数の名前の配列です")?;
+                    let name = name.as_str().ok_or_else(not_names)?;
                     let index = names
                         .iter()
                         .position(|n| n == name)

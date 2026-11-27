@@ -21,7 +21,7 @@ use fmspec_search::{
     check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, ShrinkOptions,
     ShrinkStop, SimOptions, Status,
 };
-use options::{conditions, count, deadline, flag, keys, max_states, options, size};
+use options::{conditions, count, deadline, flag, keys, max_states, optional_flag, options, size};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -80,10 +80,8 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
         ],
     )?;
     let cond = conditions(model, map)?;
-    if !matches!(map.get("symmetry"), None | Some(Value::Null | Value::Bool(_))) {
-        return Err("symmetry は真偽値です".to_string());
-    }
-    let use_symmetry = !model.names.symmetry.is_empty() && !matches!(map.get("symmetry"), Some(Value::Bool(false)));
+    let symmetry = optional_flag(map, "symmetry")?;
+    let use_symmetry = !model.names.symmetry.is_empty() && symmetry != Some(false);
     let max_check_cost = count(map, "max_check_cost", 0)?;
     // オプションの誤りは、探索を始める前にすべて見つける。
     let want_certificate = flag(map, "certificate")?;

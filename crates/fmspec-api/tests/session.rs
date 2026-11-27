@@ -131,12 +131,12 @@ fn malformed_requests_are_errors_with_a_message() {
     let opts = |o: Value| Session::new(orders(), &o).err().unwrap();
     assert_eq!(
         opts(json!({"observe": "charges"})),
-        "observe は状態変数の名前の配列です"
+        "observe は状態変数の名前の配列です（\"charges\"）"
     );
     assert_eq!(opts(json!({"observe": ["sold"]})), "未定義の状態変数 \"sold\"");
     assert_eq!(
         opts(json!({"inject": ["pay"]})),
-        "inject は、操作名から内部選択の名前の配列へのオブジェクトです"
+        "inject は、操作名から内部選択の名前の配列へのオブジェクトです（[\"pay\"]）"
     );
     assert_eq!(opts(json!({"inject": {"refund": []}})), "未定義の操作 \"refund\"");
     assert_eq!(

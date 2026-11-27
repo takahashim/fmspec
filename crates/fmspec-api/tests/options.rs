@@ -27,18 +27,19 @@ fn check_error(opts: Value) -> String {
 fn condition_errors() {
     assert_eq!(check_error(json!([])), "オプションはオブジェクトです");
     assert_eq!(check_error(json!({"bogus": 1})), "未知のオプション \"bogus\"");
-    assert_eq!(check_error(json!({"deadlock": 1})), "deadlock は真偽値です");
-    assert_eq!(check_error(json!({"actions": "inc"})), "操作の指定は名前の配列です");
+    assert_eq!(check_error(json!({"deadlock": 1})), "deadlock は真偽値です（1）");
+    assert_eq!(check_error(json!({"actions": "inc"})), "操作の指定は名前の配列です（\"inc\"）");
     assert_eq!(
         check_error(json!({"invariants": [1]})),
-        "不変条件の指定は名前の配列です"
+        "不変条件の指定は名前の配列です（[1]）"
     );
     assert_eq!(check_error(json!({"contracts": ["c"]})), "未定義の遷移契約 \"c\"");
     assert_eq!(
         check_error(json!({"max_states": 0})),
         "max_states は1以上の整数です（0）"
     );
-    assert_eq!(check_error(json!({"certificate": 1})), "certificate は真偽値です");
+    assert_eq!(check_error(json!({"certificate": 1})), "certificate は真偽値です（1）");
+    assert_eq!(check_error(json!({"symmetry": "on"})), "symmetry は真偽値です（\"on\"）");
     assert_eq!(
         check_error(json!({"max_depth": -1})),
         "max_depth は0以上の整数です（-1）"
