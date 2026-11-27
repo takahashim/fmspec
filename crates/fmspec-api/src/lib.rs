@@ -16,12 +16,15 @@ mod session;
 use fmspec_core::evidence::Evidence;
 use fmspec_core::gate::decide;
 use fmspec_core::gate::VerdictKind;
-use fmspec_ir::{certificate_to_json, read_certificate, read_trace, LoadError, TraceError};
+use fmspec_ir::{read_certificate, read_trace, LoadError};
 use fmspec_search::{
-    check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, ShrinkOptions,
-    ShrinkStop, SimOptions, Status,
+    check as search_check, check_sym, judge, sample, shrink as search_shrink, ShrinkOptions, SimOptions,
 };
-use options::{conditions, count, deadline, flag, keys, max_states, optional_flag, options, size};
+use options::{
+    bfs_options, conditions, count, deadline, flag, gate_options, optional_flag, options_only, options_with_conditions,
+    size, trace_gate_options,
+};
+use report::{CheckOutputs, Judged, Provenance, ShrinkSummary};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -38,22 +41,13 @@ pub type Interrupt<'a> = Option<&'a dyn Fn() -> bool>;
 pub fn to_text(result: Result<Value, String>) -> String {
     match result {
         Ok(body) => body.to_string(),
-        Err(message) => json!({"status": "usage_error", "message": message}).to_string(),
+        Err(message) => report::usage_error(&message).to_string(),
     }
 }
 
 /// モデルの概要。IR検証を通ったことの報告に使う。
 pub fn describe(model: &Model) -> Value {
-    json!({
-        "status": "valid",
-        "model": model.names.model,
-        "model_digest": model.digest,
-        "states": model.names.states.len(),
-        "actions": model.names.actions.len(),
-        // 対称性の像として加えた不変条件は数えない。
-        "invariants": model.names.invariant_family.iter().enumerate().filter(|(j, f)| j == *f).count(),
-        "contracts": model.names.contracts.len(),
-    })
+    report::describe(model)
 }
 
 /// IRを読み込めなかったことの報告。
@@ -68,7 +62,7 @@ pub fn load_error(e: &LoadError) -> Value {
 /// `max_check_cost`（判定ゲートが証拠の検査にかける評価回数の上限）、
 /// `certificate`（真なら、受理された証明書を結果に含める）。
 pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(
+    let map = options_with_conditions(
         opts,
         &[
             "max_states",
@@ -85,13 +79,7 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
     let max_check_cost = count(map, "max_check_cost", 0)?;
     // オプションの誤りは、探索を始める前にすべて見つける。
     let want_certificate = flag(map, "certificate")?;
-    let opts = BfsOptions {
-        max_states: max_states(map)?,
-        interrupt,
-        max_check_cost,
-        max_depth: count(map, "max_depth", 0)?.map(size),
-        deadline: deadline(map)?,
-    };
+    let opts = bfs_options(map, interrupt, max_check_cost)?;
     let outcome = if use_symmetry {
         if max_check_cost.is_some() || want_certificate {
             return Err("対称性による削減を使う検査では、max_check_cost と certificate を指定できません".to_string());
@@ -105,23 +93,18 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
     } else {
         search_check(model.checked(), &cond, &opts)
     };
-    let mut body = report::check_report(model, &cond, &outcome);
-    if use_symmetry {
-        body["symmetry"] = json!({"groups": model.names.symmetry_groups, "swaps": model.names.symmetry.len()});
-    }
-    if let (true, Evidence::Certificate(cert), Status::Verified) =
-        (want_certificate, &outcome.evidence, &outcome.status)
-    {
-        body["certificate"] = certificate_to_json(model, cert);
-    }
-    Ok(body)
+    let outputs = CheckOutputs {
+        symmetry: use_symmetry,
+        certificate: want_certificate,
+    };
+    Ok(report::check_report(model, &cond, &outcome, outputs))
 }
 
 /// ランダムシミュレーションでモデルを検査する。
 ///
 /// オプションは、検査条件、`seed`（既定は0）、`traces`（既定は100）、`max_steps`（既定は100）、`max_time_ms`。
 pub fn simulate(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = options(opts, &["seed", "traces", "max_steps", "max_time_ms"])?;
+    let map = options_with_conditions(opts, &["seed", "traces", "max_steps", "max_time_ms"])?;
     let cond = conditions(model, map)?;
     let seed = count(map, "seed", 0)?.unwrap_or(0);
     let traces = count(map, "traces", 1)?.unwrap_or(100);
@@ -147,23 +130,6 @@ pub fn simulate(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
 /// 別のモデルに対する証拠を読むことを許すオプション（仕様書 §10）。
 const ALLOW_OTHER_MODEL: &str = "allow_other_model";
 
-/// 読めなかった証拠の報告。別のモデルに対する証拠なら、その digest を `evidence_model_digest` に記録する。
-fn unreadable(model: &Model, e: &TraceError) -> Value {
-    let mut body = report::unreadable_evidence(model, &e.to_string());
-    if let TraceError::OtherModel { found, .. } = e {
-        body["evidence_model_digest"] = json!(found);
-    }
-    body
-}
-
-/// 別のモデルに対する証拠を指定により読んだなら、その digest を結果に記録する。
-fn mark_other_model(mut body: Value, other: Option<String>) -> Value {
-    if let Some(found) = other {
-        body["evidence_model_digest"] = json!(found);
-    }
-    body
-}
-
 /// 提示された証明書を、オプションの検査条件で検査する。
 ///
 /// オプションは、検査条件、`max_check_cost`、`max_time_ms`、`allow_other_model`（真なら、`model_digest` が違う証明書も、
@@ -174,26 +140,30 @@ pub fn verify_certificate(
     opts: &Value,
     interrupt: Interrupt,
 ) -> Result<Value, String> {
-    let map = options(opts, &["max_check_cost", "max_time_ms", ALLOW_OTHER_MODEL])?;
+    let map = options_with_conditions(opts, &["max_check_cost", "max_time_ms", ALLOW_OTHER_MODEL])?;
     let cond = conditions(model, map)?;
-    let gate = GateOptions {
-        max_cost: count(map, "max_check_cost", 0)?,
-        interrupt,
-        deadline: deadline(map)?,
-    };
+    let gate = gate_options(map, interrupt, deadline(map)?)?;
     let loaded = match read_certificate(model, certificate, flag(map, ALLOW_OTHER_MODEL)?) {
         Ok(loaded) => loaded,
-        Err(e) => return Ok(unreadable(model, &e)),
+        Err(e) => return Ok(report::unreadable_evidence(model, &e)),
     };
     let (verdict, evidence) = judge(model.checked(), &cond, Evidence::Certificate(loaded.evidence), &gate);
-    let body = report::evidence_report(model, &cond, &evidence, &verdict, None);
-    Ok(mark_other_model(body, loaded.other_model_digest))
+    let provenance = Provenance {
+        seed: None,
+        other_model_digest: loaded.other_model_digest,
+    };
+    let judged = Judged {
+        cond: &cond,
+        evidence: &evidence,
+        verdict: &verdict,
+    };
+    Ok(report::evidence_report(model, &judged, &provenance))
 }
 
 /// 提示されたトレースを、トレースに記録された検査条件で再生する。`replay_with` をオプションなしで呼ぶのと同じ。
 pub fn replay(model: &Model, trace: &str) -> Value {
     // オプションが空なので、誤りにはならない。
-    replay_with(model, trace, &json!({})).unwrap_or_else(|message| json!({"status": "usage_error", "message": message}))
+    replay_with(model, trace, &json!({})).unwrap_or_else(|message| report::usage_error(&message))
 }
 
 /// 提示されたトレースを、トレースに記録された検査条件で再生する。
@@ -202,38 +172,26 @@ pub fn replay(model: &Model, trace: &str) -> Value {
 /// `inconclusive` とする）と `allow_other_model`（`verify_certificate` と同じ）。
 /// 判定ゲートはトレースを区切らずに検査するので、時間の上限と中断要求は受け付けない。
 pub fn replay_with(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
-    let map = keys(opts, &["max_check_cost", ALLOW_OTHER_MODEL])?;
-    let gate = trace_gate(map)?;
+    let map = options_only(opts, &["max_check_cost", ALLOW_OTHER_MODEL])?;
+    let gate = trace_gate_options(map)?;
     let loaded = match read_trace(model, trace, flag(map, ALLOW_OTHER_MODEL)?) {
         Ok(loaded) => loaded,
-        Err(e) => return Ok(unreadable(model, &e)),
+        Err(e) => return Ok(report::unreadable_evidence(model, &e)),
     };
     let trace = loaded.evidence;
     let cond = trace.conditions.clone();
     let evidence = Evidence::Trace(trace.start, trace.steps, trace.claim);
     let (verdict, evidence) = judge(model.checked(), &cond, evidence, &gate);
-    let body = report::evidence_report(model, &cond, &evidence, &verdict, trace.seed);
-    Ok(mark_other_model(body, loaded.other_model_digest))
-}
-
-/// トレースの検査の資源上限 `max_check_cost`。トレースの検査は区切らないので、中断要求と時間の上限は渡さない。
-fn trace_gate(map: &serde_json::Map<String, Value>) -> Result<GateOptions<'static>, String> {
-    Ok(GateOptions {
-        max_cost: count(map, "max_check_cost", 0)?,
-        interrupt: None,
-        deadline: None,
-    })
-}
-
-/// 縮小器の報告。検査済みの値ではない。`complete` が偽なら、`limit` に打ち切った理由を書く。
-fn shrink_report(attempts: usize, stopped: Option<ShrinkStop>) -> Value {
-    let mut body = json!({"attempts": attempts, "complete": stopped.is_none()});
-    match stopped {
-        None => {}
-        Some(ShrinkStop::Attempts) => body["limit"] = json!("attempts"),
-        Some(ShrinkStop::Limit(limit)) => body["limit"] = json!(report::limit_name(limit)),
-    }
-    body
+    let provenance = Provenance {
+        seed: trace.seed,
+        other_model_digest: loaded.other_model_digest,
+    };
+    let judged = Judged {
+        cond: &cond,
+        evidence: &evidence,
+        verdict: &verdict,
+    };
+    Ok(report::evidence_report(model, &judged, &provenance))
 }
 
 /// 縮小で試す候補の数の、既定の上限。
@@ -251,22 +209,30 @@ const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 /// 時間の上限か中断要求に達したら縮小を打ち切り、それまでに判定ゲートが受理した候補を返す
 /// （`shrink.limit` は `max_time_ms` か `interrupted`）。
 pub fn shrink(model: &Model, trace: &str, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = keys(opts, &["attempts", "max_time_ms", "max_check_cost", ALLOW_OTHER_MODEL])?;
+    let map = options_only(opts, &["attempts", "max_time_ms", "max_check_cost", ALLOW_OTHER_MODEL])?;
     let attempts = count(map, "attempts", 1)?.unwrap_or(DEFAULT_SHRINK_ATTEMPTS);
     let deadline = deadline(map)?;
-    let gate = trace_gate(map)?;
-    let (trace, other) = match read_trace(model, trace, flag(map, ALLOW_OTHER_MODEL)?) {
-        Ok(loaded) => (loaded.evidence, loaded.other_model_digest),
-        Err(e) => return Ok(unreadable(model, &e)),
+    let gate = trace_gate_options(map)?;
+    let loaded = match read_trace(model, trace, flag(map, ALLOW_OTHER_MODEL)?) {
+        Ok(loaded) => loaded,
+        Err(e) => return Ok(report::unreadable_evidence(model, &e)),
+    };
+    let trace = loaded.evidence;
+    let provenance = Provenance {
+        seed: trace.seed,
+        other_model_digest: loaded.other_model_digest,
     };
     let cond = &trace.conditions;
-    let original = trace.steps.len();
     // 元のトレースを判定ゲートに渡す。縮小の起点に使うので、トレースの部分は手元に残す。
     let evidence = Evidence::Trace(trace.start.clone(), trace.steps.clone(), trace.claim.clone());
     let (verdict, evidence) = judge(model.checked(), cond, evidence, &gate);
     if !matches!(verdict.kind(), VerdictKind::Violated | VerdictKind::Error) {
-        let body = report::evidence_report(model, cond, &evidence, &verdict, trace.seed);
-        return Ok(mark_other_model(body, other));
+        let judged = Judged {
+            cond,
+            evidence: &evidence,
+            verdict: &verdict,
+        };
+        return Ok(report::evidence_report(model, &judged, &provenance));
     }
     let result = search_shrink(
         model.checked(),
@@ -280,10 +246,17 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value, interrupt: Interrupt) ->
             deadline,
         },
     );
+    let summary = ShrinkSummary {
+        original_steps: trace.steps.len(),
+        attempts: result.attempts,
+        stopped: result.stopped,
+    };
     let shrunk = Evidence::Trace(trace.start.clone(), result.steps, trace.claim.clone());
     let verdict = decide(model.checked(), cond, &shrunk);
-    let mut body = report::evidence_report(model, cond, &shrunk, &verdict, trace.seed);
-    body["original_steps"] = json!(original);
-    body["shrink"] = shrink_report(result.attempts, result.stopped);
-    Ok(mark_other_model(body, other))
+    let judged = Judged {
+        cond,
+        evidence: &shrunk,
+        verdict: &verdict,
+    };
+    Ok(report::shrink_report(model, &judged, &provenance, &summary))
 }

@@ -1,15 +1,45 @@
-//! 結果の機械可読JSON。
+//! 結果の機械可読JSON（docs/ir.md）。
+//!
+//! 結果の形は、ここと `refine`（詳細化の検査の結果）だけで決める。API の関数は、検査の結果と、
+//! 結果に示す付帯の情報（`Provenance`、`CheckOutputs`、`ShrinkSummary`）を渡すだけで、項目を書き足さない。
+
+mod refine;
+
+pub(crate) use refine::{describe_refinement, refine_report};
 
 use fmspec_core::evidence::{Claim, Evidence, Limit, Reject};
 use fmspec_core::gate::{Verdict, VerdictKind};
 use fmspec_core::semantics::Conditions;
 use fmspec_core::typing::InvalidModel;
 use fmspec_ir::{
-    claim_to_json, conditions_to_json, state_to_json, trace_to_json, Model, Source, Trace, ENGINE_VERSION, IR_VERSION,
+    certificate_to_json, claim_to_json, conditions_to_json, state_to_json, trace_to_json, Model, Source, Trace,
+    TraceError, ENGINE_VERSION, IR_VERSION,
 };
-use fmspec_search::{Inconsistency, Internal, Outcome, Sampled, SimOptions, Status, PRNG_NAME};
+use fmspec_search::{Inconsistency, Internal, Outcome, Sampled, ShrinkStop, SimOptions, Stats, Status, PRNG_NAME};
 use serde_json::{json, Value};
 use std::time::Duration;
+
+/// 判定ゲートが、探索器の生成した証拠を拒否したことを報告する `message`。
+const REJECTED_MESSAGE: &str = "探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です";
+
+/// オプションの誤りの結果。結果と同じ形（`status` が `usage_error`）で表す。
+pub(crate) fn usage_error(message: &str) -> Value {
+    json!({"status": "usage_error", "message": message})
+}
+
+/// モデルの概要。IR検証を通ったことの報告に使う。
+pub(crate) fn describe(model: &Model) -> Value {
+    json!({
+        "status": "valid",
+        "model": model.names.model,
+        "model_digest": model.digest,
+        "states": model.names.states.len(),
+        "actions": model.names.actions.len(),
+        // 対称性の像として加えた不変条件は数えない。
+        "invariants": model.names.invariant_family.iter().enumerate().filter(|(j, f)| j == *f).count(),
+        "contracts": model.names.contracts.len(),
+    })
+}
 
 /// どの結果にもある項目。
 fn header(model: &Model, status: &str) -> Value {
@@ -29,7 +59,7 @@ fn base(model: &Model, cond: &Conditions, status: &str) -> Value {
     body
 }
 
-pub(crate) fn limit_name(limit: Limit) -> &'static str {
+fn limit_name(limit: Limit) -> &'static str {
     match limit {
         Limit::MaxStates => "max_states",
         Limit::Interrupted => "interrupted",
@@ -65,7 +95,7 @@ fn reject_json(model: &Model, evidence: &Evidence, reject: Reject) -> Value {
 }
 
 /// 証拠を拒否した理由。`states` は証明書の状態の列（証明書でなければ `None`）。
-pub(crate) fn reject_json_in(model: &Model, states: Option<&Vec<Vec<i64>>>, reject: Reject) -> Value {
+fn reject_json_in(model: &Model, states: Option<&Vec<Vec<i64>>>, reject: Reject) -> Value {
     let names = &model.names;
     let state = |k: usize| {
         states
@@ -176,10 +206,10 @@ fn status_name(status: &Status) -> &'static str {
 }
 
 /// 探索器の内部の不整合を報告する `message`。
-pub(crate) const INCONSISTENCY_MESSAGE: &str = "探索器の内部の不整合です。fmspec の不具合です";
+const INCONSISTENCY_MESSAGE: &str = "探索器の内部の不整合です。fmspec の不具合です";
 
 /// 探索器の内部の不整合の内容。状態は符号化列（`encoded_state`）で示し、状態型に従うときだけ値（`state`）も示す。
-pub(crate) fn inconsistency_json(model: &Model, inconsistency: &Inconsistency) -> Value {
+fn inconsistency_json(model: &Model, inconsistency: &Inconsistency) -> Value {
     match inconsistency {
         Inconsistency::Successors { action, state } => {
             let names = &model.names;
@@ -222,7 +252,7 @@ fn attach_outcome(body: &mut Value, model: &Model, cond: &Conditions, outcome: &
         Status::InternalError(Internal::Rejected(reject)) => {
             attach_evidence(body, model, cond, &outcome.evidence, seed);
             body["rejected"] = reject_json(model, &outcome.evidence, *reject);
-            body["message"] = json!("探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です");
+            body["message"] = json!(REJECTED_MESSAGE);
         }
         // 検証済みのモデルに対する判定ゲートはモデルを拒否しない（証明済み）ので、起きない。
         Status::InternalError(Internal::InvalidModel(invalid)) => {
@@ -234,7 +264,7 @@ fn attach_outcome(body: &mut Value, model: &Model, cond: &Conditions, outcome: &
 }
 
 /// `simulate` の結果。`sampled` は指定したサンプルの検査を完了しただけで、網羅性の主張はない。
-pub fn simulation_report(
+pub(crate) fn simulation_report(
     model: &Model,
     cond: &Conditions,
     opts: &SimOptions,
@@ -263,47 +293,121 @@ pub fn simulation_report(
     body
 }
 
-/// `check` の結果。探索器の報告（`search`）は検査済みの値ではない。
-pub fn check_report(model: &Model, cond: &Conditions, outcome: &Outcome) -> Value {
-    let status = status_name(&outcome.status);
-    let mut body = base(model, cond, status);
+/// 幅優先探索の報告（`strategy`、`search`、`gate`）。探索器の報告（`search`）は検査済みの値ではない。
+fn attach_bfs(body: &mut Value, stats: &Stats, search_time: Duration, gate_time: Duration) {
     body["strategy"] = json!("bfs");
     body["search"] = json!({
-        "complete": outcome.stats.complete,
-        "visited_states": outcome.stats.visited_states,
-        "transitions": outcome.stats.transitions,
-        "time_ms": outcome.search_time.as_secs_f64() * 1000.0,
+        "complete": stats.complete,
+        "visited_states": stats.visited_states,
+        "transitions": stats.transitions,
+        "time_ms": search_time.as_secs_f64() * 1000.0,
     });
-    body["gate"] = json!({"time_ms": outcome.gate_time.as_secs_f64() * 1000.0});
+    body["gate"] = json!({"time_ms": gate_time.as_secs_f64() * 1000.0});
+}
+
+/// `check` の結果に、指定により加える項目。
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CheckOutputs {
+    /// 対称性による削減を使った。使った対称性（`symmetry`）を示す。
+    pub symmetry: bool,
+    /// 受理された証明書（`certificate`）を示す。`verified` のときだけ加える。
+    pub certificate: bool,
+}
+
+/// `check` の結果。
+pub(crate) fn check_report(model: &Model, cond: &Conditions, outcome: &Outcome, outputs: CheckOutputs) -> Value {
+    let status = status_name(&outcome.status);
+    let mut body = base(model, cond, status);
+    attach_bfs(&mut body, &outcome.stats, outcome.search_time, outcome.gate_time);
     attach_outcome(&mut body, model, cond, outcome, None);
+    if outputs.symmetry {
+        body["symmetry"] = json!({"groups": model.names.symmetry_groups, "swaps": model.names.symmetry.len()});
+    }
+    if let (true, Evidence::Certificate(cert), Status::Verified) =
+        (outputs.certificate, &outcome.evidence, &outcome.status)
+    {
+        body["certificate"] = certificate_to_json(model, cert);
+    }
     body
 }
 
-/// 外部から提示された証拠の検査結果。探索を行っていないので、探索統計は付けない。
-/// `seed` は、提示されたトレースに記録されていたseedで、示すトレースにそのまま残す。
-pub fn evidence_report(
-    model: &Model,
-    cond: &Conditions,
-    evidence: &Evidence,
-    verdict: &Verdict,
-    seed: Option<u64>,
-) -> Value {
-    let status = match verdict.kind() {
+/// 判定ゲートが、提示された証拠を判定した結果。
+pub(crate) struct Judged<'a> {
+    pub cond: &'a Conditions,
+    pub evidence: &'a Evidence,
+    pub verdict: &'a Verdict,
+}
+
+/// 提示された証拠の出所。結果にそのまま示す。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Provenance {
+    /// 提示されたトレースに記録されていたseed。示すトレースにそのまま残す。
+    pub seed: Option<u64>,
+    /// 別のモデルに対する証拠を指定により読んだなら、その digest（`evidence_model_digest`）。
+    pub other_model_digest: Option<String>,
+}
+
+impl Provenance {
+    fn attach(&self, body: &mut Value) {
+        if let Some(found) = &self.other_model_digest {
+            body["evidence_model_digest"] = json!(found);
+        }
+    }
+}
+
+fn verdict_name(kind: VerdictKind) -> &'static str {
+    match kind {
         VerdictKind::Verified => "verified",
         VerdictKind::Violated => "violated",
         VerdictKind::Error => "error",
         VerdictKind::Inconclusive => "inconclusive",
         VerdictKind::InvalidModel => "invalid_model",
         VerdictKind::Rejected => "rejected",
-    };
-    let mut body = base(model, cond, status);
-    attach_evidence(&mut body, model, cond, evidence, seed);
+    }
+}
+
+/// 外部から提示された証拠の検査結果。探索を行っていないので、探索統計は付けない。
+pub(crate) fn evidence_report(model: &Model, judged: &Judged, provenance: &Provenance) -> Value {
+    let Judged {
+        cond,
+        evidence,
+        verdict,
+    } = *judged;
+    let mut body = base(model, cond, verdict_name(verdict.kind()));
+    attach_evidence(&mut body, model, cond, evidence, provenance.seed);
     if let Some(reject) = verdict.reject() {
         body["rejected"] = reject_json(model, evidence, reject);
     }
     if let Some(invalid) = verdict.invalid() {
         body["message"] = json!(invalid_message(invalid));
     }
+    provenance.attach(&mut body);
+    body
+}
+
+/// 縮小器の報告。検査済みの値ではない。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShrinkSummary {
+    /// 元のトレースのステップ数。
+    pub original_steps: usize,
+    /// 試した候補の数。
+    pub attempts: usize,
+    /// 打ち切った理由。`None` なら打ち切らずに終わった。
+    pub stopped: Option<ShrinkStop>,
+}
+
+/// 縮小したトレースの検査結果。提示された証拠の検査結果に、元のステップ数（`original_steps`）と、
+/// 縮小器の報告（`shrink`。`complete` が偽なら、`limit` に打ち切った理由を書く）を加える。
+pub(crate) fn shrink_report(model: &Model, judged: &Judged, provenance: &Provenance, summary: &ShrinkSummary) -> Value {
+    let mut body = evidence_report(model, judged, provenance);
+    body["original_steps"] = json!(summary.original_steps);
+    let mut shrink = json!({"attempts": summary.attempts, "complete": summary.stopped.is_none()});
+    match summary.stopped {
+        None => {}
+        Some(ShrinkStop::Attempts) => shrink["limit"] = json!("attempts"),
+        Some(ShrinkStop::Limit(limit)) => shrink["limit"] = json!(limit_name(limit)),
+    }
+    body["shrink"] = shrink;
     body
 }
 
@@ -312,9 +416,13 @@ fn invalid_message(invalid: InvalidModel) -> String {
 }
 
 /// 形式が合わない、または別のモデルに対する証拠。検査条件を読めていないので、`conditions` は付けない。
-pub fn unreadable_evidence(model: &Model, message: &str) -> Value {
+/// 別のモデルに対する証拠なら、その digest を `evidence_model_digest` に記録する。
+pub(crate) fn unreadable_evidence(model: &Model, e: &TraceError) -> Value {
     let mut body = header(model, "rejected");
-    body["rejected"] = json!({"reason": "unreadable", "message": message});
+    body["rejected"] = json!({"reason": "unreadable", "message": e.to_string()});
+    if let TraceError::OtherModel { found, .. } = e {
+        body["evidence_model_digest"] = json!(found);
+    }
     body
 }
 
@@ -322,7 +430,7 @@ pub fn unreadable_evidence(model: &Model, message: &str) -> Value {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::{check_report, inconsistency_report, simulation_report};
+    use super::{check_report, inconsistency_report, limit_name, simulation_report, CheckOutputs};
     use crate::human::human;
     use fmspec_core::evidence::{Certificate, Evidence, Limit};
     use fmspec_ir::{default_conditions, load, Model, ENGINE_VERSION};
@@ -385,7 +493,7 @@ mod tests {
                 state: vec![1, 2],
             },
         );
-        let body = check_report(&m, &cond, &o);
+        let body = check_report(&m, &cond, &o, CheckOutputs::default());
         let expected = merged(
             identity(&m),
             json!({
@@ -424,7 +532,7 @@ mod tests {
                 state: vec![2],
             },
         );
-        let body = check_report(&m, &default_conditions(&m, false), &o);
+        let body = check_report(&m, &default_conditions(&m, false), &o, CheckOutputs::default());
         assert_eq!(body["inconsistency"]["action"], json!(5));
         assert_eq!(body["inconsistency"]["state"], json!({"x": 2}));
         assert_eq!(body["inconsistency"]["encoded_state"], json!([2]));
@@ -502,7 +610,7 @@ mod tests {
         });
         let o = check_evidence(m.checked(), &cond, cert, Stats::default());
         assert!(matches!(o.status, Status::InternalError(Internal::Rejected(_))));
-        let body = check_report(&m, &cond, &o);
+        let body = check_report(&m, &cond, &o, CheckOutputs::default());
         assert_eq!(body["status"], "internal_error");
         assert_eq!(body["certificate_states"], json!(1));
         assert_eq!(
@@ -521,5 +629,33 @@ mod tests {
                 "InternalError: counter\n  拒否の理由: 証明書の状態からの遷移先が、証明書に含まれません\n    state: x: 0\n    action: inc\n  {message}\n  証明書の状態数 1\n  探索: 未完走、訪問状態数 0、遷移数 0（探索器の報告）\n"
             )
         );
+    }
+
+    /// `limit_name` が書くすべての理由に、人間向けの表示の文がある（キーの名前を括弧に添え、名前だけを示さない）。
+    #[test]
+    fn every_limit_has_a_reason_text() {
+        let limits = [
+            Limit::MaxStates,
+            Limit::Interrupted,
+            Limit::CheckBudget,
+            Limit::MaxDepth,
+            Limit::MaxTime,
+            Limit::AbstractFailed,
+        ];
+        for limit in limits {
+            // 理由を足したら、ここと human の `reason_text` に足す（`match` が網羅を強いる）。
+            match limit {
+                Limit::MaxStates
+                | Limit::Interrupted
+                | Limit::CheckBudget
+                | Limit::MaxDepth
+                | Limit::MaxTime
+                | Limit::AbstractFailed => {}
+            }
+            let name = limit_name(limit);
+            let body = json!({"status": "inconclusive", "model": "m", "reason": name});
+            let text = human(&body);
+            assert!(text.contains(&format!("（{name}）")), "{text}");
+        }
     }
 }

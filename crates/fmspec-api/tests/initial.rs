@@ -81,6 +81,30 @@ fn a_session_starts_from_the_initial_states_matching_the_observation() {
     assert_eq!(failed["expected"], json!([{"state": {"n": 0}}, {"state": {"n": 3}}]));
 }
 
+/// 観測しない状態変数だけが違う初期状態は、初期観測の不適合の `expected` で1つにまとめる（照合後の不適合と同じ）。
+#[test]
+fn an_initial_conformance_failure_lists_each_expected_observation_once() {
+    let ir = json!({
+        "ir_version": 1,
+        "name": "pair",
+        "states": [
+            {"name": "a", "type": {"int": {"min": 0, "max": 4}}, "initial_in": [{"int": 3}, {"int": 0}]},
+            {"name": "b", "type": {"int": {"min": 0, "max": 1}}, "initial_in": [{"int": 0}, {"int": 1}]}
+        ],
+        "actions": []
+    });
+    let m = Arc::new(load(&ir.to_string()).unwrap());
+    let mut session = Session::new(m, &json!({"observe": ["a"]})).unwrap();
+    let failed = session.start(&json!({"a": 2})).unwrap();
+    assert_eq!(failed["status"], "conformance_failure", "{failed}");
+    assert_eq!(
+        failed["expected"],
+        json!([{"state": {"a": 0}}, {"state": {"a": 3}}]),
+        "{failed}"
+    );
+    assert_eq!(failed["mismatch"], json!(["a"]));
+}
+
 #[test]
 fn a_session_stops_when_the_initial_candidates_exceed_the_limit() {
     let m = Arc::new(counter(4));
