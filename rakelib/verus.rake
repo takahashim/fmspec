@@ -416,7 +416,7 @@ VERUS_CANARIES = [
   ["refine.rs", "        assert(ref_state_ok(b, cb, a, f, cert[j]@));\n    }\n}", "lemma_cert_refines の遷移"],
   ["refine.rs", "            Move::No\n", "find_move の移れない場合"],
   ["refine.rs", "            assert(reach(a, ca, y, m + 1));", "lemma_refines_reach の遷移"],
-  ["refine.rs", "                None => RefVerdict::of(RefVerdictKind::Refines),", "decide_refinement の受理"]
+  ["refine.rs", "    let am = a.raw();", "decide_refinement"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)
