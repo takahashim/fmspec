@@ -71,7 +71,42 @@ class TlaplusExamplesTest < Minitest::Test
     # manifest.json の状態の数は、不変条件 Inv を満たすすべての状態から始める ISpec のものなので、比べない。
     "MCBakery" => { model: "bakery", config: "CONSTANTS N = 2\nMaxNat = 2\nNat <- NatOverride\nSPECIFICATION Spec",
                     type_ok: %w[TypeOK], invariants: { "MutualExclusion" => "mutual_exclusion" }, deadlock: false,
-                    expected: nil }
+                    expected: nil },
+    # Specifying Systems（Lamport）の例。型の不変条件だけを持ち、到達できる状態の数を比べる。
+    "HourClock" => { model: "hour_clock", config: "SPECIFICATION HC", type_ok: %w[HCini], invariants: {},
+                     deadlock: true, expected: 12 },
+    "Channel" => { model: "channel", config: "CONSTANT Data = {d1, d2, d3}\nSPECIFICATION Spec",
+                   type_ok: %w[TypeInvariant], invariants: {}, deadlock: true, expected: 12 },
+    "AsynchInterface" => { model: "asynch_interface", config: "CONSTANT Data = {d1, d2, d3}\nSPECIFICATION Spec",
+                           type_ok: %w[TypeInvariant], invariants: {}, deadlock: true, expected: 12 },
+    # CONSTRAINT は、DSL では長さの guard にあたる。
+    "MCInnerFIFO" => { model: "inner_fifo",
+                       config: "CONSTANTS Message = {m1, m2, m3}\nqLen = 3\nSPECIFICATION Spec\nCONSTRAINT qConstraint",
+                       type_ok: %w[TypeInvariant], invariants: {}, deadlock: true, expected: 3864 },
+    "MCAlternatingBit" => { model: "alternating_bit",
+                            config: "CONSTANT Data = {d1, d2}\nmsgQLen = 2\nackQLen = 2\nSPECIFICATION ABSpec\n" \
+                                    "CONSTRAINT SeqConstraint",
+                            type_ok: %w[ABTypeInv], invariants: {}, deadlock: true, expected: 240 },
+    "MCInternalMemory" => { model: "internal_memory",
+                            config: "SPECIFICATION ISpec\nCONSTANTS\nSend <- MCSend\nReply <- MCReply\n" \
+                                    "InitMemInt <- MCInitMemInt\nProc = {p1, p2}\nAdr = {a1, a2, a3}\nVal = {v1, v2}\n" \
+                                    "NoVal = NoVal",
+                            type_ok: %w[TypeInvariant], invariants: {}, deadlock: true, expected: 4408 },
+    # German のキャッシュコヒーレンスのプロトコル。元の設定は SYMMETRY でノード（とデータ）の入れ替えをまとめるが、
+    # fmspec に対称性の削減はないので、SYMMETRY を外して TLC にかける。manifest.json の数は対称性で削減した数なので比べない。
+    "GermanControl" => { model: "german_control", config: "CONSTANTS\nNODE = {n1, n2}\nNoNode = noNode\nSPECIFICATION Spec",
+                         type_ok: %w[TypeOK], invariants: { "Coherence" => "coherence" }, deadlock: true, expected: nil },
+    "GermanData" => { model: "german_data",
+                      config: "CONSTANTS\nNODE = {n1, n2}\nDATA = {d1, d2}\nNoData = noData\nNoNode = noNode\nSPECIFICATION Spec",
+                      type_ok: %w[TypeOK],
+                      invariants: { "Coherence" => "coherence", "DataProp" => "data_prop",
+                                    "TransactionConsistency" => "transaction_consistency",
+                                    "DirectoryAccurate" => "directory_accurate", "ExclusiveIsolation" => "exclusive_isolation",
+                                    "WritebackCarriesLatest" => "writeback_carries_latest" },
+                      deadlock: true, expected: nil },
+    # 不変条件 KlotskiGoal の違反がパズルの解にあたる。最短の解は116手で、反例が最短であることを長い反例で確かめる。
+    "SlidingPuzzles" => { model: "sliding_puzzles", config: "INIT Init\nNEXT Next", type_ok: %w[TypeOK],
+                          invariants: { "KlotskiGoal" => "klotski_goal" }, deadlock: true, expected: :violated }
   }.freeze
 
   def setup
