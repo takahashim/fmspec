@@ -61,15 +61,20 @@ MBTの「応答と矛盾しない」は、観測するスロットの値の一�
 
 ## 証明が空虚でないことの検査
 
-`rake verus` は、証明を通すだけでなく、次の検査も行う。
+`rake verus`（`rake verus:proof`）は、証明を通すだけでなく、次の検査も行う。
 
 - 信頼する項目（`assume`、`admit`、`external_body`、`assume_specification` など）が `fmspec-core` に1つもない。
 - 証明の対象外のコードは `impls.rs`（標準トレイトの手書き実装）だけで、判定の経路から呼ばれない。
 - 公開関数が `requires` を持たない。
+
+`rake verus:mutants` は、さらに次を検査する。
+
 - 検査を1つ壊した変異163件が、すべて証明に失敗する。たとえば、証明書の検査で遷移先の所属を調べない、トレースの状態を照合しない、拒否した証明書で `Verified` を返す、MBTの候補の更新で遷移先の観測を照合しない、初期条件が偽の状態を初期状態に残す、といった変異である。
 - 到達点に置いた `assert(false)` 102件が、すべて証明に失敗する。
 
 変異と `assert(false)` の一覧は `rakelib/verus.rake` にある。
+変種ごとに crate 全体を検証し直すので、すべて回すと数時間かかる。
+CI では回さず、証明を変えたときに手元で、変えたファイルに絞って実行する（`VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants`）。
 
 ## テストで検査するもの
 
@@ -233,4 +238,4 @@ crates.ioの `vstd` は、Verusのリリースのコミットではなく、版�
 - 証拠の検査の資源上限は、評価回数の上限による事前の見積もりである。検査の途中で実際の評価回数を数えてはいない。中断は証明書の検査の区切りでだけ確かめ、トレースの検査、`replay`、`shrink` は中断できない。
 - 引数のドメインは値を1つずつ列挙する。広い整数範囲の引数や、要素の多いSetの引数を持つ操作は、列挙に時間がかかる。複合型の引数では、スロットの値の組を列挙して正規形でないものを除くので、正規形の値の数より多くの組を調べる。
 - 式の入れ子の深さは、JSONの読み込みの上限（128段）で抑えている。Rust APIから直接組み立てた極端に深い式は、再帰でスタックを使い切る可能性がある。
-- CI（`.github/workflows/ci.yml`）は、`rake` の検査をジョブに分けて実行する。push と PR ごとには `rake verus:proof` で証明を検査し、変異と `assert(false)` の検査（`rake verus:mutants`）は、main への PR、毎日の定期実行、手動実行でだけ行う。
+- CI（`.github/workflows/ci.yml`）は、`rake` の検査をジョブに分けて実行する。push と PR ごとに `rake verus:proof` で証明を検査する。変異と `assert(false)` の検査（`rake verus:mutants`）は数時間かかるので、CI では行わない。
