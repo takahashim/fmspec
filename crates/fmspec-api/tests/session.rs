@@ -231,3 +231,92 @@ fn duplicate_set_elements_are_unrepresentable_observations_and_malformed_argumen
     assert_eq!(answer["status"], "conformance_failure", "{answer}");
     assert_eq!(answer["mismatch"], json!(["s"]), "{answer}");
 }
+
+const FINISHED: &str = "セッションは終わっています";
+
+/// 照合を続けない応答（`continue` 以外）のあとは、セッションへの問い合わせを誤りにする。
+fn assert_finished(session: &mut Session) {
+    let pay = json!({"action": "pay", "args": {"id": 0}, "output": "success",
+                     "observation": {"charges": 1, "open": true}});
+    assert_eq!(session.next_input().unwrap_err(), FINISHED);
+    assert_eq!(session.check_input(&pay).unwrap_err(), FINISHED);
+    assert_eq!(session.observe(&pay).unwrap_err(), FINISHED);
+    assert_eq!(
+        session.start(&json!({"charges": 0, "open": true})).unwrap_err(),
+        "初期観測はすでに渡しました"
+    );
+}
+
+#[test]
+fn a_session_that_has_stopped_answers_nothing_more() {
+    // 初期観測の不一致。
+    let mut session = Session::new(orders(), &json!({})).unwrap();
+    let answer = session.start(&json!({"charges": 1, "open": true})).unwrap();
+    assert_eq!(answer["status"], "conformance_failure", "{answer}");
+    assert_finished(&mut session);
+
+    // 初期観測で候補が上限を超えた。
+    let mut session = Session::new(latch(), &json!({"observe": [], "max_candidates": 1})).unwrap();
+    let answer = session.start(&json!({})).unwrap();
+    assert_eq!(answer["status"], "inconclusive", "{answer}");
+    assert_eq!(answer["reason"], "max_candidates", "{answer}");
+    assert_finished(&mut session);
+
+    // 有効な入力がない。
+    let mut session = Session::new(latch(), &json!({})).unwrap();
+    assert_eq!(session.start(&json!({"n": 1})).unwrap()["status"], "continue");
+    assert_eq!(session.next_input().unwrap(), json!({"status": "end", "matched": 0}));
+    assert_finished(&mut session);
+
+    // 応答の不適合。
+    let mut session = started(json!({}));
+    let answer = session
+        .observe(&json!({"action": "pay", "args": {"id": 0}, "output": "success",
+                         "observation": {"charges": 2, "open": true}}))
+        .unwrap();
+    assert_eq!(answer["status"], "conformance_failure", "{answer}");
+    assert_finished(&mut session);
+
+    // モデルの不変条件の違反。
+    let mut session = started(json!({}));
+    let answer = session
+        .observe(&json!({"action": "double", "args": {}, "observation": {"charges": 2, "open": true}}))
+        .unwrap();
+    assert_eq!(answer["status"], "model_violation", "{answer}");
+    assert_finished(&mut session);
+
+    // 誤った要求は、セッションを終わらせない。
+    let mut session = started(json!({}));
+    assert!(session.observe(&json!({"action": "refund"})).is_err());
+    assert_eq!(session.next_input().unwrap()["status"], "input");
+}
+
+/// 状態 `n`（0..1）の初期値は0か1。`set` は `n` が0のときだけ有効で、1にする。
+fn latch() -> Arc<Model> {
+    let n = json!({"var": 0});
+    let ir = json!({
+        "ir_version": 1,
+        "name": "latch",
+        "states": [{"name": "n", "type": {"int": {"min": 0, "max": 1}}, "initial_in": [{"int": 0}, {"int": 1}]}],
+        "actions": [{"name": "set", "guard": {"eq": [n, {"int": 0}]}, "updates": [{"target": 0, "expr": {"int": 1}}]}]
+    });
+    Arc::new(load(&ir.to_string()).unwrap())
+}
+
+#[test]
+fn inputs_are_checked_only_after_the_initial_observation() {
+    let mut session = Session::new(orders(), &json!({})).unwrap();
+    assert_eq!(
+        session
+            .check_input(&json!({"action": "pay", "args": {"id": 0}}))
+            .unwrap_err(),
+        "初期観測を渡す前に、入力は確かめられません"
+    );
+    // 開始したあとは、有効かどうかを答え、照合は続く。
+    let mut session = started(json!({"actions": ["pay"]}));
+    let valid = session.check_input(&json!({"action": "pay", "args": {"id": 0}})).unwrap();
+    assert_eq!(valid, json!({"status": "valid"}));
+    let invalid = session.check_input(&json!({"action": "pay", "args": {"id": 5}})).unwrap();
+    assert_eq!(invalid, json!({"status": "invalid"}));
+    assert_eq!(session.next_input().unwrap()["status"], "input");
+}
