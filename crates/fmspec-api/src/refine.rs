@@ -21,7 +21,9 @@ fn ref_conditions(model: &Model, opts: &serde_json::Map<String, Value>) -> Resul
         contracts: vec![false; model.names.contracts.len()],
         deadlock: false,
     };
-    select(&mut c.actions, opts.get("actions"), "操作", |n| model.names.action_index(n))?;
+    select(&mut c.actions, opts.get("actions"), "操作", |n| {
+        model.names.action_index(n)
+    })?;
     Ok(c)
 }
 

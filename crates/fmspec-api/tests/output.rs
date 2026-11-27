@@ -126,9 +126,15 @@ fn results_read_as_text() {
     for (reason, text) in [
         ("max_depth", "深さの上限（max_depth）で探索を打ち切りました"),
         ("max_time_ms", "時間の上限（max_time_ms）に達しました"),
-        ("max_check_cost", "証拠の検査の見積もりが、評価回数の上限（max_check_cost）を超えました"),
+        (
+            "max_check_cost",
+            "証拠の検査の見積もりが、評価回数の上限（max_check_cost）を超えました",
+        ),
         ("interrupted", "中断の要求で打ち切りました（interrupted）"),
-        ("abstract_failed", "写した状態で、抽象モデルの遷移の列挙が評価エラーになりました（abstract_failed）"),
+        (
+            "abstract_failed",
+            "写した状態で、抽象モデルの遷移の列挙が評価エラーになりました（abstract_failed）",
+        ),
     ] {
         let body = json!({"status": "inconclusive", "model": "m", "reason": reason});
         assert_eq!(human(&body), format!("Inconclusive: m\n  打ち切りの理由: {text}\n"));

@@ -56,7 +56,15 @@ impl Session {
     pub fn new(model: Arc<Model>, opts: &Value) -> Result<Session, String> {
         let map = keys(
             opts,
-            &["actions", "invariants", "contracts", "seed", "observe", "inject", "max_candidates"],
+            &[
+                "actions",
+                "invariants",
+                "contracts",
+                "seed",
+                "observe",
+                "inject",
+                "max_candidates",
+            ],
         )?;
         let cond = conditions(&model, map)?;
         let seed = count(map, "seed", 0)?.unwrap_or(0);

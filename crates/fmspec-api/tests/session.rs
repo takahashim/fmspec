@@ -314,9 +314,13 @@ fn inputs_are_checked_only_after_the_initial_observation() {
     );
     // 開始したあとは、有効かどうかを答え、照合は続く。
     let mut session = started(json!({"actions": ["pay"]}));
-    let valid = session.check_input(&json!({"action": "pay", "args": {"id": 0}})).unwrap();
+    let valid = session
+        .check_input(&json!({"action": "pay", "args": {"id": 0}}))
+        .unwrap();
     assert_eq!(valid, json!({"status": "valid"}));
-    let invalid = session.check_input(&json!({"action": "pay", "args": {"id": 5}})).unwrap();
+    let invalid = session
+        .check_input(&json!({"action": "pay", "args": {"id": 5}}))
+        .unwrap();
     assert_eq!(invalid, json!({"status": "invalid"}));
     assert_eq!(session.next_input().unwrap()["status"], "input");
 }

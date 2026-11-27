@@ -28,7 +28,10 @@ fn condition_errors() {
     assert_eq!(check_error(json!([])), "オプションはオブジェクトです");
     assert_eq!(check_error(json!({"bogus": 1})), "未知のオプション \"bogus\"");
     assert_eq!(check_error(json!({"deadlock": 1})), "deadlock は真偽値です（1）");
-    assert_eq!(check_error(json!({"actions": "inc"})), "操作の指定は名前の配列です（\"inc\"）");
+    assert_eq!(
+        check_error(json!({"actions": "inc"})),
+        "操作の指定は名前の配列です（\"inc\"）"
+    );
     assert_eq!(
         check_error(json!({"invariants": [1]})),
         "不変条件の指定は名前の配列です（[1]）"
@@ -39,7 +42,10 @@ fn condition_errors() {
         "max_states は1以上の整数です（0）"
     );
     assert_eq!(check_error(json!({"certificate": 1})), "certificate は真偽値です（1）");
-    assert_eq!(check_error(json!({"symmetry": "on"})), "symmetry は真偽値です（\"on\"）");
+    assert_eq!(
+        check_error(json!({"symmetry": "on"})),
+        "symmetry は真偽値です（\"on\"）"
+    );
     assert_eq!(
         check_error(json!({"max_depth": -1})),
         "max_depth は0以上の整数です（-1）"
@@ -95,8 +101,14 @@ fn each_function_accepts_only_its_keys() {
             format!("未知のオプション {key:?}")
         );
     }
-    assert_eq!(coverage(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"], "ok");
-    assert_eq!(test_paths(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"], "ok");
+    assert_eq!(
+        coverage(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"],
+        "ok"
+    );
+    assert_eq!(
+        test_paths(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"],
+        "ok"
+    );
 }
 
 #[test]
