@@ -188,6 +188,56 @@ fn certificates_can_be_saved_and_verified_separately() {
 }
 
 #[test]
+fn certificate_checks_stop_at_their_limits() {
+    // 使わない操作 wide の引数の領域が広いので、状態ごとの検査の費用が大きく、証明書の検査は複数の区切りに分かれる。
+    // 期限は区切りごとに確かめるので、1つの区切りで終わる証明書では打ち切りを確かめられない。
+    let wide = json!({
+        "ir_version": 1,
+        "name": "wide",
+        "states": [{"id": 0, "name": "n", "type": {"int": {"min": 0, "max": 19}}, "initial": {"int": 0}}],
+        "actions": [
+            {
+                "name": "inc",
+                "guard": {"lt": [{"var": 0}, {"int": 19}]},
+                "updates": [{"target": 0, "expr": {"add": [{"var": 0}, {"int": 1}]}}]
+            },
+            {
+                "name": "wide",
+                "params": [{"name": "k", "type": {"int": {"min": 0, "max": 65535}}}],
+                "choices": [],
+                "guard": {"bool": false},
+                "updates": []
+            }
+        ],
+        "invariants": []
+    });
+    let f = files();
+    f.put("wide.json", &wide);
+    let (code, _) = f.json(&["check", "wide.json", "--certificate-out", "cert.json"]);
+    assert_eq!(code, 0);
+    let (code, body) = f.json(&["verify-certificate", "wide.json", "cert.json", "--max-time-ms", "0"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_time_ms")),
+        "{body}"
+    );
+    let (code, body) = f.json(&[
+        "verify-certificate",
+        "wide.json",
+        "cert.json",
+        "--max-time-ms",
+        "600000",
+    ]);
+    assert_eq!((code, &body["status"]), (0, &json!("verified")), "{body}");
+    let (code, body) = f.json(&["verify-certificate", "wide.json", "cert.json", "--max-check-cost", "1"]);
+    assert_eq!(
+        (code, &body["status"], &body["reason"]),
+        (3, &json!("inconclusive"), &json!("max_check_cost")),
+        "{body}"
+    );
+}
+
+#[test]
 fn traces_can_be_saved_and_replayed() {
     let f = files();
     let (code, _) = f.json(&["check", "noguard.json", "--trace-out", "trace.json"]);
@@ -254,6 +304,41 @@ fn evidence_for_another_model_is_checked_only_when_allowed() {
             json!(format!("{command} は --allow-other-model を受け付けません"))
         );
     }
+}
+
+#[test]
+fn evidence_for_another_model_can_be_carried_over_when_accepted() {
+    let f = files();
+    // 取り消しの guard だけを変えたモデル。購入だけの反例は、このモデルでも同じ遷移である。
+    let mut changed = tickets_without_guard();
+    changed["actions"][1]["guard"] = json!({"gt": [{"var": 0}, {"int": 1}]});
+    f.put("changed.json", &changed);
+    let (_, found) = f.json(&["check", "noguard.json", "--trace-out", "old.json"]);
+    let (_, model) = f.json(&["validate", "changed.json"]);
+    assert_ne!(found["model_digest"], model["model_digest"]);
+    let (code, body) = f.json(&["replay", "changed.json", "old.json"]);
+    assert_eq!((code, &body["rejected"]["reason"]), (1, &json!("unreadable")), "{body}");
+
+    for command in ["replay", "shrink"] {
+        let (code, body) = f.json(&[command, "changed.json", "old.json", "--allow-other-model"]);
+        assert_eq!((code, &body["status"]), (1, &json!("violated")), "{command}: {body}");
+        assert_eq!(body["model_digest"], model["model_digest"]);
+        assert_eq!(body["evidence_model_digest"], found["model_digest"]);
+    }
+    // 縮小して書き出したトレースは今のモデルの digest を持つので、指定なしで再生できる。
+    let (code, _) = f.json(&[
+        "shrink",
+        "changed.json",
+        "old.json",
+        "--allow-other-model",
+        "--trace-out",
+        "new.json",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(f.get("new.json")["model_digest"], model["model_digest"]);
+    let (code, body) = f.json(&["replay", "changed.json", "new.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("violated")), "{body}");
+    assert!(body.get("evidence_model_digest").is_none(), "{body}");
 }
 
 #[test]
@@ -622,7 +707,28 @@ fn only_accepted_evidence_is_written() {
         "c3.json",
     ]);
     assert_eq!(code, 3);
-    assert!(!f.has("c1.json") && !f.has("c3.json"));
+    // 深さや証明書の検査の費用の上限で打ち切ったときも書き出さない。
+    let (code, body) = f.json(&[
+        "check",
+        "tickets.json",
+        "--max-depth",
+        "1",
+        "--certificate-out",
+        "c4.json",
+    ]);
+    assert_eq!((code, &body["reason"]), (3, &json!("max_depth")), "{body}");
+    let (code, body) = f.json(&[
+        "check",
+        "tickets.json",
+        "--max-check-cost",
+        "1",
+        "--certificate-out",
+        "c5.json",
+    ]);
+    assert_eq!((code, &body["reason"]), (3, &json!("max_check_cost")), "{body}");
+    for path in ["c1.json", "c3.json", "c4.json", "c5.json"] {
+        assert!(!f.has(path), "{path}");
+    }
     // 違反なしのシミュレーションは、トレースを書き出さない。
     let (code, _) = f.json(&["simulate", "tickets.json", "--traces", "3", "--trace-out", "t1.json"]);
     assert_eq!(code, 0);
