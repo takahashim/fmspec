@@ -4,7 +4,7 @@
 //! セッションは Ruby のコードを呼び出さない。
 
 use crate::inject::{inject_slots, input_json, parse_inject};
-use crate::options::{conditions, count, options, size};
+use crate::options::{conditions, count, keys, size};
 use fmspec_core::evidence::Claim;
 use fmspec_ir::{
     claim_to_json, output_to_json, output_value_from_json, state_to_json, value_from_json, value_to_json, Model,
@@ -23,8 +23,19 @@ pub struct Session {
     observed: Vec<usize>,
     /// 操作ごとの、注入する内部選択の添字（`choices` の中での添字、昇順）。
     injected: Vec<Vec<usize>>,
+    /// 初期観測を受け取ったか。
     started: bool,
+    /// 照合を続けない応答（不適合、未完了、モデルの誤り、入力の終わりなど）を返したか。
+    /// 返したあとの問い合わせは誤りにする。誤った要求（`Err`）では終わらない。
+    finished: bool,
 }
+
+/// 終わったセッションへの問い合わせの誤り。
+const FINISHED: &str = "セッションは終わっています";
+
+/// 照合が続くことを示す応答の `status`。これ以外の応答を返したら、セッションは終わる。
+/// `invalid` と `invalid_input`（ある候補で無効な入力）は、候補集合を変えずに入力を退けるだけなので、終わらない。
+const GOING_ON: [&str; 5] = ["continue", "input", "valid", "invalid", "invalid_input"];
 
 /// 観測した値を、状態変数のスロットごとの値にする。型の符号にできなければ、すべてのスロットを一致しない値とする。
 fn seen(model: &Model, var: usize, v: Option<&Value>) -> Vec<Seen> {
@@ -42,8 +53,20 @@ impl Session {
     /// オプションは、検査条件（`actions`、`invariants`、`contracts`）、`seed`、
     /// `observe`（観測する状態変数の名前。省略時はすべて）、
     /// `inject`（操作名から、注入する内部選択の名前の配列へのオブジェクト）、`max_candidates`。
+    /// 照合はデッドロックを検査しないので、`deadlock` は受け付けない。
     pub fn new(model: Arc<Model>, opts: &Value) -> Result<Session, String> {
-        let map = options(opts, &["seed", "observe", "inject", "max_candidates"])?;
+        let map = keys(
+            opts,
+            &[
+                "actions",
+                "invariants",
+                "contracts",
+                "seed",
+                "observe",
+                "inject",
+                "max_candidates",
+            ],
+        )?;
         let cond = conditions(&model, map)?;
         let seed = count(map, "seed", 0)?.unwrap_or(0);
         let max = count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);
@@ -51,10 +74,11 @@ impl Session {
         let observed = match map.get("observe") {
             None | Some(Value::Null) => (0..names.len()).collect(),
             Some(v) => {
-                let list = v.as_array().ok_or("observe は状態変数の名前の配列です")?;
+                let not_names = || format!("observe は状態変数の名前の配列です（{v}）");
+                let list = v.as_array().ok_or_else(not_names)?;
                 let mut observed = Vec::new();
                 for name in list {
-                    let name = name.as_str().ok_or("observe は状態変数の名前の配列です")?;
+                    let name = name.as_str().ok_or_else(not_names)?;
                     let index = names
                         .iter()
                         .position(|n| n == name)
@@ -75,7 +99,27 @@ impl Session {
             observed,
             injected,
             started: false,
+            finished: false,
         })
+    }
+
+    /// 初期観測を受け取っていて、まだ終わっていないことを確かめる。`before_start` は開始前の誤りの文。
+    fn going_on(&self, before_start: &str) -> Result<(), String> {
+        if !self.started {
+            return Err(before_start.to_string());
+        }
+        if self.finished {
+            return Err(FINISHED.to_string());
+        }
+        Ok(())
+    }
+
+    /// 応答を返す。照合を続けない応答なら、セッションを終える。
+    fn answer(&mut self, body: Value) -> Value {
+        if !body["status"].as_str().is_some_and(|s| GOING_ON.contains(&s)) {
+            self.finished = true;
+        }
+        body
     }
 
     /// 観測のJSON（状態変数名から値へのオブジェクト）を読む。観測する変数が欠けていれば `Err`。
@@ -219,13 +263,19 @@ impl Session {
         fields
     }
 
-    /// 初期観測を渡す。
+    /// 初期観測を渡す。1つのセッションには1回だけ渡せる。
     pub fn start(&mut self, observation: &Value) -> Result<Value, String> {
+        if self.started {
+            return Err("初期観測はすでに渡しました".to_string());
+        }
         let seen = self.observation(observation)?;
         self.started = true;
         let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.shared(), &seen) {
             Observed::Continue => return Ok(self.continued()),
-            Observed::TooManyCandidates => return Ok(self.too_many_candidates()),
+            Observed::TooManyCandidates => {
+                let body = self.too_many_candidates();
+                return Ok(self.answer(body));
+            }
             Observed::Failure { possible } => possible,
             _ => return Err("初期観測の照合で想定しない結果になりました".to_string()),
         };
@@ -233,21 +283,20 @@ impl Session {
             .iter()
             .map(|p| json!({"state": self.projected(&p.state)}))
             .collect();
-        Ok(json!({
+        let body = json!({
             "status": "conformance_failure",
             "step": 0,
             "expected": expected,
             "observed": {"state": observation},
             "mismatch": self.mismatch(&possible, SeenOutput::Unchecked, &seen),
-        }))
+        });
+        Ok(self.answer(body))
     }
 
     /// 次の入力を問い合わせる。
     pub fn next_input(&mut self) -> Result<Value, String> {
-        if !self.started {
-            return Err("初期観測を渡す前に、次の入力は選べません".to_string());
-        }
-        Ok(match self.inner.next_input() {
+        self.going_on("初期観測を渡す前に、次の入力は選べません")?;
+        let body = match self.inner.next_input() {
             NextInput::Input { action, params } => {
                 let mut body = self.input_json(action, &params);
                 body["status"] = json!("input");
@@ -261,24 +310,25 @@ impl Session {
                 "matched": self.inner.matched(),
             }),
             NextInput::ModelError(e) => self.model_error(&e),
-        })
+        };
+        Ok(self.answer(body))
     }
 
-    /// 入力（`{"action", "args"}`）が全候補で有効かを確かめる。
-    pub fn check_input(&self, input: &Value) -> Result<Value, String> {
+    /// 入力（`{"action", "args"}`）が全候補で有効かを確かめる。候補集合は変えないので、`invalid` でもセッションは続く。
+    pub fn check_input(&mut self, input: &Value) -> Result<Value, String> {
+        self.going_on("初期観測を渡す前に、入力は確かめられません")?;
         let (action, params) = self.input(input)?;
-        Ok(match self.inner.check_input(action, &params) {
+        let body = match self.inner.check_input(action, &params) {
             InputCheck::Valid => json!({"status": "valid"}),
             InputCheck::Invalid => json!({"status": "invalid"}),
             InputCheck::ModelError(e) => self.model_error(&e),
-        })
+        };
+        Ok(self.answer(body))
     }
 
     /// 実装の応答（`{"action", "args", "output", "observation"}`）を渡す。
     pub fn observe(&mut self, report: &Value) -> Result<Value, String> {
-        if !self.started {
-            return Err("初期観測を渡す前に、応答は渡せません".to_string());
-        }
+        self.going_on("初期観測を渡す前に、応答は渡せません")?;
         let (action, params) = self.input(report)?;
         let observation = report.get("observation").ok_or("observation が必要です")?;
         let seen = self.observation(observation)?;
@@ -294,7 +344,7 @@ impl Session {
         };
         let step = self.inner.matched() + 1;
         let before = self.inner.candidates();
-        Ok(match self.inner.observe(action, &params, output, &seen) {
+        let body = match self.inner.observe(action, &params, output, &seen) {
             Observed::Continue => self.continued(),
             Observed::Failure { possible } => {
                 let mut expected: Vec<Value> = Vec::new();
@@ -335,7 +385,8 @@ impl Session {
                 };
                 self.property_at("model_violation", &claim, &state)
             }
-        })
+        };
+        Ok(self.answer(body))
     }
 
     /// 現在の候補の状態。診断とテストに使う。

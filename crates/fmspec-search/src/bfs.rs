@@ -4,8 +4,9 @@
 //! トレースで見つかり、同じ長さのトレースのうちでは、この列挙順で最初に見つかるものを返す。
 //!
 //! 深さの上限 `max_depth` を指定すると、深さ（初期状態からの遷移数）が上限の状態からは新たな状態を訪問しない。
-//! 上限の深さの状態からも遷移は列挙し、評価エラーとデッドロック（どちらもトレースは上限以下のステップ）は報告する。
-//! その遷移が未訪問の状態に至るか、遷移契約を満たさない（トレースが上限を超える）ときは、報告せずに打ち切りを記録し、
+//! 上限の深さの状態からも遷移は列挙し、遷移の評価エラーとデッドロック（終端条件の評価エラーを含む。どちらもトレースは
+//! 上限以下のステップ）は報告する。その遷移が未訪問の状態に至るか、遷移契約を満たさないか、遷移契約の評価がエラーになる
+//! （トレースが上限を超える）ときは、報告せずに打ち切りを記録し（未訪問の遷移先の不変条件は評価しない）、
 //! 探索の終わりに証明書の代わりに `Unavailable(MaxDepth)` を返す。網羅していない探索の状態集合は証明書にしない。
 
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
@@ -27,7 +28,7 @@ pub struct BfsOptions<'a> {
     pub max_states: Option<usize>,
     /// 中断要求の問い合わせ。真を返したら探索を打ち切る。証明書の検査の途中でも確かめる。
     pub interrupt: Option<&'a dyn Fn() -> bool>,
-    /// 判定ゲートが証拠の検査にかける評価回数の上限（`gate::evidence_cost` の見積もり）。
+    /// 判定ゲートが証拠の検査にかける評価回数の上限（`evidence_cost` の見積もり）。
     pub max_check_cost: Option<u64>,
     /// 深さ（初期状態からの遷移数）の上限。報告するトレースのステップ数は、この上限以下である。
     pub max_depth: Option<usize>,
@@ -197,6 +198,11 @@ where
             for t in transitions {
                 enabled = true;
                 stats.transitions += 1;
+                // 上限の深さの状態からの遷移は、何も報告せず、打ち切りを記録するだけである。
+                // 打ち切りが決まっていれば、遷移契約と訪問済みかを確かめる必要はない。
+                if at_limit && truncated {
+                    continue;
+                }
                 if let Some(claim) = contract_claim(model, cond, a, &state, &t.args, &t.state, &t.output) {
                     if at_limit {
                         truncated = true;

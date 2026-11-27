@@ -21,7 +21,7 @@ use fmspec_search::{
     check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, ShrinkOptions,
     ShrinkStop, SimOptions, Status,
 };
-use options::{conditions, count, deadline, flag, keys, max_states, options, size};
+use options::{conditions, count, deadline, flag, keys, max_states, optional_flag, options, size};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -80,11 +80,11 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
         ],
     )?;
     let cond = conditions(model, map)?;
-    if !matches!(map.get("symmetry"), None | Some(Value::Null | Value::Bool(_))) {
-        return Err("symmetry は真偽値です".to_string());
-    }
-    let use_symmetry = !model.names.symmetry.is_empty() && !matches!(map.get("symmetry"), Some(Value::Bool(false)));
+    let symmetry = optional_flag(map, "symmetry")?;
+    let use_symmetry = !model.names.symmetry.is_empty() && symmetry != Some(false);
     let max_check_cost = count(map, "max_check_cost", 0)?;
+    // オプションの誤りは、探索を始める前にすべて見つける。
+    let want_certificate = flag(map, "certificate")?;
     let opts = BfsOptions {
         max_states: max_states(map)?,
         interrupt,
@@ -93,7 +93,7 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
         deadline: deadline(map)?,
     };
     let outcome = if use_symmetry {
-        if max_check_cost.is_some() || flag(map, "certificate")? {
+        if max_check_cost.is_some() || want_certificate {
             return Err("対称性による削減を使う検査では、max_check_cost と certificate を指定できません".to_string());
         }
         check_sym(model.checked(), &cond, &model.names.symmetry, &opts).map_err(|i| {
@@ -110,7 +110,7 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
         body["symmetry"] = json!({"groups": model.names.symmetry_groups, "swaps": model.names.symmetry.len()});
     }
     if let (true, Evidence::Certificate(cert), Status::Verified) =
-        (flag(map, "certificate")?, &outcome.evidence, &outcome.status)
+        (want_certificate, &outcome.evidence, &outcome.status)
     {
         body["certificate"] = certificate_to_json(model, cert);
     }
