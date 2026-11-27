@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_api::{check, coverage, load, shrink, simulate, to_text, Model, Session};
+use fmspec_api::{check, coverage, load, shrink, simulate, test_paths, to_text, Model, Session};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -70,10 +70,32 @@ fn each_function_accepts_only_its_keys() {
     assert_eq!(err, "オプションはオブジェクトです");
     let err = coverage(&m, &json!({"seen": {"edges": []}}), None).unwrap_err();
     assert_eq!(err, "seen の未知のキー \"edges\"");
-    let err = Session::new(Arc::new(counter()), &json!({"deadlock": "yes"}))
+    // セッションの照合はデッドロックを検査しないので、deadlock は受け付けない。
+    // 検査条件のうち、受け付けるキーの型の誤りは報告する。
+    for deadlock in [json!(true), json!("yes")] {
+        let err = Session::new(Arc::new(counter()), &json!({"deadlock": deadlock}))
+            .err()
+            .unwrap();
+        assert_eq!(err, "未知のオプション \"deadlock\"");
+    }
+    let err = Session::new(Arc::new(counter()), &json!({"invariants": "small"}))
         .err()
         .unwrap();
-    assert_eq!(err, "deadlock は真偽値です");
+    assert!(err.starts_with("不変条件の指定は名前の配列です"), "{err}");
+    // カバレッジとテスト経路のグラフは、対象の操作だけで決まる。不変条件、遷移契約、デッドロックは使わない。
+    for key in ["invariants", "contracts", "deadlock"] {
+        let opts = json!({ key: null });
+        assert_eq!(
+            coverage(&m, &opts, None).unwrap_err(),
+            format!("未知のオプション {key:?}")
+        );
+        assert_eq!(
+            test_paths(&m, &opts, None).unwrap_err(),
+            format!("未知のオプション {key:?}")
+        );
+    }
+    assert_eq!(coverage(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"], "ok");
+    assert_eq!(test_paths(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"], "ok");
 }
 
 #[test]

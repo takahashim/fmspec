@@ -4,7 +4,7 @@
 //! セッションは Ruby のコードを呼び出さない。
 
 use crate::inject::{inject_slots, input_json, parse_inject};
-use crate::options::{conditions, count, options, size};
+use crate::options::{conditions, count, keys, size};
 use fmspec_core::evidence::Claim;
 use fmspec_ir::{
     claim_to_json, output_to_json, output_value_from_json, state_to_json, value_from_json, value_to_json, Model,
@@ -42,8 +42,12 @@ impl Session {
     /// オプションは、検査条件（`actions`、`invariants`、`contracts`）、`seed`、
     /// `observe`（観測する状態変数の名前。省略時はすべて）、
     /// `inject`（操作名から、注入する内部選択の名前の配列へのオブジェクト）、`max_candidates`。
+    /// 照合はデッドロックを検査しないので、`deadlock` は受け付けない。
     pub fn new(model: Arc<Model>, opts: &Value) -> Result<Session, String> {
-        let map = options(opts, &["seed", "observe", "inject", "max_candidates"])?;
+        let map = keys(
+            opts,
+            &["actions", "invariants", "contracts", "seed", "observe", "inject", "max_candidates"],
+        )?;
         let cond = conditions(&model, map)?;
         let seed = count(map, "seed", 0)?.unwrap_or(0);
         let max = count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);

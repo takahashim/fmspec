@@ -18,6 +18,8 @@ fn object(v: &Value, accepts: impl Fn(&str) -> bool) -> Result<&Map<String, Valu
 }
 
 /// `allowed` のキーだけを受け付けるオプションのオブジェクトを取り出す。
+/// 検査条件の一部しか使わない関数は、使う検査条件のキーだけを `allowed` に含めて、使わないキーを拒否する。
+/// 含めなかった検査条件は、`conditions` の既定（すべてが対象で、デッドロック検査は無効）になる。
 pub(crate) fn keys<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, String> {
     object(v, |k| allowed.contains(&k))
 }
@@ -26,7 +28,6 @@ pub(crate) fn keys<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String,
 pub(crate) fn options<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, String> {
     object(v, |k| CONDITION_KEYS.contains(&k) || allowed.contains(&k))
 }
-
 fn select(
     mask: &mut [bool],
     wanted: Option<&Value>,
