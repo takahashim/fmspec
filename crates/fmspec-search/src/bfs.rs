@@ -41,8 +41,16 @@ pub struct SearchResult {
 
 struct Node {
     state: Vec<i64>,
-    /// 親の添字と、親からの遷移。
-    parent: Option<(usize, usize, Vec<i64>, Option<i64>)>,
+    /// 親からの遷移。初期状態は `None`。
+    parent: Option<Parent>,
+}
+
+/// 親の節点と、親からの遷移。
+struct Parent {
+    node: usize,
+    action: usize,
+    args: Vec<i64>,
+    output: Option<i64>,
 }
 
 fn hash_state(s: &[i64]) -> u64 {
@@ -51,6 +59,7 @@ fn hash_state(s: &[i64]) -> u64 {
 
 /// 訪問済みの状態の集合。状態は節点の列 `nodes` にだけ置き、表には節点の添字を入れる。
 /// 同じハッシュ値の状態は、符号化列の一致で確かめる。ハッシュ値だけで状態を同一視しない。
+/// 状態のハッシュ値は呼び出し元が `hash_state` で一度だけ計算し、問い合わせと追加の両方に渡す。
 #[derive(Default)]
 struct Visited {
     table: HashTable<usize>,
@@ -61,14 +70,17 @@ impl Visited {
         self.table.len()
     }
 
-    fn contains(&self, nodes: &[Node], s: &[i64]) -> bool {
-        self.table.find(hash_state(s), |&id| nodes[id].state == s).is_some()
+    /// ハッシュ値 `hash` の状態 `s` を訪問済みか。
+    fn contains(&self, nodes: &[Node], hash: u64, s: &[i64]) -> bool {
+        self.table.find(hash, |&id| nodes[id].state == s).is_some()
     }
 
-    /// 節点 `id` の状態を加える。呼び出し元は、その状態が未訪問であることを確かめておく。
-    fn insert(&mut self, nodes: &[Node], id: usize) {
-        self.table
-            .insert_unique(hash_state(&nodes[id].state), id, |&j| hash_state(&nodes[j].state));
+    /// 節点を加え、その添字を返す。呼び出し元は、`hash` が節点の状態のハッシュ値で、その状態が未訪問であることを確かめておく。
+    fn push(&mut self, nodes: &mut Vec<Node>, hash: u64, node: Node) -> usize {
+        let id = nodes.len();
+        nodes.push(node);
+        self.table.insert_unique(hash, id, |&j| hash_state(&nodes[j].state));
+        id
     }
 }
 
@@ -81,14 +93,14 @@ fn trace(nodes: &[Node], id: usize, claim: Claim) -> Evidence {
 /// 初期状態から `id` の状態までの開始状態とステップを復元する。
 fn path(nodes: &[Node], mut id: usize) -> (Vec<i64>, Vec<TraceStep>) {
     let mut steps = Vec::new();
-    while let Some((parent, action, args, output)) = &nodes[id].parent {
+    while let Some(parent) = &nodes[id].parent {
         steps.push(TraceStep {
-            action: *action,
-            args: args.clone(),
-            output: *output,
+            action: parent.action,
+            args: parent.args.clone(),
+            output: parent.output,
             state: nodes[id].state.clone(),
         });
-        id = *parent;
+        id = parent.node;
     }
     steps.reverse();
     (nodes[id].state.clone(), steps)
@@ -103,24 +115,25 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
     let mut queue: VecDeque<usize> = VecDeque::new();
 
     let finish = |evidence: Evidence, stats: Stats| SearchResult { evidence, stats };
+    let full = |visited: &Visited| opts.max_states.is_some_and(|max| visited.len() >= max);
 
     // 初期状態は、与えられた順に探索の起点にする。
     for init in model.initials() {
-        if visited.contains(&nodes, init) {
+        let hash = hash_state(init);
+        if visited.contains(&nodes, hash, init) {
             continue;
         }
-        if opts.max_states.is_some_and(|max| visited.len() >= max) {
+        if full(&visited) {
             return finish(Evidence::Unavailable(Limit::MaxStates), stats);
         }
-        let id = nodes.len();
-        nodes.push(Node {
+        let node = Node {
             state: init.clone(),
             parent: None,
-        });
-        visited.insert(&nodes, id);
+        };
+        let id = visited.push(&mut nodes, hash, node);
         stats.visited_states = visited.len();
         if let Some(claim) = invariant_claim(model, cond, init) {
-            return finish(Evidence::Trace(init.clone(), Vec::new(), claim), stats);
+            return finish(trace(&nodes, id, claim), stats);
         }
         queue.push_back(id);
     }
@@ -156,19 +169,24 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                     });
                     return finish(Evidence::Trace(start, steps, claim), stats);
                 }
-                if visited.contains(&nodes, &t.state) {
+                let hash = hash_state(&t.state);
+                if visited.contains(&nodes, hash, &t.state) {
                     continue;
                 }
-                if opts.max_states.is_some_and(|max| visited.len() >= max) {
+                if full(&visited) {
                     return finish(Evidence::Unavailable(Limit::MaxStates), stats);
                 }
-                let id = nodes.len();
                 let violation = invariant_claim(model, cond, &t.state);
-                nodes.push(Node {
+                let node = Node {
                     state: t.state,
-                    parent: Some((cur, a, t.args, t.output)),
-                });
-                visited.insert(&nodes, id);
+                    parent: Some(Parent {
+                        node: cur,
+                        action: a,
+                        args: t.args,
+                        output: t.output,
+                    }),
+                };
+                let id = visited.push(&mut nodes, hash, node);
                 stats.visited_states = visited.len();
                 if let Some(claim) = violation {
                     return finish(trace(&nodes, id, claim), stats);
