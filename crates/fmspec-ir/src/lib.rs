@@ -7,6 +7,7 @@
 
 mod canonical;
 mod conditions;
+mod diagnostics;
 mod evidence;
 mod json;
 mod model;
