@@ -16,7 +16,12 @@ require "open3"
 require "tmpdir"
 require "fileutils"
 
-VERUS_VERSION = "0.2026.10.04.426d8b0"
+VERUS_VERSION = "0.2026.11.02.8bf68ee"
+# cargoビルドで使う vstd とその依存（crates.io の版）。VERUS_VERSION のリリースのコミットと、
+# この版を公開したコミットとで、これらのクレートのソースは一致する（違うのは Cargo.toml の版番号だけ）。
+# VERUS_VERSION を更新するときは、対応する版を選び直し、ソースの一致を確かめる。
+VERUS_CRATES_VERSION = "0.0.0-2026-11-01-0251"
+VERUS_CRATES = %w[vstd verus_builtin verus_builtin_macros verus_state_machines_macros verus_syn verus_prettyplease].freeze
 VERUS_CRATE = File.join(ROOT, "crates/fmspec-core")
 VERUS_SOURCES = Dir[File.join(VERUS_CRATE, "src/*.rs")].sort
 # 証明の対象外の、標準トレイトの手書き実装。`verus!` の外にあり、判定の経路から呼ばれない。
@@ -418,11 +423,20 @@ def verus_parallel(jobs)
 end
 
 namespace :verus do
-  desc "Verus のバージョンが固定したものと一致することを確かめる"
+  desc "Verus と、cargoビルドで使う vstd の版が、固定したものと一致することを確かめる"
   task :version do
     out, = Open3.capture2e(verus_bin, "--version")
     version = out[/Version: (\S+)/, 1]
     abort "verus: #{verus_bin} のバージョンは #{version.inspect}。固定したバージョンは #{VERUS_VERSION}" unless version == VERUS_VERSION
+
+    lock = File.read(File.join(ROOT, "Cargo.lock"))
+    VERUS_CRATES.each do |name|
+      found = lock.scan(/^name = "#{name}"\nversion = "([^"]+)"/).flatten
+      abort "verus: Cargo.lock に #{name} がない" if found.empty?
+      found.each do |v|
+        abort "verus: Cargo.lock の #{name} は #{v}。VERUS_VERSION に対応する版は #{VERUS_CRATES_VERSION}" unless v == VERUS_CRATES_VERSION
+      end
+    end
   end
 
   desc "信頼する項目（assume、external_body など）が中核にないことを確かめる"
