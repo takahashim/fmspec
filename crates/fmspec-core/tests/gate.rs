@@ -511,6 +511,48 @@ fn conditions_shorter_or_longer_than_the_model_are_tolerated() {
 }
 
 #[test]
+fn every_verdict_carries_its_reason() {
+    let m = checked();
+    for limit in [
+        Limit::MaxStates,
+        Limit::Interrupted,
+        Limit::CheckBudget,
+        Limit::MaxDepth,
+        Limit::MaxTime,
+    ] {
+        let v = decide(&m, &all(false), &Evidence::Unavailable(limit));
+        assert_eq!(
+            (v.kind(), v.limit(), v.reject(), v.invalid()),
+            (VerdictKind::Inconclusive, Some(limit), None, None)
+        );
+        let v = decide_raw(&base(), &all(false), &Evidence::Unavailable(limit));
+        assert_eq!((v.kind(), v.limit()), (VerdictKind::Inconclusive, Some(limit)));
+    }
+    let v = decide(&m, &all(false), &Evidence::Trace(vec![], vec![], Claim::Deadlock));
+    assert_eq!(
+        (v.kind(), v.limit(), v.reject(), v.invalid()),
+        (VerdictKind::Rejected, None, Some(Reject::BadStart), None)
+    );
+    let cert = Evidence::Certificate(Certificate {
+        conditions: all(false),
+        states: vec![vec![0], vec![1], vec![2], vec![3]],
+    });
+    let v = decide(&m, &all(false), &cert);
+    assert_eq!(
+        (v.kind(), v.limit(), v.reject(), v.invalid()),
+        (VerdictKind::Verified, None, None, None)
+    );
+    let mut raw = base();
+    raw.inits.clear();
+    let v = decide_raw(&raw, &all(false), &Evidence::Unavailable(Limit::MaxStates));
+    assert_eq!(
+        (v.kind(), v.limit(), v.reject()),
+        (VerdictKind::InvalidModel, None, None)
+    );
+    assert!(v.invalid().is_some());
+}
+
+#[test]
 fn the_search_api_rejects_bad_input_instead_of_panicking() {
     let m = checked();
     assert!(m.successors(1, &vec![0]).is_none());

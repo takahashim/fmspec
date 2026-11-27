@@ -812,19 +812,42 @@ impl RefVerdict {
         self.kind
     }
 
-    /// 証拠を拒否した理由。
-    pub fn reject(&self) -> Option<Reject> {
+    pub closed spec fn spec_reject(self) -> Option<Reject> {
         self.reject
     }
 
-    /// 証拠を得られなかった理由。
-    pub fn limit(&self) -> Option<Limit> {
+    pub closed spec fn spec_limit(self) -> Option<Limit> {
+        self.limit
+    }
+
+    /// 理由は、判定の種類に対応するものだけがある。`Rejected` には拒否の理由が、`Inconclusive` には
+    /// 証拠を得られなかった理由が必ずあり、それ以外の判定にはない。
+    pub open spec fn reasons_ok(self) -> bool {
+        &&& (self.spec_kind() is Rejected <==> self.spec_reject() is Some)
+        &&& (self.spec_kind() is Inconclusive <==> self.spec_limit() is Some)
+    }
+
+    /// 証拠を拒否した理由。判定が `Rejected` のとき、かつそのときに限り `Some`。
+    pub fn reject(&self) -> (r: Option<Reject>)
+        ensures
+            r == self.spec_reject(),
+    {
+        self.reject
+    }
+
+    /// 証拠を得られなかった理由。判定が `Inconclusive` のとき、かつそのときに限り `Some`。
+    pub fn limit(&self) -> (r: Option<Limit>)
+        ensures
+            r == self.spec_limit(),
+    {
         self.limit
     }
 
     fn of(kind: RefVerdictKind) -> (v: RefVerdict)
         ensures
             v.spec_kind() == kind,
+            v.spec_reject() is None,
+            v.spec_limit() is None,
     {
         RefVerdict { kind, reject: None, limit: None }
     }
@@ -832,6 +855,8 @@ impl RefVerdict {
     fn rejected(r: Reject) -> (v: RefVerdict)
         ensures
             v.spec_kind() == RefVerdictKind::Rejected,
+            v.spec_reject() == Some(r),
+            v.spec_limit() is None,
     {
         RefVerdict { kind: RefVerdictKind::Rejected, reject: Some(r), limit: None }
     }
@@ -902,6 +927,12 @@ pub fn decide_refinement(
 ) -> (v: RefVerdict)
     ensures
         refinement_sound(b@, *cb, a@, f@, *ev, v.spec_kind()),
+        v.reasons_ok(),
+        match *ev {
+            RefEvidence::Unavailable(l) => v.spec_kind() is InvalidModel || (v.spec_kind() is Inconclusive
+                && v.spec_limit() == Some(l)),
+            _ => true,
+        },
 {
     let bm = b.raw();
     let am = a.raw();

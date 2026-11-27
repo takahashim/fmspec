@@ -184,24 +184,56 @@ impl Verdict {
         self.kind
     }
 
-    /// 証拠を拒否した理由。
-    pub fn reject(&self) -> Option<Reject> {
+    pub closed spec fn spec_reject(self) -> Option<Reject> {
         self.reject
     }
 
-    /// モデルを拒否した理由。
-    pub fn invalid(&self) -> Option<InvalidModel> {
+    pub closed spec fn spec_invalid(self) -> Option<InvalidModel> {
         self.invalid
     }
 
-    /// 証拠を得られなかった理由。
-    pub fn limit(&self) -> Option<Limit> {
+    pub closed spec fn spec_limit(self) -> Option<Limit> {
+        self.limit
+    }
+
+    /// 理由は、判定の種類に対応するものだけがある。`Rejected` には拒否の理由が、`InvalidModel` にはモデルを
+    /// 拒否した理由が、`Inconclusive` には証拠を得られなかった理由が必ずあり、それ以外の判定にはない。
+    pub open spec fn reasons_ok(self) -> bool {
+        &&& (self.spec_kind() is Rejected <==> self.spec_reject() is Some)
+        &&& (self.spec_kind() is InvalidModel <==> self.spec_invalid() is Some)
+        &&& (self.spec_kind() is Inconclusive <==> self.spec_limit() is Some)
+    }
+
+    /// 証拠を拒否した理由。判定が `Rejected` のとき、かつそのときに限り `Some`。
+    pub fn reject(&self) -> (r: Option<Reject>)
+        ensures
+            r == self.spec_reject(),
+    {
+        self.reject
+    }
+
+    /// モデルを拒否した理由。判定が `InvalidModel` のとき、かつそのときに限り `Some`。
+    pub fn invalid(&self) -> (r: Option<InvalidModel>)
+        ensures
+            r == self.spec_invalid(),
+    {
+        self.invalid
+    }
+
+    /// 証拠を得られなかった理由。判定が `Inconclusive` のとき、かつそのときに限り `Some`。
+    pub fn limit(&self) -> (r: Option<Limit>)
+        ensures
+            r == self.spec_limit(),
+    {
         self.limit
     }
 
     fn of(kind: VerdictKind) -> (v: Verdict)
         ensures
             v.spec_kind() == kind,
+            v.spec_reject() is None,
+            v.spec_invalid() is None,
+            v.spec_limit() is None,
     {
         Verdict { kind, reject: None, invalid: None, limit: None }
     }
@@ -209,6 +241,9 @@ impl Verdict {
     fn rejected(r: Reject) -> (v: Verdict)
         ensures
             v.spec_kind() == VerdictKind::Rejected,
+            v.spec_reject() == Some(r),
+            v.spec_invalid() is None,
+            v.spec_limit() is None,
     {
         Verdict { kind: VerdictKind::Rejected, reject: Some(r), invalid: None, limit: None }
     }
@@ -299,6 +334,8 @@ fn decide_wf(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
         verdict_sound(*m, *c, *ev, v.spec_kind()),
         !(v.spec_kind() is InvalidModel),
         v.spec_kind() is Inconclusive ==> ev is Unavailable,
+        v.reasons_ok(),
+        *ev matches Evidence::Unavailable(l) ==> v.spec_kind() is Inconclusive && v.spec_limit() == Some(l),
 {
     match ev {
         Evidence::Certificate(cert) => {
@@ -328,11 +365,16 @@ fn decide_wf(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
 }
 
 /// 判定ゲート。モデルと証拠を受け取り、証拠を検査してから判定を返す。前提条件を持たない。
+///
+/// 判定には、その種類に対応する理由がある（`Verdict::reasons_ok`）。証拠が `Unavailable(l)` なら、
+/// 判定は `Inconclusive` で、理由は `l` である。
 pub fn decide(model: &CheckedModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
     ensures
         verdict_sound(model@, *c, *ev, v.spec_kind()),
         !(v.spec_kind() is InvalidModel),
         v.spec_kind() is Inconclusive ==> ev is Unavailable,
+        v.reasons_ok(),
+        *ev matches Evidence::Unavailable(l) ==> v.spec_kind() is Inconclusive && v.spec_limit() == Some(l),
 {
     decide_wf(model.raw(), c, ev)
 }
@@ -381,7 +423,7 @@ impl<'a> CertCheck<'a> {
         ensures
             match r {
                 Ok(chk) => chk.spec_model() == model@ && chk.spec_cond() == *c && chk.spec_cert() == *cert,
-                Err(v) => v.spec_kind() is Rejected,
+                Err(v) => v.spec_kind() is Rejected && v.reasons_ok(),
             },
     {
         let m = model.raw();
@@ -414,7 +456,7 @@ impl<'a> CertCheck<'a> {
                 old(self).spec_cond(),
                 Evidence::Certificate(old(self).spec_cert()),
                 v.spec_kind(),
-            ),
+            ) && v.reasons_ok(),
     {
         proof {
             use_type_invariant(&*self);
@@ -452,6 +494,8 @@ impl<'a> CertCheck<'a> {
     pub fn stop(self, limit: Limit) -> (v: Verdict)
         ensures
             v.spec_kind() is Inconclusive,
+            v.spec_limit() == Some(limit),
+            v.reasons_ok(),
             verdict_sound(self.spec_model(), self.spec_cond(), Evidence::Certificate(self.spec_cert()), v.spec_kind()),
     {
         proof {
@@ -470,6 +514,10 @@ impl<'a> CertCheck<'a> {
 pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<usize>>, ev: &Evidence) -> (v: Verdict)
     ensures
         verdict_sound(model@, *c, *ev, v.spec_kind()),
+        !(v.spec_kind() is InvalidModel),
+        v.spec_kind() is Inconclusive ==> ev is Unavailable,
+        v.reasons_ok(),
+        *ev matches Evidence::Unavailable(l) ==> v.spec_kind() is Inconclusive && v.spec_limit() == Some(l),
 {
     let m = model.raw();
     match ev {
@@ -490,9 +538,15 @@ pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<us
 }
 
 /// IR検証を経ていないモデルに対する判定ゲート。モデルを検証してから `decide` と同じ検査を行う。
+/// モデルが整形式なら、判定の理由も `decide` と同じである。
 pub fn decide_raw(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
     ensures
         verdict_sound(*m, *c, *ev, v.spec_kind()),
+        v.reasons_ok(),
+        match *ev {
+            Evidence::Unavailable(l) => wf(*m) ==> v.spec_kind() is Inconclusive && v.spec_limit() == Some(l),
+            _ => true,
+        },
 {
     match validate_raw(m) {
         Err(e) => Verdict { kind: VerdictKind::InvalidModel, reject: None, invalid: Some(e), limit: None },
