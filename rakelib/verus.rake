@@ -43,6 +43,11 @@ end
 VERUS_MUTANTS = [
   ["infer.rs", "BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(XType::Bool),",
    "BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(XType::Int),", "比較の型を整数にする"],
+  ["infer.rs", "                    if ts.len() >= 1 {\n                        Some(XType::Tuple(ts))", "                    if ts.len() >= 2 {\n                        Some(XType::Tuple(ts))",
+   "要素が1つのTupleを拒否する"],
+  ["infer.rs", "        TExpr::Local(i) => if *i < lt.len() {\n            Some(copy_xtype(&lt[*i]))", "        TExpr::Local(i) => if *i + 1 < lt.len() {\n            Some(copy_xtype(&lt[*i]))",
+   "最も内側の局所変数を拒否する"],
+  ["encoding.rs", "        (XType::Bool, XType::Bool) => true,", "        (XType::Bool, XType::Bool) => false,", "Boolの型を等しくないとする"],
   ["encoding.rs", "(SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2 && *h1 == *h2,",
    "(SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2,", "整数の型の上端を比べない"],
   ["encoding.rs", "        SType::Option(x) => match keys_exec(x, enums) {\n            Some(k) => Some(k + 1),",
@@ -271,6 +276,7 @@ VERUS_MUTANTS = [
 # 前提や不変条件が矛盾していて証明が空虚に通っているなら、ここの assert(false) も通ってしまう。
 VERUS_CANARIES = [
   ["infer.rs", "            assert(decreases_to!(*_parent => item.value));", "check_items のループ"],
+  ["infer.rs", "            let ok = check_all(e, es, &XType::Bool, s, lt);", "check_fold"],
   ["keys.rs", "        assert(pre.push(vs.last()) == vs);", "lemma_rank_seq_in_product の帰納"],
   ["keys.rs", "        assert(vs.drop_last() == p[q]);", "lemma_product_rank の帰納"],
   ["encoding.rs", "        assert(s.skip(prefix.len() as int) == last);", "lemma_models_enc_seq の帰納"],
