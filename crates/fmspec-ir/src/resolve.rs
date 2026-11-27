@@ -131,30 +131,21 @@ fn b(e: TExpr) -> Box<TExpr> {
 }
 
 impl<'a> Ctx<'a> {
+    /// 型の誤り「`want` が必要ですが、`t` です」。
+    fn mismatch<T>(&self, path: &str, want: &str, t: &XType) -> Res<T> {
+        type_error(path, format!("{want} が必要ですが、{} です", type_name(self.enums, t)))
+    }
+
     fn expect(&self, path: &str, t: &XType, want: &XType) -> Res<()> {
         if t != want {
-            return type_error(
-                path,
-                format!(
-                    "{} が必要ですが、{} です",
-                    type_name(self.enums, want),
-                    type_name(self.enums, t)
-                ),
-            );
+            return self.mismatch(path, &type_name(self.enums, want), t);
         }
         Ok(())
     }
 
     fn expect_fits(&self, path: &str, t: &XType, st: &SType) -> Res<()> {
         if !t.fits(st) {
-            return type_error(
-                path,
-                format!(
-                    "{} が必要ですが、{} です",
-                    type_name(self.enums, &st.xtype()),
-                    type_name(self.enums, t)
-                ),
-            );
+            return self.mismatch(path, &type_name(self.enums, &st.xtype()), t);
         }
         Ok(())
     }
@@ -162,21 +153,21 @@ impl<'a> Ctx<'a> {
     fn set_elem(&self, t: &XType, path: &str) -> Res<SType> {
         match t {
             XType::Set(e) => Ok((**e).clone()),
-            _ => type_error(path, format!("set が必要ですが、{} です", type_name(self.enums, t))),
+            _ => self.mismatch(path, "set", t),
         }
     }
 
     fn map_types(&self, t: &XType, path: &str) -> Res<(SType, SType)> {
         match t {
             XType::Map(k, v) => Ok(((**k).clone(), (**v).clone())),
-            _ => type_error(path, format!("map が必要ですが、{} です", type_name(self.enums, t))),
+            _ => self.mismatch(path, "map", t),
         }
     }
 
     fn list_type(&self, t: &XType, path: &str) -> Res<(SType, usize)> {
         match t {
             XType::List(e, n) => Ok(((**e).clone(), *n)),
-            _ => type_error(path, format!("list が必要ですが、{} です", type_name(self.enums, t))),
+            _ => self.mismatch(path, "list", t),
         }
     }
 
@@ -402,7 +393,7 @@ impl<'a> Ctx<'a> {
                 let (t, x) = self.tree(required(m, path, "of")?, &format!("{path}.of"), sc)?;
                 let i = index(required(m, path, "index")?, &format!("{path}.index"))?;
                 let XType::Tuple(ts) = &t else {
-                    return type_error(path, format!("tuple が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "tuple", &t);
                 };
                 match ts.get(i) {
                     Some(t) => Ok((t.clone(), TExpr::Nth(b(x), i))),
@@ -414,7 +405,7 @@ impl<'a> Ctx<'a> {
                 let (t, x) = self.tree(required(m, path, "of")?, &format!("{path}.of"), sc)?;
                 let name = string(required(m, path, "name")?, &format!("{path}.name"))?;
                 let XType::Record(fs) = &t else {
-                    return type_error(path, format!("record が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "record", &t);
                 };
                 match fs.iter().position(|(n, _)| *n == name) {
                     Some(i) => Ok((fs[i].1.clone(), TExpr::Field(b(x), f.id(&name), i))),
@@ -434,7 +425,7 @@ impl<'a> Ctx<'a> {
                 let items = ops(1)?;
                 let (t, x) = self.tree(&items[0], &at(0), sc)?;
                 if !matches!(t, XType::Option(_)) {
-                    return type_error(path, format!("option が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "option", &t);
                 }
                 Ok((
                     XType::Bool,
@@ -449,7 +440,7 @@ impl<'a> Ctx<'a> {
                 let items = ops(1)?;
                 let (t, x) = self.tree(&items[0], &at(0), sc)?;
                 let XType::Option(inner) = t else {
-                    return type_error(path, format!("option が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "option", &t);
                 };
                 Ok((*inner, TExpr::Unwrap(b(x))))
             }
@@ -523,10 +514,7 @@ impl<'a> Ctx<'a> {
                         let x = self.fitting(&items[1], &at(1), sc, elem)?;
                         Ok((XType::Bool, TExpr::ListContains(b(c), b(x))))
                     }
-                    _ => type_error(
-                        path,
-                        format!("set か list が必要ですが、{} です", type_name(enums, &tc)),
-                    ),
+                    _ => self.mismatch(path, "set か list", &tc),
                 }
             }
             "insert" | "remove" => {
@@ -559,10 +547,7 @@ impl<'a> Ctx<'a> {
                 let items = ops(1)?;
                 let (t, x) = self.tree(&items[0], &at(0), sc)?;
                 if !matches!(t, XType::Set(_) | XType::Map(_, _) | XType::List(_, _)) {
-                    return type_error(
-                        path,
-                        format!("set、map、list が必要ですが、{} です", type_name(enums, &t)),
-                    );
+                    return self.mismatch(path, "set、map、list", &t);
                 }
                 Ok(if key == "size" {
                     (XType::Int, TExpr::Size(b(x)))
@@ -585,8 +570,8 @@ impl<'a> Ctx<'a> {
                 let items = ops(3)?;
                 let (tm, m) = self.tree(&items[0], &at(0), sc)?;
                 let (k, v) = self.map_types(&tm, &at(0))?;
-                let x = self.fitting(&items[1], &format!("{path}[1]"), sc, &k)?;
-                let y = self.fitting(&items[2], &format!("{path}[2]"), sc, &v)?;
+                let x = self.fitting(&items[1], &at(1), sc, &k)?;
+                let y = self.fitting(&items[2], &at(2), sc, &v)?;
                 Ok((tm, TExpr::Put(f.stype(&k), f.stype(&v), b(m), b(x), b(y))))
             }
             "keys" => {
@@ -638,12 +623,7 @@ impl<'a> Ctx<'a> {
                     XType::Set(e) => (Over::Set(f.stype(&e), b(x)), e.xtype()),
                     XType::Map(k, _) => (Over::Map(f.stype(&k), b(x)), k.xtype()),
                     XType::List(e, _) => (Over::List(b(x)), e.xtype()),
-                    _ => {
-                        return type_error(
-                            &format!("{path}.in"),
-                            format!("set、map、list が必要ですが、{} です", type_name(enums, &t)),
-                        )
-                    }
+                    _ => return self.mismatch(&format!("{path}.in"), "set、map、list", &t),
                 }
             }
             (None, Some(t)) => {
