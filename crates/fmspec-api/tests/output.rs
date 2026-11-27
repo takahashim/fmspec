@@ -231,3 +231,32 @@ fn replaying_or_shrinking_a_trace_keeps_its_seed() {
     assert_eq!(rejected["status"], "rejected", "{rejected}");
     assert_eq!(rejected["trace"]["seed"], 5);
 }
+
+#[test]
+fn shrinking_lowers_arguments_that_the_violation_does_not_need() {
+    let m = orders();
+    // pay の引数 id は遷移に効かないので、ドメインの最初の値 0 まで小さくなる。
+    // 内部選択 ok は、偽にすると charges が増えず違反しないので、真のまま残る。
+    let violated = check(&m, &json!({"actions": ["pay"]}), None).unwrap();
+    let mut trace = violated["trace"].clone();
+    for step in trace["steps"].as_array_mut().unwrap() {
+        step["args"]["id"] = json!(1);
+    }
+    assert_eq!(replay(&m, &trace.to_string())["status"], "violated");
+    let shrunk = shrink(&m, &trace.to_string(), &json!({})).unwrap();
+    assert_eq!(shrunk["status"], "violated", "{shrunk}");
+    assert_eq!(shrunk["original_steps"], 2);
+    assert_eq!(shrunk["trace"]["steps"], violated["trace"]["steps"]);
+    assert_eq!(
+        human(&shrunk),
+        "Violated: orders / 不変条件 single の違反\n\
+         \x20 初期状態 charges: 0, open: true\n\
+         \x20 1. pay(id: 0) 内部選択 ok: true 出力 success → charges: 1, open: true\n\
+         \x20 2. pay(id: 0) 内部選択 ok: true 出力 success → charges: 2, open: true\n\
+         \x20 （2 ステップ）\n\
+         \x20 縮小前は 2 ステップ\n"
+    );
+    // 試す候補の数の上限が1なら、最初の候補（1つ目のステップの削除）だけを試して、元のトレースを返す。
+    let limited = shrink(&m, &trace.to_string(), &json!({"attempts": 1})).unwrap();
+    assert_eq!(limited["trace"]["steps"], trace["steps"]);
+}

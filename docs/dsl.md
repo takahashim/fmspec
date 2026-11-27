@@ -587,8 +587,9 @@ end
 |---|---|
 | `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
 | `simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **検査条件)` | ランダムシミュレーション |
-| `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, **検査条件)` | 証明書の検査 |
-| `replay(トレース)` | トレースの再生 |
+| `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, allow_other_model: false, **検査条件)` | 証明書の検査 |
+| `replay(トレース, allow_other_model: false)` | トレースの再生 |
+| `shrink(トレース, attempts: nil, allow_other_model: false)` | モデル違反のトレースの縮小 |
 
 `max_check_cost:` は、判定ゲートが証拠の検査にかける評価回数の上限である（[ir.md](ir.md) の「証拠の検査の資源上限と中断」）。
 検査の見積もりが上限を超えると、結果は `:inconclusive`（理由は `:max_check_cost`）になる。
@@ -600,6 +601,20 @@ end
 `max_time_ms:` は、検査の時間の上限（ミリ秒）である（[ir.md](ir.md) の「時間の上限」）。
 過ぎると、結果は `:inconclusive`（理由は `:max_time_ms`）になる。
 `Timeout` による割り込みと違い、例外にならず、結果として返る。
+
+証明書とトレースは、それを作ったモデルの digest（`Model#digest`）を持つ。
+digest が違う証拠は、既定では `:rejected`（`rejected["reason"]` は `"unreadable"`）になる。
+`allow_other_model: true` を指定すると、digest が違う証拠も今のモデルの名前と型で読み、今のモデルに対して判定ゲートが検査する。
+モデルを変えた後に、以前の反例が再現するか（`replay`）、以前の証明書が今も成り立つか（`verify_certificate`）を確かめるのに使う。
+名前や値の形が合わない証拠は、指定があっても読めない。
+結果の `evidence_model_digest` は証拠の digest で（digest が同じなら `nil`）、結果の `trace` は今のモデルの digest を持つ（[ir.md](ir.md) の「別のモデルに対する証拠」）。
+
+```ruby
+old_trace = JSON.parse(File.read("counterexample.json"))
+result = Tickets.replay(old_trace, allow_other_model: true)
+result.status                # 今のモデルでも再現すれば :violated、しなければ :rejected
+result.evidence_model_digest # 証拠を作ったモデルの digest
+```
 
 検査条件は、`deadlock:`（非終端のデッドロックを検査する）と、`actions:`、`invariants:`、`contracts:`（対象の名前の配列）である。
 省略時は、すべての操作、不変条件、遷移契約が対象で、デッドロック検査は無効である。
@@ -618,6 +633,7 @@ end
 | `certificate` | `check(certificate: true)` で受理された証明書 |
 | `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
+| `evidence_model_digest` | `allow_other_model: true` で別のモデルに対する証拠を扱ったときの、証拠の digest |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
 | `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
 | `to_s` | 人間向けの報告 |
@@ -626,9 +642,10 @@ end
 `:verified`、`:violated`、`:error` は、エンジンの判定ゲートが証拠を検査してから返した判定である。
 `:sampled` は指定したサンプルの検査を完了しただけで、網羅性の主張はない。
 
-`Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くする。
+`Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くし、引数と内部選択をドメインの正規順で小さくする。
 シミュレーションで見つけたトレースに使う。
-幅優先探索の反例は、不変条件の違反については最初から最短である。
+`attempts:` は、試す候補（ステップの削除と引数の変更）の数の上限である（既定 10000）。
+幅優先探索の反例は、不変条件の違反については最初から最短である（引数は小さくなることがある）。
 
 `:internal_error` は fmspec の不具合を示す。
 探索器が生成した証拠を判定ゲートが拒否した場合は `rejected` に理由があり、

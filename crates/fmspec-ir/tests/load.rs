@@ -7,8 +7,9 @@ use fmspec_core::evidence::{Certificate, Claim, TraceStep};
 use fmspec_core::step::{Enumerated, Site};
 use fmspec_core::typing::InvalidModel;
 use fmspec_ir::{
-    args_to_json, certificate_from_json, certificate_to_json, default_conditions, load, output_to_json, state_to_json,
-    trace_from_json, trace_to_json, value_from_json, LoadError, Trace, TraceError,
+    args_to_json, certificate_from_json, certificate_to_json, default_conditions, load, output_to_json,
+    read_certificate, read_trace, state_to_json, trace_from_json, trace_to_json, value_from_json, LoadError, Trace,
+    TraceError,
 };
 use serde_json::{json, Value};
 
@@ -294,7 +295,35 @@ fn evidence_for_another_model_is_refused() {
         trace_from_json(&other, &json),
         Err(TraceError::DigestMismatch { .. })
     ));
+    assert!(matches!(
+        read_trace(&other, &json, false),
+        Err(TraceError::DigestMismatch { .. })
+    ));
     assert!(matches!(trace_from_json(&m, "[]"), Err(TraceError::Format(_))));
+    // 指定すれば、別のモデルに対する証拠も、このモデルの名前と型で読み、証拠の digest を返す。
+    let loaded = read_trace(&other, &json, true).unwrap();
+    assert_eq!(loaded.evidence.start, vec![0, 0, 1]);
+    assert_eq!(loaded.other_model_digest.as_deref(), Some(m.digest.as_str()));
+    assert_eq!(read_trace(&m, &json, true).unwrap().other_model_digest, None);
+    let cert_json = certificate_to_json(&m, &cert).to_string();
+    let loaded = read_certificate(&other, &cert_json, true).unwrap();
+    assert_eq!(loaded.evidence.states, vec![vec![0, 0, 1], vec![3, 1, 0]]);
+    assert_eq!(loaded.other_model_digest.as_deref(), Some(m.digest.as_str()));
+    // 読めなければ、別のモデルに対する証拠であることを添える。
+    let mut broken: Value = serde_json::from_str(&json).unwrap();
+    broken["steps"] = json!(1);
+    match read_trace(&other, &broken.to_string(), true) {
+        Err(TraceError::OtherModel { found, error }) => {
+            assert_eq!(found, m.digest);
+            assert!(matches!(*error, TraceError::Format(_)));
+        }
+        r => panic!("{r:?}"),
+    }
+    // 同じモデルなら、添えない。
+    assert!(matches!(
+        read_trace(&m, &broken.to_string(), true),
+        Err(TraceError::Format(_))
+    ));
 }
 
 #[test]

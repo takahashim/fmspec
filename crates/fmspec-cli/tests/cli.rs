@@ -218,6 +218,45 @@ fn traces_can_be_saved_and_replayed() {
 }
 
 #[test]
+fn evidence_for_another_model_is_checked_only_when_allowed() {
+    let f = files();
+    let (_, found) = f.json(&["check", "noguard.json", "--trace-out", "trace.json"]);
+    let (_, model) = f.json(&["validate", "tickets.json"]);
+    // guard のあるモデルでは、guard のないモデルの反例の2ステップ目は遷移にないので、判定ゲートが拒否する。
+    for command in ["replay", "shrink"] {
+        let (code, body) = f.json(&[command, "tickets.json", "trace.json", "--allow-other-model"]);
+        assert_eq!((code, &body["status"]), (1, &json!("rejected")), "{body}");
+        assert_eq!(body["rejected"]["reason"], "step_mismatch", "{body}");
+        assert_eq!(body["model_digest"], model["model_digest"]);
+        assert_eq!(body["evidence_model_digest"], found["model_digest"]);
+    }
+    let (code, text, _) = f.run(&["replay", "tickets.json", "trace.json", "--allow-other-model"]);
+    assert_eq!(code, 1);
+    assert!(
+        text.contains(&format!(
+            "別のモデルに対する証拠を、指定によりこのモデルで扱いました（証拠のdigestは {}）",
+            found["model_digest"].as_str().unwrap()
+        )),
+        "{text}"
+    );
+
+    let (_, _) = f.json(&["check", "tickets.json", "--certificate-out", "cert.json"]);
+    let (code, body) = f.json(&["verify-certificate", "noguard.json", "cert.json", "--allow-other-model"]);
+    assert_eq!((code, &body["status"]), (1, &json!("rejected")), "{body}");
+    assert_ne!(body["rejected"]["reason"], "unreadable", "{body}");
+    assert_eq!(body["evidence_model_digest"], model["model_digest"]);
+
+    for command in ["check", "simulate"] {
+        let (code, body) = f.json(&[command, "tickets.json", "--allow-other-model"]);
+        assert_eq!((code, &body["status"]), (2, &json!("usage_error")));
+        assert_eq!(
+            body["message"],
+            json!(format!("{command} は --allow-other-model を受け付けません"))
+        );
+    }
+}
+
+#[test]
 fn human_readable_output() {
     let f = files();
     let (code, out, _) = f.run(&["check", "noguard.json"]);
@@ -347,6 +386,45 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     f.put("forged.json", &forged);
     let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
+}
+
+#[test]
+fn shrink_lowers_arguments_and_choices_and_reruns_the_later_steps() {
+    // 購入の数量に加えて、遷移に効かない内部選択 gift を持つチケット例。
+    let mut ir = tickets_without_guard();
+    ir["actions"][0]["choices"] = json!([{"name": "gift", "type": {"bool": {}}}]);
+    let f = files();
+    f.put("gift.json", &ir);
+    // 1、2、1 と買う違反のトレース。gift はどれも真にする。売上3の状態では数量2の購入が範囲外更新になるが、
+    // 各ステップはその引数だけで再実行するので、この状態を通るトレースも縮小できる。
+    let step = |quantity: i64, sold: i64| {
+        json!({"action": "purchase", "args": {"quantity": quantity}, "choices": {"gift": true},
+               "output": {"unit": true}, "state": {"sold": sold}})
+    };
+    let (_, found) = f.json(&["check", "gift.json"]);
+    let mut long = found["trace"].clone();
+    long["steps"] = json!([step(1, 1), step(2, 3), step(1, 4)]);
+    f.put("long.json", &long);
+    let (code, replayed) = f.json(&["replay", "gift.json", "long.json"]);
+    assert_eq!((code, &replayed["status"]), (1, &json!("violated")), "{replayed}");
+
+    let (code, body) = f.json(&["shrink", "gift.json", "long.json", "--trace-out", "short.json"]);
+    assert_eq!((code, &body["status"]), (1, &json!("violated")), "{body}");
+    assert_eq!(body["original_steps"], json!(3));
+    // どの1ステップも削れず、数量も小さくできない（後続を再実行すると4に届かない）。gift だけが偽になる。
+    let short = f.get("short.json");
+    let quantities: Vec<&Value> = short["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| &s["args"]["quantity"])
+        .collect();
+    assert_eq!(quantities, [&json!(1), &json!(2), &json!(1)]);
+    for s in short["steps"].as_array().unwrap() {
+        assert_eq!(s["choices"]["gift"], json!(false), "{short}");
+    }
+    let (code, replayed) = f.json(&["replay", "gift.json", "short.json"]);
+    assert_eq!((code, &replayed["status"]), (1, &json!("violated")));
 }
 
 #[test]
