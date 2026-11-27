@@ -76,7 +76,7 @@ Checkout.check.trace.steps.map(&:action)
 | 語彙 | 内容 |
 |---|---|
 | `local(名前, 型, initial: 値, durable: true)` | `:restart` のとき、クラッシュしても初期値に戻さないローカル変数。ジョブの引数のように、永続化された値にあたる。既定は `false` |
-| `on_crash { \|s\| ... }` | クラッシュの遷移の中身。記号ブロックで、`update`、`unchanged`、`choose`、`guard`、`ensures`、`preserves` を使える。`returns` と `goto` は使えない |
+| `on_crash { \|s\| ... }` | クラッシュの遷移の中身。記号ブロックで、`update`、`unchanged`、`choose`、`guard`、`ensures`、`preserves` を使える。`returns`、`accept_if`、`goto` は使えない |
 
 `on_crash` は、クラッシュで環境に起きることを書く。
 たとえば、接続が切れるとDBがadvisory lockを解放する。
@@ -171,7 +171,7 @@ end
 テストは `test/crash_mbt_test.rb` にある。
 二重決済の反例のトレースを実装で再現すること、冪等でない実装が冪等な仕様と合わないこと、落ちたスレッドの `teardown` を呼ばず新しいスレッドで `setup` を呼ぶこと、再試行が尽きたら `setup` を呼ばないこと、`on_crash` の環境の変化（ロックの解放）を実装が起こさなければ不適合になることを検査する。
 
-Railsでは、`fmspec-rails` の補助として、Active Jobを途中で落とし、再投入する仕組みを別に設計する（未定）。
+Railsでは、`fmspec-rails` の補助（`job`）が、Active Jobを途中で落とし、再投入する。設計は [rails_jobs_design.md](rails_jobs_design.md) にある。
 
 ## 6. 検証と信頼
 
@@ -296,6 +296,5 @@ end
 
 ## 10. 未決事項
 
-- bindingの `crash` で、Active Recordの接続とトランザクションをどう捨てるか。`fmspec-rails` の補助の設計（§5）。
 - `max_crashes:` と `retries:` を組み合わせる必要があるか。
 - 全体のクラッシュの回数の上限を、語彙にするか（§9.1）。
