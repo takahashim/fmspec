@@ -2,9 +2,15 @@
 //!
 //! 初期状態は与えられた順に起点とし、操作は定義順、引数は辞書順に列挙する。したがって、状態不変条件の違反は遷移回数が最小の
 //! トレースで見つかり、同じ長さのトレースのうちでは、この列挙順で最初に見つかるものを返す。
+//!
+//! 深さの上限 `max_depth` を指定すると、深さ（初期状態からの遷移数）が上限の状態からは新たな状態を訪問しない。
+//! 上限の深さの状態からも遷移は列挙し、評価エラーとデッドロック（どちらもトレースは上限以下のステップ）は報告する。
+//! その遷移が未訪問の状態に至るか、遷移契約を満たさない（トレースが上限を超える）ときは、報告せずに打ち切りを記録し、
+//! 探索の終わりに証明書の代わりに `Unavailable(MaxDepth)` を返す。網羅していない探索の状態集合は証明書にしない。
 
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use crate::inconsistency::{successors, Inconsistency};
+use crate::stop::stopped;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
@@ -13,6 +19,7 @@ use hashbrown::HashTable;
 use rustc_hash::FxBuildHasher;
 use std::collections::VecDeque;
 use std::hash::BuildHasher;
+use std::time::Instant;
 
 #[derive(Default)]
 pub struct BfsOptions<'a> {
@@ -22,6 +29,10 @@ pub struct BfsOptions<'a> {
     pub interrupt: Option<&'a dyn Fn() -> bool>,
     /// 判定ゲートが証拠の検査にかける評価回数の上限（`gate::evidence_cost` の見積もり）。
     pub max_check_cost: Option<u64>,
+    /// 深さ（初期状態からの遷移数）の上限。報告するトレースのステップ数は、この上限以下である。
+    pub max_depth: Option<usize>,
+    /// 時間の上限の時刻。探索の状態ごとと、証明書の検査の区切りごとに確かめる。
+    pub deadline: Option<Instant>,
 }
 
 /// 探索器の報告。検査済みの値ではない（仕様書 §14.1.1）。
@@ -43,6 +54,8 @@ pub struct SearchResult {
 
 struct Node {
     state: Vec<i64>,
+    /// 初期状態からの遷移数。
+    depth: usize,
     /// 親からの遷移。初期状態は `None`。
     parent: Option<Parent>,
 }
@@ -141,6 +154,7 @@ where
         }
         let node = Node {
             state: init.clone(),
+            depth: 0,
             parent: None,
         };
         let id = visited.push(&mut nodes, hash, node);
@@ -151,11 +165,16 @@ where
         queue.push_back(id);
     }
 
+    // 深さの上限で、未訪問の状態への遷移か、上限を超えるトレースの違反を残したか。
+    let mut truncated = false;
     while let Some(cur) = queue.pop_front() {
-        if opts.interrupt.is_some_and(|requested| requested()) {
-            return finish(Evidence::Unavailable(Limit::Interrupted), stats);
+        if let Some(limit) = stopped(opts.interrupt, opts.deadline) {
+            return finish(Evidence::Unavailable(limit), stats);
         }
         let state = nodes[cur].state.clone();
+        let depth = nodes[cur].depth;
+        // 上限の深さの状態からの遷移は、トレースを上限より長くする。
+        let at_limit = opts.max_depth.is_some_and(|max| depth >= max);
         let mut enabled = false;
         for a in 0..n_actions {
             if !selected(&cond.actions, a) {
@@ -179,6 +198,10 @@ where
                 enabled = true;
                 stats.transitions += 1;
                 if let Some(claim) = contract_claim(model, cond, a, &state, &t.args, &t.state, &t.output) {
+                    if at_limit {
+                        truncated = true;
+                        continue;
+                    }
                     let (start, mut steps) = path(&nodes, cur);
                     steps.push(TraceStep {
                         action: a,
@@ -192,12 +215,17 @@ where
                 if visited.contains(&nodes, hash, &t.state) {
                     continue;
                 }
+                if at_limit {
+                    truncated = true;
+                    continue;
+                }
                 if full(&visited) {
                     return finish(Evidence::Unavailable(Limit::MaxStates), stats);
                 }
                 let violation = invariant_claim(model, cond, &t.state);
                 let node = Node {
                     state: t.state,
+                    depth: depth + 1,
                     parent: Some(Parent {
                         node: cur,
                         action: a,
@@ -220,6 +248,9 @@ where
         }
     }
 
+    if truncated {
+        return finish(Evidence::Unavailable(Limit::MaxDepth), stats);
+    }
     stats.complete = true;
     // 証明書の状態集合は、符号化列を辞書順に整列した列とする（仕様書 §7.3）。
     let mut states: Vec<Vec<i64>> = nodes.into_iter().map(|n| n.state).collect();

@@ -9,6 +9,7 @@ use fmspec_ir::default_conditions;
 use fmspec_search::{evidence_cost, judge, GateOptions};
 use serde_json::{json, Value};
 use std::cell::Cell;
+use std::time::Instant;
 
 /// `n`（0..=max）を1ずつ増やすモデル。不変条件 `slow` は、`width` × `width` 回の量化で評価する。
 fn counter(max: i64, width: i64) -> Model {
@@ -108,6 +109,7 @@ fn a_certificate_check_stops_between_states_when_interrupted() {
     let opts = GateOptions {
         max_cost: None,
         interrupt: Some(&interrupt),
+        deadline: None,
     };
     let (verdict, evidence) = judge(m.checked(), &cond, cert(), &opts);
     assert_eq!(verdict.kind(), VerdictKind::Inconclusive);
@@ -120,7 +122,61 @@ fn a_certificate_check_stops_between_states_when_interrupted() {
     let opts = GateOptions {
         max_cost: None,
         interrupt: Some(&never),
+        deadline: None,
     };
     let (verdict, _) = judge(m.checked(), &cond, cert(), &opts);
     assert_eq!(verdict.kind(), VerdictKind::Verified);
+}
+
+#[test]
+fn a_certificate_check_stops_between_states_at_the_deadline() {
+    let m = counter(3, 1024);
+    let cond = default_conditions(&m, false);
+    let cert = Evidence::Certificate(fmspec_core::evidence::Certificate {
+        conditions: cond.clone(),
+        states: (0..=3).map(|n| vec![n]).collect(),
+    });
+    let opts = GateOptions {
+        max_cost: None,
+        interrupt: None,
+        deadline: Some(Instant::now()),
+    };
+    let (verdict, evidence) = judge(m.checked(), &cond, cert, &opts);
+    assert_eq!(verdict.kind(), VerdictKind::Inconclusive);
+    assert_eq!(verdict.limit(), Some(Limit::MaxTime));
+    assert!(matches!(evidence, Evidence::Unavailable(Limit::MaxTime)));
+}
+
+#[test]
+fn the_depth_and_time_limits_are_reported_by_name() {
+    let m = counter(3, 1);
+    // 到達状態は深さ3まで。深さ3では完走し、深さ2では状態3が残る。
+    let full = check(&m, &json!({"max_depth": 3}), None).unwrap();
+    assert_eq!(full["status"], "verified", "{full}");
+    let short = check(&m, &json!({"max_depth": 2}), None).unwrap();
+    assert_eq!(short["status"], "inconclusive", "{short}");
+    assert_eq!(short["reason"], "max_depth");
+    assert_eq!(short["search"]["complete"], false);
+    assert_eq!(short["search"]["visited_states"], 3);
+    assert!(short.get("certificate_states").is_none());
+    // 証明書を求めても、打ち切った探索の状態集合は含めない。
+    let asked = check(&m, &json!({"max_depth": 2, "certificate": true}), None).unwrap();
+    assert!(asked.get("certificate").is_none());
+
+    let timed = check(&m, &json!({"max_time_ms": 0}), None).unwrap();
+    assert_eq!(timed["status"], "inconclusive", "{timed}");
+    assert_eq!(timed["reason"], "max_time_ms");
+    let ample = check(&m, &json!({"max_time_ms": u64::MAX}), None).unwrap();
+    assert_eq!(ample["status"], "verified", "{ample}");
+
+    let sim = fmspec_api::simulate(&m, &json!({"max_time_ms": 0}), None).unwrap();
+    assert_eq!(sim["status"], "inconclusive", "{sim}");
+    assert_eq!(sim["reason"], "max_time_ms");
+
+    let graph = fmspec_api::coverage(&m, &json!({"max_time_ms": 0}), None).unwrap();
+    assert_eq!(graph["complete"], false, "{graph}");
+    let paths = fmspec_api::test_paths(&m, &json!({"max_time_ms": 0}), None).unwrap();
+    assert_eq!(paths["complete"], false, "{paths}");
+    let paths = fmspec_api::test_paths(&m, &json!({"max_time_ms": 60_000}), None).unwrap();
+    assert_eq!(paths["complete"], true, "{paths}");
 }

@@ -40,7 +40,7 @@ pub enum Claim {
     StepError(usize, Vec<i64>, Site, ErrKind),
 }
 
-/// 証拠を得られなかった理由。
+/// 証拠を得られなかった理由。判定ゲートは理由を記録するだけで、判定は理由によらず `Inconclusive` である。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Limit {
     /// 状態数の上限。
@@ -49,6 +49,10 @@ pub enum Limit {
     Interrupted,
     /// 証拠の検査の資源上限。
     CheckBudget,
+    /// 探索の深さ（初期状態からの遷移数）の上限。
+    MaxDepth,
+    /// 時間の上限。
+    MaxTime,
 }
 
 pub enum Evidence {

@@ -16,6 +16,7 @@ pub mod inconsistency;
 pub mod session;
 pub mod shrink;
 pub mod simulate;
+mod stop;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
 pub use check::{check, check_evidence, check_evidence_with, sample, Internal, Outcome, Sampled, Status};
