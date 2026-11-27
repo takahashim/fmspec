@@ -941,7 +941,7 @@ pub fn decide_refinement(
     }
     match ev {
         RefEvidence::Certificate(cert) => {
-            if !conditions_eq(&cert.conditions, cb) {
+            if !conditions_eq(bm, &cert.conditions, cb) {
                 return RefVerdict::rejected(Reject::ConditionMismatch);
             }
             match check_refinement_certificate(bm, cb, am, f, &cert.states) {

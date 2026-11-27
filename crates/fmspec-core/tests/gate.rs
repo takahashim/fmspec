@@ -511,6 +511,61 @@ fn conditions_shorter_or_longer_than_the_model_are_tolerated() {
 }
 
 #[test]
+fn certificate_conditions_are_compared_by_meaning() {
+    let m = checked();
+    let states = vec![vec![0], vec![1], vec![2], vec![3]];
+    // 列より後ろは対象外なので、[true] と [true, false] は同じ検査条件である。
+    // モデルにない添字（操作は1つ）も対象外なので、[true] と [true, true] も同じである。
+    let padded = Conditions {
+        actions: vec![true, true],
+        invariants: vec![true, false],
+        contracts: vec![true, false, false],
+        deadlock: true,
+    };
+    let cert = Certificate {
+        conditions: padded.clone(),
+        states: states.clone(),
+    };
+    let v = decide(&m, &all(true), &Evidence::Certificate(cert.clone()));
+    assert_eq!((v.kind(), v.reject()), (VerdictKind::Verified, None));
+    let req = all(true);
+    let mut chk = CertCheck::start(&m, &req, &cert).ok().expect("同じ検査条件の証明書");
+    assert_eq!(chk.advance(usize::MAX).map(|v| v.kind()), Some(VerdictKind::Verified));
+    // モデルにある添字で対象が違えば、拒否する。
+    for other in [
+        Conditions {
+            invariants: vec![false],
+            ..padded.clone()
+        },
+        Conditions {
+            contracts: vec![],
+            ..padded.clone()
+        },
+        Conditions {
+            actions: vec![false, true],
+            ..padded.clone()
+        },
+        Conditions {
+            deadlock: false,
+            ..padded.clone()
+        },
+    ] {
+        let cert = Certificate {
+            conditions: other,
+            states: states.clone(),
+        };
+        assert_eq!(
+            decide(&m, &all(true), &Evidence::Certificate(cert.clone())).reject(),
+            Some(Reject::ConditionMismatch)
+        );
+        let v = CertCheck::start(&m, &all(true), &cert)
+            .err()
+            .expect("検査条件の違う証明書");
+        assert_eq!(v.reject(), Some(Reject::ConditionMismatch));
+    }
+}
+
+#[test]
 fn every_verdict_carries_its_reason() {
     let m = checked();
     for limit in [

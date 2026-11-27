@@ -67,7 +67,8 @@ pub enum Evidence {
 /// 証拠を拒否した理由。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reject {
-    /// 証明書の検査条件が、要求された検査条件と一致しない。
+    /// 証明書の検査条件が、要求された検査条件と一致しない。対象の操作、不変条件、遷移契約と、デッドロック検査の
+    /// 有無を比べる。列の長さは問わず、列より後ろとモデルにない添字は対象外として比べる。
     ConditionMismatch,
     /// 証明書が初期状態（添字）を含まない。
     MissingInitial(usize),

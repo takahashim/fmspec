@@ -297,35 +297,56 @@ pub open spec fn verdict_sound(m: RawModel, c: Conditions, ev: Evidence, k: Verd
     }
 }
 
-fn bools_eq(a: &Vec<bool>, b: &Vec<bool>) -> (r: bool)
+/// 検査条件の列の `i` 番目が対象である。列より後ろは対象外とする（`act_on` などと同じ）。
+pub open spec fn flag_on(a: Seq<bool>, i: int) -> bool {
+    0 <= i < a.len() && a[i]
+}
+
+/// 2つの列が、添字 `n` 未満で同じものを対象にする。
+pub open spec fn flags_same(n: int, a: Seq<bool>, b: Seq<bool>) -> bool {
+    forall|i: int| 0 <= i < n ==> #[trigger] flag_on(a, i) == flag_on(b, i)
+}
+
+/// 2つの検査条件が、モデル `m` について同じ意味を持つ。対象の操作、不変条件、契約と、デッドロック検査の
+/// 有無が同じである。列の長さは問わない（列より後ろと、モデルにない添字は対象外）。
+pub open spec fn same_conditions(m: RawModel, x: Conditions, y: Conditions) -> bool {
+    &&& flags_same(m.actions@.len() as int, x.actions@, y.actions@)
+    &&& flags_same(m.invariants@.len() as int, x.invariants@, y.invariants@)
+    &&& flags_same(m.contracts@.len() as int, x.contracts@, y.contracts@)
+    &&& x.deadlock == y.deadlock
+}
+
+fn flags_eq(n: usize, a: &Vec<bool>, b: &Vec<bool>) -> (r: bool)
     ensures
-        r ==> a@ == b@,
+        r == flags_same(n as int, a@, b@),
 {
-    if a.len() != b.len() {
-        return false;
-    }
     let mut i: usize = 0;
-    while i < a.len()
+    while i < n
         invariant
-            a@.len() == b@.len(),
-            i <= a@.len(),
-            forall|j: int| 0 <= j < i ==> a@[j] == b@[j],
-        decreases a@.len() - i,
+            i <= n,
+            forall|j: int| 0 <= j < i ==> #[trigger] flag_on(a@, j) == flag_on(b@, j),
+        decreases n - i,
     {
-        if a[i] != b[i] {
+        let x = i < a.len() && a[i];
+        let y = i < b.len() && b[i];
+        if x != y {
+            assert(flag_on(a@, i as int) != flag_on(b@, i as int));
             return false;
         }
         i = i + 1;
     }
-    assert(a@ =~= b@);
     true
 }
 
-pub(crate) fn conditions_eq(a: &Conditions, b: &Conditions) -> bool {
-    bools_eq(&a.actions, &b.actions) && bools_eq(&a.invariants, &b.invariants) && bools_eq(
-        &a.contracts,
-        &b.contracts,
-    ) && a.deadlock == b.deadlock
+/// 証明書の検査条件 `a` と要求された検査条件 `b` を、モデル `m` についての意味で比べる。
+/// 判定の健全性はこの比較に依らない（証明書は要求された検査条件で検査する）。別の検査条件で作られた
+/// 証明書を、取り違えとして拒否するための比較である。
+pub(crate) fn conditions_eq(m: &RawModel, a: &Conditions, b: &Conditions) -> (r: bool)
+    ensures
+        r == same_conditions(*m, *a, *b),
+{
+    flags_eq(m.actions.len(), &a.actions, &b.actions) && flags_eq(m.invariants.len(), &a.invariants, &b.invariants)
+        && flags_eq(m.contracts.len(), &a.contracts, &b.contracts) && a.deadlock == b.deadlock
 }
 
 pub(crate) fn is_violation_exec(claim: &Claim) -> (r: bool)
@@ -352,7 +373,7 @@ fn decide_wf(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
 {
     match ev {
         Evidence::Certificate(cert) => {
-            if !conditions_eq(&cert.conditions, c) {
+            if !conditions_eq(m, &cert.conditions, c) {
                 return Verdict::rejected(Reject::ConditionMismatch);
             }
             match check_certificate(m, c, &cert.states) {
@@ -440,7 +461,7 @@ impl<'a> CertCheck<'a> {
             },
     {
         let m = model.raw();
-        if !conditions_eq(&cert.conditions, c) {
+        if !conditions_eq(m, &cert.conditions, c) {
             return Err(Verdict::rejected(Reject::ConditionMismatch));
         }
         match check_initials(m, &cert.states) {
@@ -535,7 +556,7 @@ pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<us
     let m = model.raw();
     match ev {
         Evidence::Certificate(cert) => {
-            if !conditions_eq(&cert.conditions, c) {
+            if !conditions_eq(m, &cert.conditions, c) {
                 return Verdict::rejected(Reject::ConditionMismatch);
             }
             match crate::sym::symmetry(m, c, swaps) {
