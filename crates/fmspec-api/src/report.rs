@@ -201,7 +201,14 @@ pub fn check_report(model: &Model, cond: &Conditions, outcome: &Outcome) -> Valu
 }
 
 /// 外部から提示された証拠の検査結果。探索を行っていないので、探索統計は付けない。
-pub fn evidence_report(model: &Model, cond: &Conditions, evidence: &Evidence, verdict: &Verdict) -> Value {
+/// `seed` は、提示されたトレースに記録されていたseedで、示すトレースにそのまま残す。
+pub fn evidence_report(
+    model: &Model,
+    cond: &Conditions,
+    evidence: &Evidence,
+    verdict: &Verdict,
+    seed: Option<u64>,
+) -> Value {
     let status = match verdict.kind() {
         VerdictKind::Verified => "verified",
         VerdictKind::Violated => "violated",
@@ -211,7 +218,7 @@ pub fn evidence_report(model: &Model, cond: &Conditions, evidence: &Evidence, ve
         VerdictKind::Rejected => "rejected",
     };
     let mut body = base(model, cond, status);
-    attach_evidence(&mut body, model, cond, evidence, None);
+    attach_evidence(&mut body, model, cond, evidence, seed);
     if let Some(reject) = verdict.reject() {
         body["rejected"] = reject_json(model, evidence, reject);
     }

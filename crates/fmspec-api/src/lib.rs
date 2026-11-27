@@ -124,7 +124,7 @@ pub fn verify_certificate(
         Err(e) => return Ok(report::unreadable_evidence(model, &e.to_string())),
     };
     let (verdict, evidence) = judge(model.checked(), &cond, Evidence::Certificate(cert), &gate);
-    Ok(report::evidence_report(model, &cond, &evidence, &verdict))
+    Ok(report::evidence_report(model, &cond, &evidence, &verdict, None))
 }
 
 /// 提示されたトレースを、トレースに記録された検査条件で再生する。
@@ -136,7 +136,7 @@ pub fn replay(model: &Model, trace: &str) -> Value {
     let cond = trace.conditions.clone();
     let evidence = Evidence::Trace(trace.start, trace.steps, trace.claim);
     let verdict = decide(model.checked(), &cond, &evidence);
-    report::evidence_report(model, &cond, &evidence, &verdict)
+    report::evidence_report(model, &cond, &evidence, &verdict, trace.seed)
 }
 
 /// 縮小で試す候補の数の、既定の上限。
@@ -159,7 +159,7 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
     let evidence = Evidence::Trace(trace.start, trace.steps, trace.claim);
     let verdict = decide(model.checked(), &cond, &evidence);
     if !matches!(verdict.kind(), VerdictKind::Violated | VerdictKind::Error) {
-        return Ok(report::evidence_report(model, &cond, &evidence, &verdict));
+        return Ok(report::evidence_report(model, &cond, &evidence, &verdict, trace.seed));
     }
     let Evidence::Trace(start, steps, claim) = evidence else {
         return Err("トレースではありません".to_string());
@@ -167,10 +167,7 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
     let shrunk_steps = search_shrink(model.checked(), &cond, &start, &steps, &claim, size(attempts));
     let shrunk = Evidence::Trace(start, shrunk_steps, claim);
     let verdict = decide(model.checked(), &cond, &shrunk);
-    let mut body = report::evidence_report(model, &cond, &shrunk, &verdict);
+    let mut body = report::evidence_report(model, &cond, &shrunk, &verdict, trace.seed);
     body["original_steps"] = json!(original);
-    if let Some(seed) = trace.seed {
-        body["trace"]["seed"] = json!(seed);
-    }
     Ok(body)
 }
