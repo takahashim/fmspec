@@ -94,6 +94,62 @@ class ProcessTest < Minitest::Test
     assert_match(/goto の行き先/, error.message)
   end
 
+  # goto を複数書くと、書いた順に条件を調べ、最初に真になった goto の行き先に進む。
+  def test_gotos_are_tried_in_order
+    router = Fmspec.define(:router) do
+      state :n, int(0..3), initial: 0
+      process :p do
+        step(:pick) do |s|
+          update n: s.n + 1
+          # n = 0 では2つの条件がどちらも真になるので、先に書いた :a に進む。
+          goto :a, s.n.eq(0)
+          goto :b, s.n <= 1
+          goto :pick
+        end
+        step(:a) { |_s| goto :pick }
+        step(:b) { |_s| goto :done }
+      end
+      invariant(:b_after_a) { |s| s.p[0].pc.ne(:b) | s.n.eq(2) }
+    end
+    ir = router.to_ir
+    index = ->(name) { ir["states"].index { |st| st["name"] == name } }
+    pick = ir["actions"].find { |a| a["name"] == "p[0].pick" }
+    pc = pick["updates"].find { |u| u["target"] == index.("p[0].pc") }["expr"]
+    n = { "var" => index.("n") }
+    label = ->(l) { { "enum" => { "type" => "p.pc", "variant" => l } } }
+    assert_equal({ "ite" => [{ "eq" => [n, { "int" => 0 }] }, label.("a"),
+                             { "ite" => [{ "le" => [n, { "int" => 1 }] }, label.("b"), label.("pick")] }] }, pc)
+    result = router.check(deadlock: true)
+    assert result.verified?, result.inspect
+
+    # 条件のない goto がなければ、どの条件も偽のときは次のステップに進む。
+    fallthrough = Fmspec.define(:fallthrough) do
+      state :n, int(0..2), initial: 2
+      process :p do
+        step(:a) do |s|
+          goto :done, s.n.eq(0)
+          goto :a, s.n.eq(1)
+        end
+        step(:b) { |s| update n: s.n - 1 }
+      end
+      invariant(:not_b) { |s| s.p[0].pc.ne(:b) }
+    end
+    assert_equal :violated, fallthrough.check.status
+
+    error = assert_raises(Fmspec::BuildError) do
+      Fmspec.define(:unreachable) do
+        state :n, int(0..1), initial: 0
+        process(:p) do
+          step(:a) do |s|
+            goto :done
+            goto :a, s.n.eq(0)
+          end
+        end
+      end
+    end
+    assert_match(/条件のない goto のあとに goto は書けません/, error.message)
+  end
+
   def test_invalid_processes_are_rejected
     errors = {
       /ステップがありません/ => proc { process(:p) { nil } },

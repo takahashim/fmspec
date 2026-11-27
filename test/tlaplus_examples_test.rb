@@ -39,7 +39,8 @@ class TlaplusExamplesTest < Minitest::Test
   # type_ok     型の不変条件。DSL では型で表すので、対応する不変条件はない
   # invariants  TLA+ の不変条件から DSL の不変条件へ。:deadlock は fmspec のデッドロック検査にあたる
   # deadlock    TLC のデッドロック検査の有無（元の設定と同じ）
-  # expected    manifest.json の記録。:violated は safety failure、整数は最後まで探索したときの状態の数
+  # expected    manifest.json の記録。:violated は safety failure、整数は最後まで探索したときの状態の数。
+  #             nil なら記録と比べない（判定は success として扱う）
   EXAMPLES = {
     "DieHard" => { model: "die_hard", config: "SPECIFICATION Spec", type_ok: %w[TypeOK],
                    invariants: { "NotSolved" => "not_solved" }, deadlock: true, expected: :violated },
@@ -56,7 +57,21 @@ class TlaplusExamplesTest < Minitest::Test
                                     expected: :violated },
     "DiningPhilosophers" => { model: "dining_philosophers", config: "CONSTANTS N = 5\nSPECIFICATION Spec",
                               type_ok: %w[TypeOK], invariants: { "NoDeadlock" => :deadlock }, deadlock: true,
-                              expected: 58 }
+                              expected: 58 },
+    # PlusCal から翻訳された仕様。DSL では process で書く。pc はインスタンスごとのプログラムカウンタにあたる。
+    "Simple" => { model: "simple", config: "CONSTANT N = 5\nSPECIFICATION Spec", type_ok: %w[TypeOK],
+                  invariants: { "PCorrect" => "p_correct", "Inv" => "inv" }, deadlock: true, expected: 723 },
+    "Lock" => { model: "lock", config: "SPECIFICATION Spec", type_ok: %w[TypeOK],
+                invariants: { "LockInv" => "lock_inv" }, deadlock: true, expected: 12 },
+    "Peterson" => { model: "peterson", config: "SPECIFICATION Spec", type_ok: %w[TypeOK],
+                    invariants: { "Inv" => "inv" }, deadlock: true, expected: 42 },
+    "DiningPhilosophersPCal" => { model: "dining_philosophers_pcal", config: "CONSTANT NP = 5\nSPECIFICATION Spec",
+                                  type_ok: %w[TypeOK], invariants: { "ExclusiveAccess" => "exclusive_access" },
+                                  deadlock: true, expected: 67 },
+    # manifest.json の状態の数は、不変条件 Inv を満たすすべての状態から始める ISpec のものなので、比べない。
+    "MCBakery" => { model: "bakery", config: "CONSTANTS N = 2\nMaxNat = 2\nNat <- NatOverride\nSPECIFICATION Spec",
+                    type_ok: %w[TypeOK], invariants: { "MutualExclusion" => "mutual_exclusion" }, deadlock: false,
+                    expected: nil }
   }.freeze
 
   def setup
@@ -93,24 +108,30 @@ class TlaplusExamplesTest < Minitest::Test
   end
 
   # fmspec の結果。invariants は DSL の不変条件の名前（対象外のものは IR から除く）。
-  def fmspec(name, invariants:, deadlock:)
+  # max_states は探索する状態の数の上限。DSL のモデルの誤りで状態の空間が膨らむと、探索が終わらないことがある。
+  def fmspec(name, invariants:, deadlock:, max_states:)
     example = EXAMPLES.fetch(name)
     path = File.join(DIR, "models/#{example[:model]}.rb")
     ir = eval(File.read(path, encoding: Encoding::UTF_8), TOPLEVEL_BINDING, path).to_ir # rubocop:disable Security/Eval
     ir = ir.merge("invariants" => (ir["invariants"] || []).select { |i| invariants.include?(i["name"]) })
     model = File.join(@dir, "#{example[:model]}.json")
     File.write(model, JSON.generate(ir))
-    args = [BIN, "check", model, "--json"]
+    args = [BIN, "check", model, "--json", "--max-states", max_states.to_s]
     args << "--deadlock" if deadlock
     out, = Open3.capture2(*args)
     r = JSON.parse(out)
     violated = case r["status"]
                when "verified" then nil
                when "violated" then r["property"]["violation"] == "deadlock" ? :deadlock : r["property"]["name"]
+               when "inconclusive"
+                 flunk "#{name}: fmspec の探索した状態が #{max_states} を超えた（TLC の状態の数と大きく違う）"
                else flunk "fmspec の結果が #{r['status']}\n#{out}"
                end
     { violated: violated, length: violated && r["trace"]["steps"].length, states: r["search"]["visited_states"] }
   end
+
+  # fmspec に探索させる状態の数の上限。TLC が見つけた状態の数より十分大きくする。
+  def limit(tlc) = (tlc[:states] * 10) + 100
 
   EXAMPLES.each do |name, example|
     define_method("test_#{example[:model]}") do
@@ -121,7 +142,7 @@ class TlaplusExamplesTest < Minitest::Test
 
       # すべての不変条件で検査する。
       t = tlc(name, invariants: tla_invariants, deadlock: example[:deadlock])
-      f = fmspec(name, invariants: dsl_invariants, deadlock: deadlock)
+      f = fmspec(name, invariants: dsl_invariants, deadlock: deadlock, max_states: limit(t))
       expected_violation = t[:violated] && (t[:violated] == :deadlock ? :deadlock : mapping.fetch(t[:violated]))
       same = ->(want, got, what) { want.nil? ? assert_nil(got, what) : assert_equal(want, got, what) }
       same.(expected_violation, f[:violated], "#{name}: TLC #{t} fmspec #{f}")
@@ -135,7 +156,7 @@ class TlaplusExamplesTest < Minitest::Test
 
       # 不変条件を外して、到達できる状態をすべて数える。
       t = tlc(name, invariants: [], deadlock: false)
-      f = fmspec(name, invariants: [], deadlock: false)
+      f = fmspec(name, invariants: [], deadlock: false, max_states: limit(t))
       assert_nil t[:violated]
       assert_nil f[:violated]
       assert_equal t[:states], f[:states], "#{name}: 到達できる状態の数"

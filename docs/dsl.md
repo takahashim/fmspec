@@ -362,7 +362,7 @@ Counter.check.trace.steps.map(&:action)
 |---|---|
 | `local(名前, 型, initial: 値)` | ローカル変数。`initial_in:` も書ける。状態変数や定数と同じ名前は使えない |
 | `step(名前) { \|s\| ... }` | ステップ。ブロックは記号ブロックで、`action` のブロックと同じ語彙（`guard`、`update`、`choose`、`returns`、`accept_if`、`ensures` など）に加えて `goto` を使える。公開引数は持たない |
-| `goto(ステップ, 条件)` | 次に実行するステップを変える。条件を省略すると常に変える。`goto :done` でプロセスを終える |
+| `goto(ステップ, 条件)` | 次に実行するステップを変える。条件を省略すると常に変える。`goto :done` でプロセスを終える。複数書くと、書いた順に条件を調べ、最初に真になった `goto` の行き先に進む |
 
 仕様は、基本のIRに次のように展開する（仕様書 §12.6）。
 
@@ -370,6 +370,21 @@ Counter.check.trace.steps.map(&:action)
 - ステップを、インスタンスごとの操作 `incr[0].load` にする。操作は、プログラムカウンタがそのステップのときだけ有効である。実行すると、プログラムカウンタは `goto` の行き先、または次のステップ（最後のステップなら `:done`）になる。
 - ステップの中では、ローカル変数を名前で参照、更新できる。プログラムカウンタは `update` では変えられない。
 - `terminal` を書かなければ、終端条件は「すべてのインスタンスが `:done`」になる。
+
+`goto` を複数書くと、書いた順に条件を調べ、最初に真になった `goto` の行き先に進む。
+どの条件も偽なら、次のステップに進む。
+条件のない `goto` は「それ以外」の行き先で、そのあとに `goto` を書くと `Fmspec::BuildError` になる（その `goto` には進まない）。
+条件は、ほかの式と同じく遷移前の状態で評価する。
+PlusCal と違い、同じステップの `update` の結果は条件に現れない。
+
+```ruby
+step(:loop) do |s|
+  update forks: ...
+  goto :eat, s.hungry & can_eat
+  goto :think, s.hungry.not_
+  goto :loop
+end
+```
 
 不変条件などの記号ブロックでは、`s.incr[0].seen`、`s.incr[0].pc`、`s.incr[0].done`（`pc` が `:done`）で、各インスタンスの状態を参照する。
 
