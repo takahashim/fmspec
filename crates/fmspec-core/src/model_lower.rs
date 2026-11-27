@@ -35,6 +35,8 @@ use crate::model_total::{action_typed, const_ctx, out_sty, st_ctx};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{consts_match, lemma_const_ctx, lemma_sa_typed, lemma_state_ctx, model_typed, styped, tys_ok};
 #[cfg(verus_keep_ghost)]
+use crate::model_wf::{lemma_model_frame, sm_wf, wf_frame};
+#[cfg(verus_keep_ghost)]
 use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{inv_env, safe, Conditions};
@@ -953,11 +955,71 @@ pub open spec fn contract_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, kx: Low
     &&& prop_low(sm.contracts@[k].expr, kx, con.expr)
 }
 
+/// 下ろした式は、中核のモデルの文脈で型を持つ。
+proof fn lemma_model_types(
+    sm: SModel,
+    cv: Seq<SVal>,
+    m: RawModel,
+    stg: Seq<Layout>,
+    sx: LowerCtx,
+    cs: Seq<LowerCtx>,
+    ks: Seq<LowerCtx>,
+)
+    requires
+        wf_frame(m),
+        m.enums@ == sm.enums@,
+        m.state_types@ == slot_tys_seq(stys(sm.states@), sm.enums@),
+        layouts_at(stg, stys(sm.states@), sm.enums@),
+        ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
+        cs.len() == m.actions@.len(),
+        m.actions@.len() == sm.actions@.len(),
+        ks.len() == m.contracts@.len(),
+        m.contracts@.len() == sm.contracts@.len(),
+        forall|q: int| 0 <= q < m.actions@.len() ==> #[trigger] action_at(sm, cv, stg, cs[q], q, m.actions@[q]),
+        forall|q: int| 0 <= q < m.contracts@.len() ==> #[trigger] contract_at(sm, cv, stg, ks[q], q, m.contracts@[q]),
+        forall|q: int| 0 <= q < m.actions@.len() ==> #[trigger] crate::smodel::act_typed(m.actions@[q], crate::lower_types::lenv(cs[q])),
+        forall|q: int| 0 <= q < m.invariants@.len() ==> #[trigger] crate::lower_types::has_ty(m.invariants@[q], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool),
+        forall|q: int| 0 <= q < m.contracts@.len() ==> #[trigger] crate::lower_types::has_ty(m.contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool),
+        m.terminal matches Some(e) ==> crate::lower_types::has_ty(e, crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool),
+    ensures
+        crate::typing::wf(m),
+{
+    crate::model_wf::lemma_inv_env(sm, cv, stg, sx, m);
+    assert forall|a: int| 0 <= a < m.actions@.len() implies #[trigger] crate::smodel::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)) by {
+        assert(action_at(sm, cv, stg, cs[a], a, m.actions@[a]));
+        crate::model_wf::lemma_act_env(sm, cv, stg, cs[a], a, m);
+        assert(crate::smodel::act_typed(m.actions@[a], crate::lower_types::lenv(cs[a])));
+    }
+    assert forall|c: int| 0 <= c < m.contracts@.len() implies #[trigger] crate::lower_types::has_ty(
+        m.contracts@[c].expr,
+        crate::typing::con_tyenv(m, m.contracts@[c].action as int),
+        Seq::empty(),
+        crate::typing::ETy::Bool,
+    ) by {
+        assert(contract_at(sm, cv, stg, ks[c], c, m.contracts@[c]));
+        let a = sm.contracts@[c].action as int;
+        assert(action_at(sm, cv, stg, cs[a], a, m.actions@[a]));
+        crate::model_wf::lemma_con_env(sm, cv, stg, cs[a], ks[c], c, m);
+        assert(crate::lower_types::has_ty(m.contracts@[c].expr, crate::lower_types::lenv(ks[c]), Seq::empty(), crate::typing::ETy::Bool));
+    }
+    assert forall|i: int| 0 <= i < m.invariants@.len() implies #[trigger] crate::lower_types::has_ty(
+        m.invariants@[i],
+        crate::typing::inv_tyenv(m),
+        Seq::empty(),
+        crate::typing::ETy::Bool,
+    ) by {
+        assert(crate::lower_types::has_ty(m.invariants@[i], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool));
+    }
+    crate::model_wf::lemma_model_wf(m);
+}
+
 /// モデル全体を中核のモデルに下ろす。
 pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
     ensures
         r matches Ok(m) ==> lowers_model(*sm, m),
         r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)),
+        r matches Ok(m) ==> sm_wf(*sm) ==> wf_frame(m),
+        r matches Ok(m) ==> sm_wf(*sm) ==> crate::typing::wf(m),
 {
     let none: Vec<SMap> = Vec::new();
     match lower_model_map(sm, &none) {
@@ -972,6 +1034,8 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
     ensures
         r matches Ok((m, _)) ==> lowers_model(*sm, m),
         r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)) || (e is Mapping && maps@.len() > 0),
+        r matches Ok((m, _)) ==> sm_wf(*sm) ==> wf_frame(m),
+        r matches Ok((m, _)) ==> sm_wf(*sm) ==> crate::typing::wf(m),
 {
     // 状態変数と引数の型の誤りは、その位置を報告する。
     match check_types(&sm.states, &sm.enums) {
@@ -1153,6 +1217,7 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         assert(layouts_at(cx.args@, Seq::<STy>::empty(), sm.enums@));
         assert(tys_ok(Seq::<STy>::empty(), sm.enums@));
         lemma_state_ctx(*sm, cv, cx, Seq::empty());
+        crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), Seq::empty());
     }
     let ghost sc0 = st_ctx(*sm, Seq::empty(), false, None);
     let cc: Option<Expr> = match &sm.constraint {
@@ -1184,13 +1249,25 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             cx_wf(sx),
             sctx(sx) == sc0,
             sc0 == st_ctx(*sm, Seq::empty(), false, None),
+            crate::lower_types::cx_tok(sx),
+            forall|q: int| 0 <= q < i ==> #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool),
         decreases sm.invariants@.len() - i,
     {
         proof {
             assert(styped(sm.invariants@[i as int], sc0, XTy::Bool));
         }
         match lower_prop(&sm.invariants[i], &cx) {
-            Ok(e) => invariants.push(e),
+            Ok(e) => {
+                let ghost i0 = invariants@;
+                invariants.push(e);
+                proof {
+                    assert forall|q: int| 0 <= q < i + 1 implies #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool) by {
+                        if q < i {
+                            assert(invariants@[q] == i0[q]);
+                        }
+                    }
+                }
+            },
             Err(Fail::Depth) => return Err(LowerError::Depth),
             Err(Fail::Type) => return Err(LowerError::Invariant(i)),
         }
@@ -1204,6 +1281,12 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             Err(Fail::Type) => return Err(LowerError::Terminal),
         },
     };
+    proof {
+        if terminal is Some {
+            assert(styped(sm.terminal->Some_0, sc0, XTy::Bool));
+            assert(crate::lower_types::has_ty(terminal->Some_0, crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool));
+        }
+    }
     // 操作
     let mut actions: Vec<Action> = Vec::new();
     let ghost mut cs: Seq<LowerCtx> = Seq::empty();
@@ -1219,6 +1302,7 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
             enums@ == sm.enums@,
             actions@.len() == a,
+            forall|q: int| 0 <= q < a ==> #[trigger] crate::smodel::act_typed(actions@[q], crate::lower_types::lenv(cs[q])),
             cs.len() == a,
             forall|q: int| 0 <= q < a ==> #[trigger] action_at(*sm, cv, stg, cs[q], q, actions@[q]),
             model_typed(*sm),
@@ -1243,13 +1327,24 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         cx.args = la;
         proof {
             lemma_state_ctx(*sm, cv, cx, stys(sa.args@));
+            crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), stys(sa.args@));
         }
         let act = lower_action(sa, &cx, a)?;
+        let ghost a0 = actions@;
+        let ghost cs0 = cs;
         proof {
             cs = cs.push(cx);
             assert(action_at(*sm, cv, stg, cs[a as int], a as int, act));
         }
         actions.push(act);
+        proof {
+            assert forall|q: int| 0 <= q < a + 1 implies #[trigger] crate::smodel::act_typed(actions@[q], crate::lower_types::lenv(cs[q])) by {
+                if q < a {
+                    assert(actions@[q] == a0[q]);
+                    assert(cs[q] == cs0[q]);
+                }
+            }
+        }
         a += 1;
     }
     // 遷移契約
@@ -1268,6 +1363,7 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             enums@ == sm.enums@,
             contracts@.len() == k,
             ks.len() == k,
+            forall|q: int| 0 <= q < k ==> #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool),
             forall|q: int| 0 <= q < k ==> #[trigger] contract_at(*sm, cv, stg, ks[q], q, contracts@[q]),
             model_typed(*sm),
             cx.consts@.len() == sm.consts@.len(),
@@ -1297,6 +1393,7 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         };
         proof {
             lemma_state_ctx(*sm, cv, cx, stys(sa.args@));
+            crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), stys(sa.args@));
             assert(out_sty(*sa) == match cx.out {
                 Some(t) => Some(sty(t)),
                 None => None,
@@ -1308,11 +1405,21 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             Err(Fail::Type) => return Err(LowerError::Contract(k)),
         };
         let c = Contract { action: con.action, expr: e };
+        let ghost k0 = contracts@;
+        let ghost ks0 = ks;
         proof {
             ks = ks.push(cx);
             assert(contract_at(*sm, cv, stg, ks[k as int], k as int, c));
         }
         contracts.push(c);
+        proof {
+            assert forall|q: int| 0 <= q < k + 1 implies #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool) by {
+                if q < k {
+                    assert(contracts@[q] == k0[q]);
+                    assert(ks[q] == ks0[q]);
+                }
+            }
+        }
         k += 1;
     }
     let m = RawModel { enums, state_types: st_tys, inits, actions, invariants, contracts, terminal };
@@ -1326,6 +1433,10 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             assert(contract_at(*sm, cv, stg, ks[q], q, contracts@[q]));
         }
         assert(model_ok(*sm, cv, m, stg, cs, ks, sx));
+        if sm_wf(*sm) {
+            lemma_model_frame(*sm, cv, m, stg, cs, ks);
+            lemma_model_types(*sm, cv, m, stg, sx, cs, ks);
+        }
         assert forall|i: int| 0 <= i < cv.len() implies #[trigger] sm.consts@[i] == sm.consts@[i] && eval_src(
             sm.consts@[i].expr,
             s_env(*sm, cv.take(i), Seq::empty(), Seq::empty(), Seq::empty(), None),
@@ -1349,6 +1460,7 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         invariant
             q <= maps@.len(),
             lowers_model(*sm, m),
+            sm_wf(*sm) ==> wf_frame(m) && crate::typing::wf(m),
         decreases maps@.len() - q,
     {
         match lower_stored(&maps[q].expr, &cx, &maps[q].ty, 0) {

@@ -18,8 +18,8 @@ use fmspec_core::gate::decide;
 use fmspec_core::gate::VerdictKind;
 use fmspec_ir::{certificate_to_json, read_certificate, read_trace, LoadError, TraceError};
 use fmspec_search::{
-    check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions,
-    Status,
+    check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, ShrinkOptions,
+    ShrinkStop, SimOptions, Status,
 };
 use options::{conditions, count, deadline, flag, keys, max_states, options, size};
 use serde_json::{json, Value};
@@ -198,9 +198,12 @@ pub fn replay(model: &Model, trace: &str) -> Value {
 
 /// 提示されたトレースを、トレースに記録された検査条件で再生する。
 ///
-/// オプションは `allow_other_model`（`verify_certificate` と同じ）。
+/// オプションは `max_check_cost`（判定ゲートがトレースの検査にかける評価回数の上限。見積もりが超えれば検査せずに
+/// `inconclusive` とする）と `allow_other_model`（`verify_certificate` と同じ）。
+/// 判定ゲートはトレースを区切らずに検査するので、時間の上限と中断要求は受け付けない。
 pub fn replay_with(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
-    let map = keys(opts, &[ALLOW_OTHER_MODEL])?;
+    let map = keys(opts, &["max_check_cost", ALLOW_OTHER_MODEL])?;
+    let gate = trace_gate(map)?;
     let loaded = match read_trace(model, trace, flag(map, ALLOW_OTHER_MODEL)?) {
         Ok(loaded) => loaded,
         Err(e) => return Ok(unreadable(model, &e)),
@@ -208,9 +211,29 @@ pub fn replay_with(model: &Model, trace: &str, opts: &Value) -> Result<Value, St
     let trace = loaded.evidence;
     let cond = trace.conditions.clone();
     let evidence = Evidence::Trace(trace.start, trace.steps, trace.claim);
-    let verdict = decide(model.checked(), &cond, &evidence);
+    let (verdict, evidence) = judge(model.checked(), &cond, evidence, &gate);
     let body = report::evidence_report(model, &cond, &evidence, &verdict, trace.seed);
     Ok(mark_other_model(body, loaded.other_model_digest))
+}
+
+/// トレースの検査の資源上限 `max_check_cost`。トレースの検査は区切らないので、中断要求と時間の上限は渡さない。
+fn trace_gate(map: &serde_json::Map<String, Value>) -> Result<GateOptions<'static>, String> {
+    Ok(GateOptions {
+        max_cost: count(map, "max_check_cost", 0)?,
+        interrupt: None,
+        deadline: None,
+    })
+}
+
+/// 縮小器の報告。検査済みの値ではない。`complete` が偽なら、`limit` に打ち切った理由を書く。
+fn shrink_report(attempts: usize, stopped: Option<ShrinkStop>) -> Value {
+    let mut body = json!({"attempts": attempts, "complete": stopped.is_none()});
+    match stopped {
+        None => {}
+        Some(ShrinkStop::Attempts) => body["limit"] = json!("attempts"),
+        Some(ShrinkStop::Limit(limit)) => body["limit"] = json!(report::limit_name(limit)),
+    }
+    body
 }
 
 /// 縮小で試す候補の数の、既定の上限。
@@ -220,12 +243,18 @@ const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 ///
 /// 元のトレースを判定ゲートが受理しなければ、その拒否を報告する。
 /// ステップの削除と、引数（公開引数と内部選択）を小さくする変更を試す。
-/// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に記録する。
-/// オプションは `attempts`（試す候補の数の上限。削除と引数の変更で共有する）と
-/// `allow_other_model`（`verify_certificate` と同じ）。
-pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
-    let map = keys(opts, &["attempts", ALLOW_OTHER_MODEL])?;
+/// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に、
+/// 縮小器の報告（試した候補の数と、打ち切ったか）を `shrink` に記録する。
+/// オプションは `attempts`（試す候補の数の上限。削除と引数の変更で共有する）、`max_time_ms`（縮小の時間の上限）、
+/// `max_check_cost`（判定ゲートが元のトレースの検査にかける評価回数の上限。候補は元のトレースより長くないので、
+/// 候補の検査の見積もりも上限を超えない）、`allow_other_model`（`verify_certificate` と同じ）。
+/// 時間の上限か中断要求に達したら縮小を打ち切り、それまでに判定ゲートが受理した候補を返す
+/// （`shrink.limit` は `max_time_ms` か `interrupted`）。
+pub fn shrink(model: &Model, trace: &str, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
+    let map = keys(opts, &["attempts", "max_time_ms", "max_check_cost", ALLOW_OTHER_MODEL])?;
     let attempts = count(map, "attempts", 1)?.unwrap_or(DEFAULT_SHRINK_ATTEMPTS);
+    let deadline = deadline(map)?;
+    let gate = trace_gate(map)?;
     let (trace, other) = match read_trace(model, trace, flag(map, ALLOW_OTHER_MODEL)?) {
         Ok(loaded) => (loaded.evidence, loaded.other_model_digest),
         Err(e) => return Ok(unreadable(model, &e)),
@@ -234,22 +263,27 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
     let original = trace.steps.len();
     // 元のトレースを判定ゲートに渡す。縮小の起点に使うので、トレースの部分は手元に残す。
     let evidence = Evidence::Trace(trace.start.clone(), trace.steps.clone(), trace.claim.clone());
-    let verdict = decide(model.checked(), cond, &evidence);
+    let (verdict, evidence) = judge(model.checked(), cond, evidence, &gate);
     if !matches!(verdict.kind(), VerdictKind::Violated | VerdictKind::Error) {
         let body = report::evidence_report(model, cond, &evidence, &verdict, trace.seed);
         return Ok(mark_other_model(body, other));
     }
-    let shrunk_steps = search_shrink(
+    let result = search_shrink(
         model.checked(),
         cond,
         &trace.start,
         &trace.steps,
         &trace.claim,
-        size(attempts),
+        &ShrinkOptions {
+            attempts: size(attempts),
+            interrupt,
+            deadline,
+        },
     );
-    let shrunk = Evidence::Trace(trace.start.clone(), shrunk_steps, trace.claim.clone());
+    let shrunk = Evidence::Trace(trace.start.clone(), result.steps, trace.claim.clone());
     let verdict = decide(model.checked(), cond, &shrunk);
     let mut body = report::evidence_report(model, cond, &shrunk, &verdict, trace.seed);
     body["original_steps"] = json!(original);
+    body["shrink"] = shrink_report(result.attempts, result.stopped);
     Ok(mark_other_model(body, other))
 }

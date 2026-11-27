@@ -64,9 +64,9 @@ fn each_function_accepts_only_its_keys() {
     let err = simulate(&m, &json!({"traces": -1}), None).unwrap_err();
     assert_eq!(err, "traces は1以上の整数です（-1）");
     // shrink は検査条件をトレースから読むので、検査条件のキーも受け付けない。
-    let err = shrink(&m, "{}", &json!({"deadlock": true})).unwrap_err();
+    let err = shrink(&m, "{}", &json!({"deadlock": true}), None).unwrap_err();
     assert_eq!(err, "未知のオプション \"deadlock\"");
-    let err = shrink(&m, "{}", &json!(1)).unwrap_err();
+    let err = shrink(&m, "{}", &json!(1), None).unwrap_err();
     assert_eq!(err, "オプションはオブジェクトです");
     let err = coverage(&m, &json!({"seen": {"edges": []}}), None).unwrap_err();
     assert_eq!(err, "seen の未知のキー \"edges\"");

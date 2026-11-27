@@ -5,9 +5,13 @@ use crate::bindings::{eval_bindings, eval_bound_body};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{all_ty, has_ty, typed};
 use crate::model::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{all_pure, pure_below};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -16,6 +20,16 @@ pub const MISSING_KEY: i64 = 2;
 
 pub open spec fn selected(column: Seq<Expr>, rank: int, env: Env, locals: Seq<Value>) -> Result<Value, ErrKind> {
     eval_l(column[rank], env, locals)
+}
+
+/// 番号の局所変数は Int の型を持つ。
+pub open spec fn rank_ty(lt: Seq<ETy>, rank_local: usize) -> bool {
+    rank_local < lt.len() && lt[rank_local as int] == ETy::Int
+}
+
+/// 行の列 `flat` の各行の列 `column` の式は、型 `y` を持つ。
+pub open spec fn col_ty(flat: Seq<Expr>, rows: usize, width: usize, column: int, y: ETy, tv: TyEnv, lt: Seq<ETy>) -> bool {
+    forall|j: int| 0 <= j < rows ==> #[trigger] has_ty(flat[j * (1 + width as int) + column], tv, lt, y)
 }
 
 pub open spec fn key_rank(locals: Seq<Value>, index: usize) -> int {
@@ -95,6 +109,8 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
             ==> #[trigger] eval_l(out, env, locals)
                 == selected(old(column)@, key_rank(locals, rank_local), env, locals),
         forall|n: nat| #[trigger] all_pure(old(column)@, n) && rank_local < n ==> pure_below(out, n),
+        forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+            rank_ty(lt, rank_local) && #[trigger] all_ty(old(column)@, y, tv, lt) ==> has_ty(out, tv, lt, y),
     decreases hi - lo,
 {
     if hi - lo == 1 {
@@ -103,6 +119,10 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
             assert(hi == old(column)@.len());
             assert(column@ =~= old(column)@.take(lo as int));
             assert(out == old(column)@[lo as int]);
+            assert forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+                rank_ty(lt, rank_local) && #[trigger] all_ty(old(column)@, y, tv, lt) implies has_ty(out, tv, lt, y) by {
+                assert(has_ty(old(column)@[lo as int], tv, lt, y));
+            }
         }
         out
     } else {
@@ -117,6 +137,19 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
         let out = Expr::Ite(Box::new(cond), Box::new(left), Box::new(right));
         proof {
             assert(column@ =~= old(column)@.take(lo as int));
+            assert forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+                rank_ty(lt, rank_local) && #[trigger] all_ty(old(column)@, y, tv, lt) implies has_ty(out, tv, lt, y) by {
+                let c = old(column)@.take(mid as int);
+                assert forall|j: int| 0 <= j < c.len() implies #[trigger] has_ty(c[j], tv, lt, y) by {
+                    assert(c[j] == old(column)@[j]);
+                    assert(has_ty(old(column)@[j], tv, lt, y));
+                }
+                assert(all_ty(c, y, tv, lt));
+                assert(has_ty(left, tv, lt, y) && has_ty(right, tv, lt, y));
+                assert(has_ty(Expr::Const(Value::Int(mid as i64)), tv, lt, ETy::Int));
+                assert(has_ty(Expr::Local(rank_local), tv, lt, ETy::Int));
+                assert(has_ty(cond, tv, lt, ETy::Bool));
+            }
             assert forall|n: nat| #[trigger] all_pure(old(column)@, n) && rank_local < n implies pure_below(out, n) by {
                 let c = old(column)@.take(mid as int);
                 assert forall|j: int| 0 <= j < c.len() implies pure_below(#[trigger] c[j], n) by {
@@ -156,6 +189,13 @@ pub fn select_map_slot(column: Vec<Expr>, rank_local: usize, fallback: Expr) -> 
                 && 0 <= key_rank(locals, rank_local) < column@.len() <= i64::MAX
             ==> #[trigger] eval_l(out, env, locals)
                 == selected(column@, key_rank(locals, rank_local), env, locals),
+        forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+            rank_ty(lt, rank_local) && #[trigger] all_ty(column@, y, tv, lt) && has_ty(fallback, tv, lt, y) ==> has_ty(
+                out,
+                tv,
+                lt,
+                y,
+            ),
 {
     let mut column = column;
     let len = column.len();
@@ -181,6 +221,8 @@ pub fn require_map_key(present: Expr, rank_local: usize) -> (out: Expr)
                             Err(k) => Err(k),
                         }
                     },
+        forall|tv: TyEnv, lt: Seq<ETy>|
+            rank_ty(lt, rank_local) && #[trigger] has_ty(present, tv, lt, ETy::Bool) ==> has_ty(out, tv, lt, ETy::Bool),
 {
     let nonnegative = Expr::Bin(
         BinOp::Ge,
@@ -195,6 +237,15 @@ pub fn require_map_key(present: Expr, rank_local: usize) -> (out: Expr)
     );
     proof {
         reveal_with_fuel(eval_l, 5);
+        assert forall|tv: TyEnv, lt: Seq<ETy>|
+            rank_ty(lt, rank_local) && #[trigger] has_ty(present, tv, lt, ETy::Bool) implies has_ty(out, tv, lt, ETy::Bool) by {
+            assert(has_ty(Expr::Local(rank_local), tv, lt, ETy::Int));
+            assert(has_ty(Expr::Const(Value::Int(0)), tv, lt, ETy::Int));
+            assert(has_ty(nonnegative, tv, lt, ETy::Bool));
+            assert(has_ty(hit, tv, lt, ETy::Bool));
+            assert(has_ty(Expr::Const(Value::Bool(true)), tv, lt, ETy::Bool));
+            assert(has_ty(Expr::Fail(Type::Bool, MISSING_KEY), tv, lt, ETy::Bool));
+        }
     }
     out
 }
@@ -226,6 +277,13 @@ pub fn select_flat_map_slot(
                     && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
                 ==> #[trigger] eval_l(expr, env, locals)
                     == flat_slot(flat@, width, column, key_rank(locals, rank_local), env, locals),
+        out matches Some(expr) ==> forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+            rank_ty(lt, rank_local) && #[trigger] col_ty(flat@, rows, width, column as int, y, tv, lt) && has_ty(
+                fallback,
+                tv,
+                lt,
+                y,
+            ) ==> has_ty(expr, tv, lt, y),
 {
     let indices = map_slot_indices(rows, width, column, flat.len())?;
     let mut expressions: Vec<Expr> = Vec::new();
@@ -261,6 +319,19 @@ pub fn select_flat_map_slot(
             let rank = key_rank(locals, rank_local);
             assert(projected[rank] == flat@[indices@[rank] as int]);
             assert(eval_l(expr, env, locals) == selected(projected, rank, env, locals));
+        }
+        assert forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+            rank_ty(lt, rank_local) && #[trigger] col_ty(flat@, rows, width, column as int, y, tv, lt) && has_ty(
+                fb,
+                tv,
+                lt,
+                y,
+            ) implies has_ty(expr, tv, lt, y) by {
+            assert forall|j: int| 0 <= j < projected.len() implies #[trigger] has_ty(projected[j], tv, lt, y) by {
+                assert(projected[j] == flat@[indices@[j] as int]);
+                assert(has_ty(flat@[j * (1 + width as int) + column as int], tv, lt, y));
+            }
+            assert(all_ty(projected, y, tv, lt));
         }
     }
     Some(expr)
@@ -324,6 +395,13 @@ pub fn select_flat_map_check(flat: &Vec<Expr>, rows: usize, width: usize, rank_l
                         Err(error) => Err(error),
                     }
                 },
+        out matches Some(check) ==> forall|tv: TyEnv, lt: Seq<ETy>|
+            rank_ty(lt, rank_local) && #[trigger] col_ty(flat@, rows, width, 0, ETy::Bool, tv, lt) ==> has_ty(
+                check,
+                tv,
+                lt,
+                ETy::Bool,
+            ),
 {
     let presence = select_flat_map_slot(flat, rows, width, 0, rank_local, Expr::Const(Value::Bool(false)))?;
     let ghost p = presence;
@@ -345,6 +423,16 @@ pub fn select_flat_map_check(flat: &Vec<Expr>, rows: usize, width: usize, rank_l
             if key_rank(locals, rank_local) >= 0 {
                 assert(eval_l(p, env, locals) == flat_slot(flat@, width, 0, key_rank(locals, rank_local), env, locals));
             }
+        }
+        assert forall|tv: TyEnv, lt: Seq<ETy>|
+            rank_ty(lt, rank_local) && #[trigger] col_ty(flat@, rows, width, 0, ETy::Bool, tv, lt) implies has_ty(
+            check,
+            tv,
+            lt,
+            ETy::Bool,
+        ) by {
+            assert(has_ty(Expr::Const(Value::Bool(false)), tv, lt, ETy::Bool));
+            assert(has_ty(p, tv, lt, ETy::Bool));
         }
     }
     Some(check)
@@ -395,6 +483,14 @@ pub fn select_flat_map_lookup(
                             Err(error) => Err(error),
                         }
                     },
+        out matches Some(result) ==> forall|tv: TyEnv, lt: Seq<ETy>, ys: Seq<ETy>|
+            ys.len() > 0 && ys[0] == ETy::Bool && rank_ty(lt, rank_local) && ys.len() == 1 + width && (forall|c: int|
+                0 <= c <= width ==> #[trigger] col_ty(flat@, rows, width, c, ys[c], tv, lt)) && #[trigger] typed(
+                defaults@,
+                ys.subrange(1, 1 + width),
+                tv,
+                lt,
+            ) ==> has_ty(result.0, tv, lt, ETy::Bool) && typed(result.1@, ys.subrange(1, 1 + width), tv, lt),
 {
     if defaults.len() != width {
         return None;
@@ -409,6 +505,14 @@ pub fn select_flat_map_lookup(
             payload@.len() == column,
             (rows as int) * (1 + width) == flat@.len(),
             forall|n: nat| #[trigger] all_pure(flat@, n) && rank_local < n && all_pure(defaults@, n) ==> all_pure(payload@, n),
+            forall|tv: TyEnv, lt: Seq<ETy>, ys: Seq<ETy>|
+                rank_ty(lt, rank_local) && ys.len() == 1 + width && (forall|c: int|
+                0 <= c <= width ==> #[trigger] col_ty(flat@, rows, width, c, ys[c], tv, lt)) && #[trigger] typed(
+                defaults@,
+                ys.subrange(1, 1 + width),
+                tv,
+                lt,
+            ) ==> forall|i: int| 0 <= i < column ==> #[trigger] has_ty(payload@[i], tv, lt, ys[i + 1]),
             forall|i: int, env: Env, locals: Seq<Value>|
                 0 <= i < column && rank_local < locals.len() && locals[rank_local as int] is Int
                     && 0 <= key_rank(locals, rank_local) < rows <= i64::MAX
@@ -420,6 +524,23 @@ pub fn select_flat_map_lookup(
         let ghost prev = payload@;
         payload.push(selected);
         proof {
+            assert forall|tv: TyEnv, lt: Seq<ETy>, ys: Seq<ETy>|
+                rank_ty(lt, rank_local) && ys.len() == 1 + width && (forall|c: int|
+                0 <= c <= width ==> #[trigger] col_ty(flat@, rows, width, c, ys[c], tv, lt)) && #[trigger] typed(
+                defaults@,
+                ys.subrange(1, 1 + width),
+                tv,
+                lt,
+            ) implies forall|i: int| 0 <= i < column + 1 ==> #[trigger] has_ty(payload@[i], tv, lt, ys[i + 1]) by {
+                assert(col_ty(flat@, rows, width, column + 1, ys[column + 1], tv, lt));
+                assert(has_ty(defaults@[column as int], tv, lt, ys.subrange(1, 1 + width)[column as int]));
+                assert(has_ty(selected, tv, lt, ys[column + 1]));
+                assert forall|i: int| 0 <= i < column + 1 implies #[trigger] has_ty(payload@[i], tv, lt, ys[i + 1]) by {
+                    if i < column {
+                        assert(payload@[i] == prev[i]);
+                    }
+                }
+            }
             assert forall|n: nat| #[trigger] all_pure(flat@, n) && rank_local < n && all_pure(defaults@, n) implies all_pure(payload@, n) by {
                 assert(pure_below(defaults@[column as int], n));
                 assert(all_pure(prev, n));
@@ -453,6 +574,21 @@ pub fn select_flat_map_lookup(
                 );
             } else {
                 reveal_with_fuel(eval_bindings, 2);
+            }
+        }
+    }
+    proof {
+        assert forall|tv: TyEnv, lt: Seq<ETy>, ys: Seq<ETy>|
+            ys.len() > 0 && ys[0] == ETy::Bool && rank_ty(lt, rank_local) && ys.len() == 1 + width && (forall|c: int|
+                0 <= c <= width ==> #[trigger] col_ty(flat@, rows, width, c, ys[c], tv, lt)) && #[trigger] typed(
+                defaults@,
+                ys.subrange(1, 1 + width),
+                tv,
+                lt,
+            ) implies has_ty(check, tv, lt, ETy::Bool) && typed(payload@, ys.subrange(1, 1 + width), tv, lt) by {
+            assert(col_ty(flat@, rows, width, 0, ys[0], tv, lt));
+            assert forall|i: int| 0 <= i < payload@.len() implies #[trigger] has_ty(payload@[i], tv, lt, ys.subrange(1, 1 + width)[i]) by {
+                assert(has_ty(payload@[i], tv, lt, ys[i + 1]));
             }
         }
     }

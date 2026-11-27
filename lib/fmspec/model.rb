@@ -76,17 +76,24 @@ module Fmspec
     end
 
     # トレース（Trace、Hash、またはJSON文字列）を、記録された検査条件で再生する。
-    # `allow_other_model` は verify_certificate と同じ。
-    def replay(trace, allow_other_model: false)
-      options = allow_other_model ? { "allow_other_model" => true } : {}
+    # `max_check_cost` と `allow_other_model` は verify_certificate と同じ。
+    # 判定ゲートはトレースを区切らずに検査するので、時間の上限は受け付けず、割り込みは検査を終えてから伝わる。
+    def replay(trace, max_check_cost: nil, allow_other_model: false)
+      options = {}
+      options["max_check_cost"] = max_check_cost if max_check_cost
+      options["allow_other_model"] = true if allow_other_model
       result(native.replay(trace_json(trace), JSON.generate(options)))
     end
 
     # モデル違反のトレースを、同じ違反を保ったまま短くする（仕様書 §10）。結果は局所最小である。
-    # `allow_other_model` は verify_certificate と同じ。
-    def shrink(trace, attempts: nil, allow_other_model: false)
+    # `attempts` は試す候補の数の上限、`max_time_ms` は縮小の時間の上限で、達したら縮小を打ち切り、
+    # それまでに判定ゲートが受理したトレースを返す（`Result#shrink` に打ち切ったことを記録する）。
+    # `max_check_cost` は元のトレースの検査の上限で、`allow_other_model` は verify_certificate と同じ。
+    def shrink(trace, attempts: nil, max_time_ms: nil, max_check_cost: nil, allow_other_model: false)
       options = {}
       options["attempts"] = attempts if attempts
+      options["max_time_ms"] = max_time_ms if max_time_ms
+      options["max_check_cost"] = max_check_cost if max_check_cost
       options["allow_other_model"] = true if allow_other_model
       result(native.shrink(trace_json(trace), JSON.generate(options)))
     end
@@ -134,7 +141,8 @@ module Fmspec
     #   replay   操作列（`TestResult#inputs`）か、モデル検査のトレース（`Result#trace`）。
     #            指定すると、生成せずにその操作列を1回だけ再実行する。並行するプロセスでは、反例のスケジュールの再現になる
     #   paths    操作列の配列。指定すると、生成せずに各操作列を1ケースとして再実行する。
-    #            true なら `test_paths` で作る（steps が1経路の最大ステップ数）
+    #            true なら `test_paths` で作る（steps が1経路の最大ステップ数）。探索を打ち切って作った経路
+    #            （`TestPaths#complete?` が偽）では、全経路が成功しても :inconclusive（理由は :incomplete_paths）になる
     #   shrink   失敗した操作列を縮小する
     #   actions  対象の操作の名前の配列。省略時はすべて
     #   max_candidates  候補状態の数の上限。超える場合は :inconclusive
@@ -152,19 +160,21 @@ module Fmspec
       run.run
     end
 
-    # テスト経路を作る（仕様書 §11.3）。到達可能な状態と入力の組を覆う操作列の配列を返す。
+    # テスト経路を作る（仕様書 §11.3）。到達可能な状態と入力の組を覆う操作列の配列（`TestPaths`）を返す。
     # 各操作列は `Model#test(binding, paths: ...)` で再実行できる。
     #
-    #   max_steps   1経路の最大ステップ数
-    #   max_states  到達可能な状態の探索の、状態数の上限
-    #   actions     対象の操作の名前の配列。省略時はすべて
+    #   max_steps    1経路の最大ステップ数
+    #   max_states   到達可能な状態の探索の、状態数の上限
+    #   max_time_ms  到達可能な状態の探索の、時間の上限（ミリ秒）。
+    #                上限で探索を打ち切ると、`TestPaths#complete?` が偽になる
+    #   actions      対象の操作の名前の配列。省略時はすべて
     #
     # binding が注入する内部選択は入力に含める。注入しない内部選択がある操作では、モデルが最初に列挙した
     # 遷移をたどる前提で経路を作るので、実装が別の遷移を選ぶと、その経路は :inconclusive（invalid_input）になる。
-    def test_paths(binding, max_steps: 20, max_states: nil, actions: nil)
+    def test_paths(binding, max_steps: 20, max_states: nil, max_time_ms: nil, actions: nil)
       raise ArgumentError, "max_steps は1以上の整数です" unless max_steps.is_a?(Integer) && max_steps >= 1
 
-      test_run(binding, actions: actions).paths(max_steps: max_steps, max_states: max_states)
+      test_run(binding, actions: actions).paths(max_steps: max_steps, max_states: max_states, max_time_ms: max_time_ms)
     end
 
     def inspect = "#<Fmspec::Model #{name}>"

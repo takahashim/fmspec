@@ -49,12 +49,145 @@ class NativeTest < Minitest::Test
     assert_equal [:inconclusive, :max_check_cost], [result.status, result.reason]
   end
 
+  # x を d（0..3）だけ増やすモデルと、d = 1 のステップを3000個並べた違反のトレース。
+  # どのステップを除いても、どの引数を小さくしても違反しないので、縮小を終えるまでに数秒以上かかる。
+  def long_shrink
+    model = Fmspec.define(:adder) do
+      state :x, int(0..3003), initial: 0
+      action :add, d: 0..3 do |s, d|
+        guard s.x < 3000
+        update x: s.x + d
+      end
+      invariant(:bound) { |s| s.x < 3000 }
+    end
+    trace = model.check.trace.to_h.merge(
+      "steps" => (1..3000).map do |x|
+        { "action" => "add", "args" => { "d" => 1 }, "choices" => {}, "output" => { "unit" => true }, "state" => { "x" => x } }
+      end
+    )
+    [model, trace]
+  end
+
+  def test_a_shrink_can_be_interrupted_by_timeout
+    model, trace = long_shrink
+    assert_equal :violated, model.replay(trace).status
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(Timeout::Error) { Timeout.timeout(0.3) { model.shrink(trace) } }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    assert_operator elapsed, :<, 3.0, "中断に時間がかかりすぎている"
+  end
+
+  def test_a_shrink_can_be_interrupted_from_another_thread
+    model, trace = long_shrink
+    worker = Thread.new { model.shrink(trace) }
+    sleep 0.2
+    worker.kill
+    assert_nil worker.join(3)&.value
+    refute_predicate worker, :alive?
+  end
+
   def test_a_check_can_be_interrupted_from_another_thread
     worker = Thread.new { huge.check }
     sleep 0.2
     worker.kill
     assert_nil worker.join(3)&.value
     refute_predicate worker, :alive?
+  end
+
+  def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+  # 例外を伴わない割り込みを、0.1秒後に1回起こしながらブロックを実行する。
+  # 子プロセスの終了（SIGCHLD）、Thread#wakeup、例外を投げずに戻るシグナルのトラップの3通り。
+  def each_interrupt_without_exception
+    caller = Thread.current
+    pid = spawn("sleep 0.1")
+    yield :sigchld
+    Process.wait(pid)
+
+    waker = Thread.new { sleep 0.1; caller.wakeup }
+    yield :wakeup
+    waker.join
+
+    previous = trap("USR1") {}
+    begin
+      signaler = Thread.new { sleep 0.1; Process.kill("USR1", Process.pid) }
+      yield :trap
+      signaler.join
+    ensure
+      trap("USR1", previous)
+    end
+  end
+
+  # 例外を伴わない割り込みでは、探索を打ち切った結果（:interrupted）を返さず、最初からやり直す。
+  def test_an_interrupt_without_an_exception_does_not_stop_a_check
+    each_interrupt_without_exception do |kind|
+      started = now
+      result = huge.check(max_time_ms: 600)
+      assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason], kind
+      # 時間の上限は、やり直した探索でも最初の呼び出しからの時間である。
+      assert_operator now - started, :>=, 0.55, kind
+      assert_operator now - started, :<, 3.0, kind
+    end
+    # 時間の上限がなければ、やり直した探索が終わるまで続く。
+    model = TestModels.counters(2, 299)
+    each_interrupt_without_exception do |kind|
+      assert_equal :verified, model.check.status, kind
+    end
+  end
+
+  def test_an_interrupt_without_an_exception_does_not_stop_a_simulation_or_a_shrink
+    each_interrupt_without_exception do |kind|
+      result = huge.simulate(traces: 10**9, max_steps: 1000, seed: 1, max_time_ms: 400)
+      assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason], kind
+    end
+    model, trace = long_shrink
+    each_interrupt_without_exception do |kind|
+      result = model.shrink(trace, max_time_ms: 400)
+      assert_equal "max_time_ms", result.shrink["limit"], kind
+    end
+  end
+
+  def test_a_certificate_check_has_a_time_limit
+    model, certificate = heavy_certificate
+    started = now
+    result = model.verify_certificate(certificate, max_time_ms: 100)
+    assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason]
+    assert_operator now - started, :<, 3.0
+    each_interrupt_without_exception do |kind|
+      result = model.verify_certificate(certificate, max_time_ms: 400)
+      assert_equal [:inconclusive, :max_time_ms], [result.status, result.reason], kind
+    end
+  end
+
+  Counters = Struct.new(:c0, :c1, :c2)
+
+  def huge_binding
+    huge.bind do
+      setup { Counters.new(0, 0, 0) }
+      3.times { |i| command(:"inc#{i}") { |c| c[i] += 1 } }
+      3.times { |i| observe(:"c#{i}") { |c| c[i] } }
+    end
+  end
+
+  def test_coverage_and_test_paths_can_be_interrupted_by_timeout
+    binding = huge_binding
+    tested = huge.test(binding, cases: 1, steps: 3, seed: 1)
+    [-> { tested.coverage }, -> { huge.test_paths(binding) }].each do |collect|
+      started = now
+      assert_raises(Timeout::Error) { Timeout.timeout(0.3) { collect.call } }
+      assert_operator now - started, :<, 3.0, "中断に時間がかかりすぎている"
+    end
+  end
+
+  def test_coverage_and_test_paths_have_a_time_limit
+    binding = huge_binding
+    tested = huge.test(binding, cases: 1, steps: 3, seed: 1)
+    each_interrupt_without_exception do |kind|
+      refute_predicate tested.coverage(max_time_ms: 300), :complete?, kind
+      paths = huge.test_paths(binding, max_time_ms: 300)
+      refute_predicate paths, :complete?, kind
+      assert_operator paths.covered, :<, paths.targets, kind
+    end
   end
 
   # 検査の間、GVL を解放している。

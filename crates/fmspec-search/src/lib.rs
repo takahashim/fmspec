@@ -29,6 +29,6 @@ pub use refine::{ref_status, refine, RefOutcome, RefStatus};
 pub use session::{
     Covered, InputCheck, ModelError, NextInput, Observed, Outcome as PossibleOutcome, Seen, SeenOutput, Session,
 };
-pub use shrink::shrink;
+pub use shrink::{shrink, ShrinkOptions, ShrinkStop, Shrunk};
 pub use simulate::{simulate, SimOptions, SimResult, SimStats, PRNG_NAME};
 pub use sym::{bfs_sym, check_sym};

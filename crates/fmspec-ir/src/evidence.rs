@@ -57,6 +57,41 @@ fn format<T>(message: impl Into<String>) -> Result<T, TraceError> {
     Err(TraceError::Format(message.into()))
 }
 
+/// オブジェクトのキーが `allowed` に含まれることを確かめる。`what` は誤りの文で、どのオブジェクトかを言う。
+fn known_keys(map: &Map<String, Value>, what: &str, allowed: &[&str]) -> Result<(), TraceError> {
+    match map.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(key) => format(format!("{what}: 未知のキー {key:?}")),
+        None => Ok(()),
+    }
+}
+
+/// 文字列のキー。省略や文字列でない値は形式の誤りとする。
+fn text<'a>(map: &'a Map<String, Value>, what: &str, key: &str) -> Result<&'a str, TraceError> {
+    match map.get(key).and_then(Value::as_str) {
+        Some(s) => Ok(s),
+        None => format(format!("{what}.{key} は文字列です")),
+    }
+}
+
+const CERTIFICATE_KEYS: [&str; 5] = [
+    "certificate_version",
+    "model_digest",
+    "engine_version",
+    "conditions",
+    "states",
+];
+const TRACE_KEYS: [&str; 8] = [
+    "trace_version",
+    "model_digest",
+    "engine_version",
+    "seed",
+    "conditions",
+    "initial",
+    "steps",
+    "claim",
+];
+const STEP_KEYS: [&str; 5] = ["action", "args", "choices", "output", "state"];
+
 /// 読み込んだ証拠。`other_model_digest` は、証拠が別のモデルに対するもので、指定により読んだときの、証拠の digest である。
 #[derive(Clone, Debug)]
 pub struct Loaded<T> {
@@ -160,6 +195,7 @@ pub fn read_certificate(model: &Model, json: &str, allow_other_model: bool) -> R
 }
 
 fn certificate_body(model: &Model, map: &Map<String, Value>) -> Result<Certificate, TraceError> {
+    known_keys(map, "証明書", &CERTIFICATE_KEYS)?;
     let conditions = conditions_of(map, model)?;
     let Some(rows) = map.get("states").and_then(Value::as_array) else {
         return format("states は状態の配列です");
@@ -233,6 +269,13 @@ fn error_from_json(v: Option<&Value>) -> Result<ErrKind, TraceError> {
     let Some(map) = v.and_then(Value::as_object) else {
         return format("claim.error はオブジェクトです");
     };
+    // 範囲外更新の type は表示用で、読み込みには使わない。
+    let allowed: &[&str] = match map.get("kind").and_then(Value::as_str) {
+        Some("out_of_range") => &["kind", "value", "type"],
+        Some("failed") => &["kind", "code"],
+        _ => &["kind"],
+    };
+    known_keys(map, "claim.error", allowed)?;
     match map.get("kind").and_then(Value::as_str) {
         Some("overflow") => Ok(ErrKind::Overflow),
         Some("type_mismatch") => Ok(ErrKind::TypeMismatch),
@@ -307,25 +350,49 @@ pub fn claim_to_json(model: &Model, claim: &Claim) -> Value {
     }
 }
 
+/// 主張の種類ごとに、書けるキー。
+fn claim_keys(map: &Map<String, Value>) -> &'static [&'static str] {
+    if map.contains_key("violation") {
+        return match map.get("violation").and_then(Value::as_str) {
+            Some("deadlock") => &["violation"],
+            _ => &["violation", "name"],
+        };
+    }
+    match map.get("site").and_then(Value::as_str) {
+        Some("invariant" | "contract") => &["error", "site", "name"],
+        Some("terminal") => &["error", "site"],
+        Some("guard" | "output") => &["error", "site", "action", "args", "choices"],
+        Some("update") => &["error", "site", "action", "args", "choices", "target", "slot"],
+        _ => &["error", "site"],
+    }
+}
+
 fn claim_from_json(model: &Model, v: Option<&Value>) -> Result<Claim, TraceError> {
     let Some(map) = v.and_then(Value::as_object) else {
         return format("claim はオブジェクトです");
     };
+    // violation と error は排他である。両方を持つ主張では、error の側のキー（error、site など）を未知のキーとする。
+    known_keys(map, "claim", claim_keys(map))?;
     let names = &model.names;
-    let name = || map.get("name").and_then(Value::as_str).unwrap_or("");
-    let invariant = || match names.invariant_index(name()) {
-        Some(i) => Ok(i),
-        None => format(format!("claim: 未定義の不変条件 {:?}", name())),
+    let invariant = || {
+        let name = text(map, "claim", "name")?;
+        match names.invariant_index(name) {
+            Some(i) => Ok(i),
+            None => format(format!("claim: 未定義の不変条件 {name:?}")),
+        }
     };
-    let contract = || match names.contract_index(name()) {
-        Some(k) => Ok(k),
-        None => format(format!("claim: 未定義の遷移契約 {:?}", name())),
+    let contract = || {
+        let name = text(map, "claim", "name")?;
+        match names.contract_index(name) {
+            Some(k) => Ok(k),
+            None => format(format!("claim: 未定義の遷移契約 {name:?}")),
+        }
     };
-    if let Some(kind) = map.get("violation").and_then(Value::as_str) {
-        return match kind {
-            "invariant" => Ok(Claim::Invariant(invariant()?)),
-            "contract" => Ok(Claim::Contract(contract()?)),
-            "deadlock" => Ok(Claim::Deadlock),
+    if let Some(kind) = map.get("violation") {
+        return match kind.as_str() {
+            Some("invariant") => Ok(Claim::Invariant(invariant()?)),
+            Some("contract") => Ok(Claim::Contract(contract()?)),
+            Some("deadlock") => Ok(Claim::Deadlock),
             _ => format("claim.violation が不正です"),
         };
     }
@@ -335,7 +402,7 @@ fn claim_from_json(model: &Model, v: Option<&Value>) -> Result<Claim, TraceError
         Some("contract") => Ok(Claim::ContractError(contract()?, kind)),
         Some("terminal") => Ok(Claim::TerminalError(kind)),
         Some(site @ ("guard" | "update" | "output")) => {
-            let action_name = map.get("action").and_then(Value::as_str).unwrap_or("");
+            let action_name = text(map, "claim", "action")?;
             let Some(a) = names.action_index(action_name) else {
                 return format(format!("claim: 未定義の操作 {action_name:?}"));
             };
@@ -351,7 +418,7 @@ fn claim_from_json(model: &Model, v: Option<&Value>) -> Result<Claim, TraceError
                 "guard" => Site::Guard,
                 "output" => Site::Output,
                 _ => {
-                    let target = map.get("target").and_then(Value::as_str).unwrap_or("");
+                    let target = text(map, "claim", "target")?;
                     // slot は範囲外更新にだけ付く。省略すると状態変数の最初のスロットとする。
                     let slot = match map.get("slot") {
                         None => 0,
@@ -418,6 +485,7 @@ pub fn read_trace(model: &Model, json: &str, allow_other_model: bool) -> Result<
 }
 
 fn trace_body(model: &Model, map: &Map<String, Value>) -> Result<Trace, TraceError> {
+    known_keys(map, "トレース", &TRACE_KEYS)?;
     let conditions = conditions_of(map, model)?;
     // 開始状態が初期状態の1つであることは、判定ゲートが検査する。
     // 初期状態が1つのモデルでは、initial を省略できる。
@@ -437,7 +505,8 @@ fn trace_body(model: &Model, map: &Map<String, Value>) -> Result<Trace, TraceErr
         let Some(row) = row.as_object() else {
             return format(format!("steps[{k}] はオブジェクトです"));
         };
-        let name = row.get("action").and_then(Value::as_str).unwrap_or("");
+        known_keys(row, &format!("steps[{k}]"), &STEP_KEYS)?;
+        let name = text(row, &format!("steps[{k}]"), "action")?;
         let Some(action) = model.names.action_index(name) else {
             return format(format!("steps[{k}]: 未定義の操作 {name:?}"));
         };

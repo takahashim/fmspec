@@ -62,7 +62,7 @@ fn evidence_for_another_model_is_refused_unless_allowed() {
         json!({"allow_other_model": null}),
     ] {
         assert_eq!(replay_with(&new, &trace, &opts).unwrap(), refused);
-        assert_eq!(shrink(&new, &trace, &opts).unwrap(), refused);
+        assert_eq!(shrink(&new, &trace, &opts, None).unwrap(), refused);
     }
 
     let body = replay_with(&new, &trace, &allow()).unwrap();
@@ -97,7 +97,7 @@ fn the_gate_judges_the_evidence_against_the_current_model() {
     assert_eq!(body["rejected"]["reason"], "claim_not_reproduced", "{body}");
     assert_eq!(body["evidence_model_digest"], json!(old.digest));
     // 縮小も、判定ゲートが元のトレースを受理しなければ縮小しない。
-    let shrunk = shrink(&fixed, &trace, &allow()).unwrap();
+    let shrunk = shrink(&fixed, &trace, &allow(), None).unwrap();
     assert_eq!(shrunk["status"], "rejected");
     assert!(shrunk.get("original_steps").is_none(), "{shrunk}");
     assert_eq!(shrunk["evidence_model_digest"], json!(old.digest));
@@ -122,7 +122,7 @@ fn shrink_accepts_evidence_for_another_model_when_allowed() {
     trace["steps"] = json!([steps[0], reset, steps[0], steps[1]]);
     // 検査条件は名前で読む。reset も対象にする。
     trace["conditions"]["actions"] = json!(["inc", "reset"]);
-    let body = shrink(&new, &trace.to_string(), &allow()).unwrap();
+    let body = shrink(&new, &trace.to_string(), &allow(), None).unwrap();
     assert_eq!(body["status"], "violated");
     assert_eq!(body["original_steps"], 4);
     assert_eq!(body["trace"]["steps"].as_array().unwrap().len(), 2);
@@ -199,7 +199,7 @@ fn allow_other_model_is_a_boolean() {
     let expected = "allow_other_model は真偽値です";
     let bad = json!({"allow_other_model": "yes"});
     assert_eq!(replay_with(&m, &trace, &bad).unwrap_err(), expected);
-    assert_eq!(shrink(&m, &trace, &bad).unwrap_err(), expected);
+    assert_eq!(shrink(&m, &trace, &bad, None).unwrap_err(), expected);
     assert_eq!(verify_certificate(&m, "{}", &bad, None).unwrap_err(), expected);
     assert_eq!(
         replay_with(&m, &trace, &json!({"attempts": 1})).unwrap_err(),
@@ -242,7 +242,7 @@ fn shrinking_evidence_for_another_model_also_makes_arguments_smaller() {
         "claim": {"violation": "invariant", "name": "small"}
     });
     // どちらのステップを削っても x は 2 以下だが、最初の引数を 1 にしても違反は残る。
-    let body = shrink(&new, &trace.to_string(), &allow()).unwrap();
+    let body = shrink(&new, &trace.to_string(), &allow(), None).unwrap();
     assert_eq!(body["status"], "violated", "{body}");
     assert_eq!(body["trace"]["steps"], json!([step(1, 1), step(2, 3)]));
     assert_eq!(body["original_steps"], 2);

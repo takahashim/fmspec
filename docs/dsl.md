@@ -714,8 +714,8 @@ Workers.check(symmetry: false)     # 削減しない
 | `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, symmetry: nil, **検査条件)` | 幅優先探索によるモデル検査。`symmetry: false` で、宣言した対称性による削減を使わない |
 | `simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **検査条件)` | ランダムシミュレーション |
 | `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, allow_other_model: false, **検査条件)` | 証明書の検査 |
-| `replay(トレース, allow_other_model: false)` | トレースの再生 |
-| `shrink(トレース, attempts: nil, allow_other_model: false)` | モデル違反のトレースの縮小 |
+| `replay(トレース, max_check_cost: nil, allow_other_model: false)` | トレースの再生 |
+| `shrink(トレース, attempts: nil, max_time_ms: nil, max_check_cost: nil, allow_other_model: false)` | モデル違反のトレースの縮小 |
 
 `max_check_cost:` は、判定ゲートが証拠の検査にかける評価回数の上限である（[ir.md](ir.md) の「証拠の検査の資源上限と中断」）。
 検査の見積もりが上限を超えると、結果は `:inconclusive`（理由は `:max_check_cost`）になる。
@@ -746,7 +746,11 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 省略時は、すべての操作、不変条件、遷移契約が対象で、デッドロック検査は無効である。
 
 検査の間はGVLを解放するので、他のRubyスレッドが動作できる。
-`Timeout` や `Thread#kill` などの割り込みは、探索を打ち切って例外として伝わる。
+`Timeout` や `Thread#kill` などの割り込みは、探索、証明書の検査、縮小、カバレッジとテスト経路の探索を打ち切って例外として伝わる。
+Ruby は、例外を伴わない割り込み（子プロセスの終了による SIGCHLD、`Thread#wakeup`、例外を投げずに戻るシグナルのトラップなど）でも探索を止めさせる。
+この場合、fmspec は打ち切った探索の結果を返さず、探索を最初からやり直す（GVL を解放したまま、割り込みが例外を伴うかを確かめる手段がないので、途中から続けることはできない）。
+やり直した探索の時間の上限 `max_time_ms:` は、最初の呼び出しからの時間である。
+`replay` と、縮小の前後で行うトレースの検査は、判定ゲートがトレースを区切らずに検査するので、検査を終えてから例外として伝わる（検査の量は `max_check_cost:` で抑えられる）。
 
 結果は `Fmspec::Result` である。
 
@@ -757,11 +761,11 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 | `property` | 違反した性質、または評価エラーの箇所。定義のソース位置を含む |
 | `trace` | 違反または評価エラーに至るトレース（`steps`、`states`、`initial`） |
 | `certificate` | `check(certificate: true)` で受理された証明書 |
-| `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`、`:interrupted`。Ruby からの割り込みはふつう例外として伝わり、`:interrupted` になるのは割り込みが例外を投げずに終わった場合に限る |
+| `reason` | `:inconclusive` の理由。`:max_states`、`:max_depth`、`:max_time_ms`、`:max_check_cost`。Ruby からの割り込みは例外として伝わり、例外を伴わない割り込みでは探索をやり直すので、エンジンの理由 `:interrupted` は Ruby からは返らない |
 | `rejected` | 判定ゲートが証拠を拒否した理由（`:rejected` と、証拠を拒否した `:internal_error`） |
 | `evidence_model_digest` | `allow_other_model: true` で別のモデルに対する証拠を扱ったときの、証拠の digest |
 | `inconsistency` | 探索器の内部の不整合の内容（証拠を生成できなかった `:internal_error`） |
-| `visited_states`、`seed`、`search`、`simulation` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed |
+| `visited_states`、`seed`、`search`、`simulation`、`shrink` | 探索器の報告。検査済みの値ではない。`seed` はシミュレーションのseed。`shrink` は縮小器の報告（`Model#shrink`） |
 | `to_s` | 人間向けの報告 |
 | `to_h` | エンジンの結果（[ir.md](ir.md)の形式） |
 
@@ -771,6 +775,9 @@ result.evidence_model_digest # 証拠を作ったモデルの digest
 `Model#shrink(トレース)` は、モデル違反のトレースを、同じ違反を保ったまま短くし、引数と内部選択をドメインの正規順で小さくする。
 シミュレーションで見つけたトレースに使う。
 `attempts:` は、試す候補（ステップの削除と引数の変更）の数の上限である（既定 10000）。
+`max_time_ms:` は縮小の時間の上限で、`max_check_cost:` は元のトレースの検査の上限である。
+候補の数か時間の上限に達すると、縮小を打ち切る（`Timeout` などの割り込みは例外として伝わる）。上限で打ち切った結果は、それまでに判定ゲートが受理したトレースで、`status` は違反のままである。
+`Result#shrink` は縮小器の報告で、`"complete"`（打ち切らずに終わったか）、`"limit"`（打ち切った理由。`"attempts"` か `"max_time_ms"`）、`"attempts"`（試した候補の数）を持つ。打ち切った結果は局所最小とは限らない。
 幅優先探索の反例は、不変条件の違反については最初から最短である（引数は小さくなることがある）。
 
 `:internal_error` は fmspec の不具合を示す。
@@ -860,7 +867,7 @@ result.assert_passed!
 | `actions:` | 対象の操作の名前の配列 |
 | `shrink:`、`shrink_runs:` | 失敗した操作列を縮小するか、縮小で再実行する回数の上限 |
 | `replay:` | 操作列（`TestResult#inputs`）か、モデル検査のトレース（`Result#trace`）。生成せずに、その操作列を1回だけ再実行する |
-| `paths:` | 操作列の配列。生成せずに、各操作列を1ケースとして再実行する。`true` なら `test_paths` で作る（`steps:` が1経路の最大ステップ数） |
+| `paths:` | 操作列の配列。生成せずに、各操作列を1ケースとして再実行する。`true` なら `test_paths` で作る（`steps:` が1経路の最大ステップ数）。探索を打ち切って作った経路では、全経路が成功しても `:inconclusive`（理由は `:incomplete_paths`）になる |
 | `max_candidates:` | 候補状態の数の上限 |
 
 ### 非決定性と部分観測
@@ -987,7 +994,7 @@ Conformance failure: tickets / sold
 ### カバレッジ
 
 `TestResult#coverage` は、テストが確実に通った仕様の状態と遷移を、到達可能な状態と遷移と比べる。
-到達可能な状態と遷移は、`coverage` を呼んだときに探索する（`max_states:` でその探索の状態数の上限を指定できる）。
+到達可能な状態と遷移は、`coverage` を呼んだときに探索する（`max_states:` と `max_time_ms:` で、その探索の状態数と時間の上限を指定できる。上限で打ち切ると `complete?` が偽になる）。
 対象の操作は、`test` の `actions:` と同じである。
 
 ```ruby
@@ -1035,7 +1042,13 @@ Tickets.test(binding, paths: true, steps: 20).assert_passed!
 
 まだ覆っていない組を探索順に1つずつ取り、その状態への最短の操作列にその入力を続け、さらに遷移先から覆っていない組を貪欲にたどって延ばす。
 初期状態から `max_steps:` 以内で届かない組は覆わない。
-オプションは `max_steps:`、`max_states:`（探索の状態数の上限）、`actions:` である。
+オプションは `max_steps:`、`max_states:`（探索の状態数の上限）、`max_time_ms:`（探索の時間の上限）、`actions:` である。
+
+結果は操作列の配列（`Fmspec::TestPaths`、`Array` の子）で、経路を作った探索の報告を持つ。
+`complete?` は到達可能な状態をすべて探索したかで、状態数か時間の上限、評価エラーで探索を打ち切ると偽になる。
+`targets` は覆う対象（状態と入力の組で、有効な遷移があるもの）の数、`covered` は経路が覆った数である。
+`complete?` が偽の経路は、到達可能な状態と入力の組の一部しか覆わない。
+`test(paths:)` にそのまま渡すと、全経路が成功しても `:passed` にせず、`:inconclusive`（理由は `:incomplete_paths`）にする（失敗はそのまま報告する）。
 
 入力は、公開引数と、binding が注入する内部選択の値である。
 注入しない内部選択がある操作では、仕様が最初に列挙した遷移をたどる前提で操作列を作る。

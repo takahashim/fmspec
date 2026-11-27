@@ -2,6 +2,7 @@
 //!
 //! digestは、IRからソース位置（`source`）を除き、キーを整列して直列化したJSONのSHA-256である。
 //! ソース位置だけが違うIRは同じモデルとして扱う。
+//! 書き方は正規化しないので、意味が同じでも書き方の違うIR（`"guard": null` と省略など）は、digestが違う。
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};

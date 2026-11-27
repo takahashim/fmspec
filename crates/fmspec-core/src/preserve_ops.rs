@@ -267,50 +267,57 @@ pub proof fn lemma_ite_binds_push(c: Expr, fa: Seq<Seq<Expr>>, fb: Seq<Seq<Expr>
     assert forall|i: int| 0 <= i < j implies #[trigger] fa.push(xa)[i] == fa[i] && fb.push(yb)[i] == fb[i] by {}
 }
 
-/// `k` 個の空の `let` の下で `x` を評価する。局所変数の数を `k` だけ増やす。
-pub open spec fn pad_lets_s(k: nat, x: Expr) -> Expr
-    decreases k,
+/// 定数の列の値。
+pub open spec fn cvals(ds: Seq<Expr>) -> Seq<Value> {
+    Seq::new(ds.len(), |i: int| ds[i]->Const_0)
+}
+
+/// 定数の束縛の列 `ds` の下で `x` を評価する。局所変数の数を `ds` の長さだけ増やす。
+pub open spec fn pad_lets_s(ds: Seq<Expr>, x: Expr) -> Expr
+    decreases ds.len(),
 {
-    if k == 0 {
+    if ds.len() == 0 {
         x
     } else {
-        Expr::Let(Box::new(bool_lit(true)), Box::new(pad_lets_s((k - 1) as nat, x)))
+        Expr::Let(Box::new(ds[0]), Box::new(pad_lets_s(ds.drop_first(), x)))
     }
 }
 
-pub open spec fn pad_lets_seq(xs: Seq<Expr>, k: nat) -> Seq<Expr> {
-    xs.map_values(|x: Expr| pad_lets_s(k, x))
+pub open spec fn pad_lets_seq(xs: Seq<Expr>, ds: Seq<Expr>) -> Seq<Expr> {
+    xs.map_values(|x: Expr| pad_lets_s(ds, x))
 }
 
-pub open spec fn trues(k: nat) -> Seq<Value> {
-    Seq::new(k, |i: int| Value::Bool(true))
-}
-
-pub proof fn lemma_pad_eval(k: nat, x: Expr, env: Env, l: Seq<Value>)
-    ensures
-        eval_l(pad_lets_s(k, x), env, l) == eval_l(x, env, l + trues(k)),
-    decreases k,
-{
-    if k == 0 {
-        assert(l + trues(0) =~= l);
-    } else {
-        let inner = pad_lets_s((k - 1) as nat, x);
-        assert(pad_lets_s(k, x) == Expr::Let(Box::new(bool_lit(true)), Box::new(inner)));
-        assert(eval_l(bool_lit(true), env, l) == Ok::<Value, ErrKind>(Value::Bool(true)));
-        lemma_pad_eval((k - 1) as nat, x, env, l.push(Value::Bool(true)));
-        assert(l.push(Value::Bool(true)) + trues((k - 1) as nat) =~= l + trues(k));
-    }
-}
-
-/// 深さ `n == d + k` で単独に評価する式は、空の `let` を `k` 個かぶせると、深さ `d` で単独に評価する式になる。
-pub proof fn lemma_pads_closed(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, d: nat, k: nat, t: XTy, xs: Seq<Expr>)
+pub proof fn lemma_pad_eval(ds: Seq<Expr>, x: Expr, env: Env, l: Seq<Value>)
     requires
-        n == d + k,
+        forall|i: int| 0 <= i < ds.len() ==> #[trigger] ds[i] is Const,
+    ensures
+        eval_l(pad_lets_s(ds, x), env, l) == eval_l(x, env, l + cvals(ds)),
+    decreases ds.len(),
+{
+    if ds.len() == 0 {
+        assert(l + cvals(ds) =~= l);
+    } else {
+        let rest = ds.drop_first();
+        assert forall|i: int| 0 <= i < rest.len() implies #[trigger] rest[i] is Const by {
+            assert(rest[i] == ds[i + 1]);
+        }
+        let v = ds[0]->Const_0;
+        assert(eval_l(ds[0], env, l) == Ok::<Value, ErrKind>(v));
+        lemma_pad_eval(rest, x, env, l.push(v));
+        assert(l.push(v) + cvals(rest) =~= l + cvals(ds));
+    }
+}
+
+/// 深さ `n == d + k` で単独に評価する式は、`k` 個の定数の束縛をかぶせると、深さ `d` で単独に評価する式になる。
+pub proof fn lemma_pads_closed(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, d: nat, ds: Seq<Expr>, t: XTy, xs: Seq<Expr>)
+    requires
+        n == d + ds.len(),
+        forall|i: int| 0 <= i < ds.len() ==> #[trigger] ds[i] is Const,
         closed_slots(e, cx, sc, n, t, xs),
     ensures
-        closed_slots(e, cx, sc, d, t, pad_lets_seq(xs, k)),
+        closed_slots(e, cx, sc, d, t, pad_lets_seq(xs, ds)),
 {
-    let ps = pad_lets_seq(xs, k);
+    let ps = pad_lets_seq(xs, ds);
     assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
         #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == d implies slots_result(
         eval_src(e, se, sls),
@@ -320,12 +327,12 @@ pub proof fn lemma_pads_closed(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, d
         t,
         se.enums,
     ) by {
-        let l2 = ls + trues(k);
+        let l2 = ls + cvals(ds);
         assert(prefix(ls, l2));
         lemma_ctx_weaken(cx, sc, env, se, ls, l2, sls);
         assert(ctx_ok(cx, sc, env, se, l2, sls) && l2.len() == n);
         assert forall|j: int| 0 <= j < ps.len() implies #[trigger] eval_l(ps[j], env, ls) == eval_l(xs[j], env, l2) by {
-            lemma_pad_eval(k, xs[j], env, ls);
+            lemma_pad_eval(ds, xs[j], env, ls);
         }
         assert(slot_vals(ps, env, ls) =~= slot_vals(xs, env, l2));
     }

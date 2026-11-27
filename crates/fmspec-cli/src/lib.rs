@@ -4,9 +4,11 @@
 //! 終了コードは次のとおり。成功の種類は出力の `status` で区別する。
 //!
 //! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`、`refines`）
-//! - `1`: 反例、または提示された証明書やトレースの拒否
-//! - `2`: 評価エラー、不正な入力、内部エラー
-//! - `3`: 探索未完了
+//! - `1`: 反例、詳細化の不成立、または提示された証明書やトレースの拒否（`violated`、`not_refines`、`rejected`）
+//! - `2`: 評価エラー、不正なモデル、使い方の誤り、ファイルの読み書きの失敗、内部エラー（`error`、`invalid_model`、
+//!   `usage_error`、`input_error`、`output_error`、`internal_error`）
+//! - `3`: 上限による検査の未完了（`inconclusive`）。探索の上限のほか、証拠の検査の `max_check_cost` や
+//!   `max_time_ms` でも未完了になる。理由は `reason` にある
 
 use fmspec_api::Model;
 use serde_json::{json, Map, Value};
@@ -46,8 +48,8 @@ const USAGE: &str = "\
   fmspec check MODEL.json [--strategy bfs] [--max-states N] [--max-depth N] [--max-time-ms N] [--max-check-cost N] [検査条件] [--certificate-out FILE] [--trace-out FILE]
   fmspec simulate MODEL.json [--traces N] [--max-steps N] [--seed N] [--max-time-ms N] [検査条件] [--trace-out FILE]
   fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [--max-time-ms N] [検査条件] [--allow-other-model]
-  fmspec replay MODEL.json TRACE.json [--allow-other-model]
-  fmspec shrink MODEL.json TRACE.json [--trace-out FILE] [--allow-other-model]
+  fmspec replay MODEL.json TRACE.json [--max-check-cost N] [--allow-other-model]
+  fmspec shrink MODEL.json TRACE.json [--attempts N] [--max-time-ms N] [--max-check-cost N] [--trace-out FILE] [--allow-other-model]
   fmspec refine REFINEMENT.json [--max-states N] [--max-depth N] [--max-time-ms N] [--actions A,B,...]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
@@ -59,19 +61,26 @@ const USAGE: &str = "\
 証拠（verify-certificate、replay、shrink）:
   --allow-other-model    model_digest が違う証拠も、このモデルの名前と型で読んで検査する
 
+縮小（shrink）:
+  --attempts N           試す候補（ステップの削除と引数の変更）の数の上限（既定 10000）
+  --max-time-ms N        縮小の時間の上限。上限に達したら、それまでに判定ゲートが受理したトレースを返す
+
 共通:
   --json                 結果を機械可読のJSONで出力する
+  -h, --help             この使い方を表示する
+  --                     以降の引数を、すべてファイルとして読む
 ";
 
 /// fmspec-api に渡す、値を取るオプション。[フラグ, オプションのキー, 種類]。
-const VALUED: [(&str, &str, Kind); 10] = [
-    ("--max-states", "max_states", Kind::Count),
-    ("--max-depth", "max_depth", Kind::Count),
-    ("--max-time-ms", "max_time_ms", Kind::Count),
-    ("--max-check-cost", "max_check_cost", Kind::Count),
-    ("--traces", "traces", Kind::Count),
-    ("--max-steps", "max_steps", Kind::Count),
-    ("--seed", "seed", Kind::Count),
+const VALUED: [(&str, &str, Kind); 11] = [
+    ("--max-states", "max_states", Kind::Count(1)),
+    ("--max-depth", "max_depth", Kind::Count(0)),
+    ("--max-time-ms", "max_time_ms", Kind::Count(0)),
+    ("--max-check-cost", "max_check_cost", Kind::Count(0)),
+    ("--traces", "traces", Kind::Count(1)),
+    ("--max-steps", "max_steps", Kind::Count(0)),
+    ("--seed", "seed", Kind::Count(0)),
+    ("--attempts", "attempts", Kind::Count(1)),
     ("--actions", "actions", Kind::Names),
     ("--invariants", "invariants", Kind::Names),
     ("--contracts", "contracts", Kind::Names),
@@ -79,8 +88,21 @@ const VALUED: [(&str, &str, Kind); 10] = [
 
 #[derive(Clone, Copy)]
 enum Kind {
-    Count,
+    /// 下限以上の整数。下限は fmspec-api と同じで、誤りはフラグの名前で報告する。
+    Count(u64),
     Names,
+}
+
+/// 数字だけからなる、`min` 以上の整数。`u64::from_str` は `+5` も受け付けるので、先に数字だけかを確かめる。
+fn count(flag: &str, text: &str, min: u64) -> Result<u64, String> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("{flag} は{min}以上の整数です（{text:?}）"));
+    }
+    match text.parse::<u64>() {
+        Ok(n) if n >= min => Ok(n),
+        Ok(_) => Err(format!("{flag} は{min}以上の整数です（{text:?}）")),
+        Err(_) => Err(format!("{flag} が大きすぎます（{text:?}）")),
+    }
 }
 
 struct Args {
@@ -91,11 +113,26 @@ struct Args {
     strategy: Option<String>,
     certificate_out: Option<String>,
     trace_out: Option<String>,
-    /// 指定されたオプションの名前（`--json` を除く）。コマンドが使わないものを拒否するために持つ。
-    flags: Vec<String>,
 }
 
-fn parse_args(args: &[String]) -> Result<Args, String> {
+/// 値を取らない、または fmspec-api のオプションに直さないフラグ。
+const OTHER_FLAGS: [&str; 5] = [
+    "--deadlock",
+    "--allow-other-model",
+    "--strategy",
+    "--certificate-out",
+    "--trace-out",
+];
+
+/// `--` より前の引数。`--` 以降はすべて位置引数として読む。
+fn before_separator(args: &[String]) -> &[String] {
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    &args[..end]
+}
+
+/// コマンド `command` の引数を、そのコマンドが受け付けるオプション（`allowed` と、`conditions` なら検査条件）で
+/// 解析する。左から順に読み、最初に見つけた誤りを返す。値を読む前に、オプションを受け付けるかを確かめる。
+fn parse_args(command: &str, allowed: &[&str], conditions: bool, args: &[String]) -> Result<Args, String> {
     let mut parsed = Args {
         positional: Vec::new(),
         json: false,
@@ -103,14 +140,38 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         strategy: None,
         certificate_out: None,
         trace_out: None,
-        flags: Vec::new(),
     };
+    let mut seen: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
-        if arg.starts_with("--") && arg != "--json" && !parsed.flags.iter().any(|f| f == arg) {
-            parsed.flags.push(arg.to_string());
+        if arg == "--" {
+            parsed.positional.extend(args[i + 1..].iter().cloned());
+            break;
         }
+        if !arg.starts_with("--") {
+            parsed.positional.push(arg.to_string());
+            i += 1;
+            continue;
+        }
+        if arg == "--json" {
+            parsed.json = true;
+            i += 1;
+            continue;
+        }
+        if !OTHER_FLAGS.contains(&arg) && !VALUED.iter().any(|(name, _, _)| *name == arg) {
+            return Err(format!("未知のオプション {arg}"));
+        }
+        // コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
+        if !allowed.contains(&arg) && !(conditions && CONDITION_FLAGS.contains(&arg)) {
+            return Err(format!("{command} は {arg} を受け付けません"));
+        }
+        // 重ねた指定の後のほうだけを使うと、順序で結果が変わり、前の指定が効いたと誤解させる。
+        // `--json` は重ねても意味が変わらないので、上で受け付けている。
+        if seen.contains(&arg) {
+            return Err(format!("{arg} は1回だけ指定できます"));
+        }
+        seen.push(arg);
         // `--` で始まる語は値として読まない。`--trace-out --json` の `--json` を値として消費すると、
         // run が引数全体から判定する出力の形式と食い違う。
         let mut value = || -> Result<String, String> {
@@ -123,7 +184,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
         };
         match arg {
-            "--json" => parsed.json = true,
             "--deadlock" => {
                 parsed.options.insert("deadlock".to_string(), json!(true));
             }
@@ -133,21 +193,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--strategy" => parsed.strategy = Some(value()?),
             "--certificate-out" => parsed.certificate_out = Some(value()?),
             "--trace-out" => parsed.trace_out = Some(value()?),
-            _ => match VALUED.iter().find(|(name, _, _)| *name == arg) {
-                Some((_, key, kind)) => {
+            _ => {
+                if let Some((_, key, kind)) = VALUED.iter().find(|(name, _, _)| *name == arg) {
                     let text = value()?;
                     let option = match kind {
-                        Kind::Count => match text.parse::<u64>() {
-                            Ok(n) => json!(n),
-                            Err(_) => return Err(format!("{arg} は0以上の整数です（{text:?}）")),
-                        },
+                        Kind::Count(min) => json!(count(arg, &text, *min)?),
                         Kind::Names => json!(text.split(',').filter(|s| !s.is_empty()).collect::<Vec<_>>()),
                     };
                     parsed.options.insert(key.to_string(), option);
                 }
-                None if arg.starts_with("--") => return Err(format!("未知のオプション {arg}")),
-                None => parsed.positional.push(arg.to_string()),
-            },
+            }
         }
         i += 1;
     }
@@ -240,8 +295,24 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
         true,
         cmd_verify_certificate,
     ),
-    ("replay", &["--allow-other-model"], false, cmd_replay),
-    ("shrink", &["--trace-out", "--allow-other-model"], false, cmd_shrink),
+    (
+        "replay",
+        &["--max-check-cost", "--allow-other-model"],
+        false,
+        cmd_replay,
+    ),
+    (
+        "shrink",
+        &[
+            "--attempts",
+            "--max-time-ms",
+            "--max-check-cost",
+            "--trace-out",
+            "--allow-other-model",
+        ],
+        false,
+        cmd_shrink,
+    ),
     (
         "refine",
         &["--max-states", "--max-depth", "--max-time-ms", "--actions"],
@@ -249,16 +320,6 @@ const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
         cmd_refine,
     ),
 ];
-
-/// コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
-fn accepts(a: &Args, command: &str, allowed: &[&str], conditions: bool) -> Result<(), Run> {
-    for flag in &a.flags {
-        if !allowed.contains(&flag.as_str()) && !(conditions && CONDITION_FLAGS.contains(&flag.as_str())) {
-            return Err(usage(a.json, format!("{command} は {flag} を受け付けません")));
-        }
-    }
-    Ok(())
-}
 
 /// 判定ゲートが受理したトレース（違反か評価エラー）だけを書き出す。拒否されたトレースは書き出さない。
 fn save_trace(io: &Io, a: &Args, body: &Value) -> Result<(), Run> {
@@ -340,7 +401,8 @@ fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
-    let body = fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone())).map_err(|e| usage(a.json, e))?;
+    let body =
+        fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone()), None).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
     Ok(finish(a.json, body))
 }
@@ -373,15 +435,24 @@ pub fn run(
     }
     // parse_args は `--json` を値として消費しないので、引数の解析に失敗したときも、成功したときの
     // `Args::json` と同じ形式になる。
-    let json = rest.iter().any(|a| a == "--json");
-    let parsed = match parse_args(rest) {
+    let options = before_separator(rest);
+    let json = options.iter().any(|a| a == "--json");
+    let Some(&(name, allowed, conditions, cmd)) = COMMANDS.iter().find(|(name, ..)| name == command) else {
+        let message = format!("未知のコマンド {command:?}");
+        return if json {
+            usage(json, message)
+        } else {
+            Run::stderr(EXIT_ERROR, format!("usage_error: {message}\n{USAGE}"))
+        };
+    };
+    if options.iter().any(|a| a == "--help" || a == "-h") {
+        return Run::stdout(EXIT_OK, USAGE.to_string());
+    }
+    let parsed = match parse_args(name, allowed, conditions, rest) {
         Ok(a) => a,
         Err(e) => return usage(json, e),
     };
-    let Some(&(name, allowed, conditions, cmd)) = COMMANDS.iter().find(|(name, ..)| name == command) else {
-        return usage(json, format!("未知のコマンド {command:?}\n{USAGE}"));
-    };
-    match accepts(&parsed, name, allowed, conditions).and_then(|()| cmd(&io, &parsed)) {
+    match cmd(&io, &parsed) {
         Ok(run) | Err(run) => run,
     }
 }

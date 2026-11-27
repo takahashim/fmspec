@@ -210,10 +210,10 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
         }
         SType::Set(t) => {
             let items = v.as_array().ok_or_else(|| format!("配列が必要です（{v}）"))?;
-            let n = t.keys(enums).unwrap_or(0) as usize;
+            let n = key_count(enums, t)?;
             let mut bits = vec![0i64; n];
             for x in items {
-                let r = key_rank(enums, t, x)?;
+                let r = key_rank(enums, t, x, n)?;
                 if bits[r] != 0 {
                     return Err(format!("要素 {x} が重複しています"));
                 }
@@ -225,14 +225,14 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
             let items = v
                 .as_array()
                 .ok_or_else(|| format!("[キー, 値] の配列が必要です（{v}）"))?;
-            let n = k.keys(enums).unwrap_or(0) as usize;
+            let n = key_count(enums, k)?;
             let mut entries: Vec<Option<Vec<i64>>> = vec![None; n];
             for item in items {
                 let pair = item
                     .as_array()
                     .filter(|p| p.len() == 2)
                     .ok_or_else(|| format!("[キー, 値] が必要です（{item}）"))?;
-                let r = key_rank(enums, k, &pair[0])?;
+                let r = key_rank(enums, k, &pair[0], n)?;
                 if entries[r].is_some() {
                     return Err(format!("キー {} が重複しています", pair[0]));
                 }
@@ -263,12 +263,20 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
     Ok(())
 }
 
-fn key_rank(enums: &[EnumNames], t: &SType, x: &Value) -> Result<usize, String> {
+/// キー型の値の数。読み込みはキー型でない要素の型のSetやMapを拒否するが、
+/// 公開の `value_from_json` には渡せるので、そのときは誤りとする。
+fn key_count(enums: &[EnumNames], t: &SType) -> Result<usize, String> {
+    t.keys(enums)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| "Setの要素とMapのキーの型がキー型ではありません".to_string())
+}
+
+fn key_rank(enums: &[EnumNames], t: &SType, x: &Value, n: usize) -> Result<usize, String> {
     let mut codes = Vec::new();
     encode(enums, t, x, &mut codes)?;
-    match t.rank(enums, &codes) {
-        Some(r) => Ok(r as usize),
-        None => Err(format!("{x} は要素の型に属しません")),
+    match t.rank(enums, &codes).and_then(|r| usize::try_from(r).ok()) {
+        Some(r) if r < n => Ok(r),
+        _ => Err(format!("{x} は要素の型に属しません")),
     }
 }
 

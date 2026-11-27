@@ -30,6 +30,8 @@ use crate::eval::{as_bool, code_of, decode, eval_l, eval_spec, lookup, prop_spec
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_s;
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::has_ty;
 use crate::lowering::{lower_prop, lower_stored, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::RawModel;
@@ -52,6 +54,8 @@ use crate::source::{eval_src, src_bool, SEnv};
 use crate::step::{act_env, apply_updates, encode_spec, in_type, output_spec, step_spec, vals_ok, Step};
 #[cfg(verus_keep_ghost)]
 use crate::total::{cx_wf, layout_tys, layout_wf, sctx};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -755,6 +759,9 @@ fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Expr, enums: &
     ensures
         r matches Ok(g) ==> fold_ok(g, body, la@, 0, slot_tys_seq(ts, enums@), enums@),
         (forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums@)) ==> r is Ok,
+        r matches Ok(g) ==> forall|tv: TyEnv|
+            tv.enums == enums@ && tv.arg_tys == slot_tys_seq(ts, enums@) && #[trigger] has_ty(body, tv, Seq::empty(), ETy::Bool)
+                ==> has_ty(g, tv, Seq::empty(), ETy::Bool),
 {
     let ghost lims = forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums@);
     let ghost doms = slot_tys_seq(ts, enums@);
@@ -770,6 +777,9 @@ fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Expr, enums: &
             smalls(ts),
             fold_ok(g, b, la@, k as int, doms, enums@),
             lims == forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums@),
+            forall|tv: TyEnv|
+                tv.enums == enums@ && tv.arg_tys == slot_tys_seq(ts, enums@) && #[trigger] has_ty(b, tv, Seq::empty(), ETy::Bool)
+                    ==> has_ty(g, tv, Seq::empty(), ETy::Bool),
         decreases k,
     {
         k -= 1;
@@ -790,6 +800,26 @@ fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Expr, enums: &
         };
         let ghost g0 = g;
         g = Expr::And(Box::new(c), Box::new(g));
+        proof {
+            assert(layout_tys(la@) =~= ts) by {
+                assert forall|i: int| 0 <= i < ts.len() implies layout_tys(la@)[i] == ts[i] by {
+                    assert(layout_at(la@[i], ts, i, enums@));
+                }
+            }
+            assert forall|tv: TyEnv|
+                tv.enums == enums@ && tv.arg_tys == slot_tys_seq(ts, enums@) && #[trigger] has_ty(b, tv, Seq::empty(), ETy::Bool)
+                    implies has_ty(g, tv, Seq::empty(), ETy::Bool) by {
+                let ki = k as int;
+                lemma_wf_index(ts, ki, enums@);
+                assert(layout_at(la@[ki], ts, ki, enums@));
+                assert forall|j: int| 0 <= j < slots@.len() implies #[trigger] slots@[j] == crate::preserve::kind_expr(2, (la@[ki].offset + j) as usize) by {
+                }
+                crate::lower_types::lemma_kind_typed(la@, ki, 2, slots@, tv, Seq::empty());
+                crate::lower_types::lemma_xetys_of(ts[ki], enums@);
+                assert(has_ty(c, tv, Seq::empty(), ETy::Bool));
+                assert(has_ty(g0, tv, Seq::empty(), ETy::Bool));
+            }
+        }
         proof {
             assert forall|env: Env| dom_ok(env, doms, enums@) implies if canon_from(la@, k as int, env, enums@) {
                 as_bool(#[trigger] eval_spec(g, env)) == as_bool(eval_spec(b, env))
@@ -834,6 +864,7 @@ pub open spec fn block_ok(su: SUpdate, cx: LowerCtx, blk: Seq<Update>) -> bool {
     &&& cx.states is Some
     &&& su.var < st.len()
     &&& blk.len() >= 1
+    &&& blk.len() == width(sty(st[su.var as int].ty), cx.enums@)
     &&& forall|j: int| 0 <= j < blk.len() ==> #[trigger] blk[j].target == st[su.var as int].offset + j
     &&& forall|env: Env, se: SEnv|
         #[trigger] top_ok(cx, env, se, Seq::empty(), 0) ==> stored_result(
@@ -1374,6 +1405,75 @@ pub open spec fn act_ok(sa: SAction, cx: LowerCtx, m: Action) -> bool {
     &&& out_ok(sa.output, cx, m.output)
 }
 
+/// 各更新式は、対象の状態変数のスロットの型を持つ。
+#[verifier::opaque]
+pub open spec fn ups_typed(ups: Seq<Update>, tv: TyEnv) -> bool {
+    forall|k: int|
+        0 <= k < ups.len() ==> (#[trigger] ups[k]).target < tv.st_tys.len() && has_ty(
+            ups[k].expr,
+            tv,
+            Seq::empty(),
+            crate::typing::ety_of(tv.st_tys[ups[k].target as int]),
+        )
+}
+
+/// 更新の列に、型の付く式で状態変数 `vi` のスロットへの更新を加えても、各更新式は対象の型を持つ。
+proof fn lemma_ups_typed(
+    before: Seq<Update>,
+    ups: Seq<Update>,
+    out: Seq<Expr>,
+    sts: Seq<Layout>,
+    vi: int,
+    tv: TyEnv,
+    enums: Seq<i64>,
+)
+    requires
+        layouts_at(sts, layout_tys(sts), enums),
+        tv.st_tys == slot_tys_seq(layout_tys(sts), enums),
+        0 <= vi < sts.len(),
+        out.len() == width(sty(sts[vi].ty), enums),
+        crate::lower_types::typed(out, crate::lower_types::etys(slot_tys(sty(sts[vi].ty), enums)), tv, Seq::empty()),
+        ups.len() == before.len() + out.len(),
+        ups.subrange(0, before.len() as int) == before,
+        forall|k: int| 0 <= k < out.len() ==> #[trigger] ups[before.len() + k].target == sts[vi].offset + k && ups[before.len() + k].expr == out[k],
+        ups_typed(before, tv),
+    ensures
+        ups_typed(ups, tv),
+{
+    reveal(ups_typed);
+    let ys = crate::lower_types::etys(slot_tys(sty(sts[vi].ty), enums));
+    assert forall|k: int| 0 <= k < ups.len() implies (#[trigger] ups[k]).target < tv.st_tys.len() && has_ty(
+        ups[k].expr,
+        tv,
+        Seq::empty(),
+        crate::typing::ety_of(tv.st_tys[ups[k].target as int]),
+    ) by {
+        if k < before.len() {
+            assert(ups[k] == ups.subrange(0, before.len() as int)[k]);
+            assert(ups[k] == before[k]);
+        } else {
+            let j = k - before.len();
+            assert(ups[before.len() + j].target == sts[vi].offset + j);
+            assert(ups[before.len() + j].expr == out[j]);
+            crate::lower_types::lemma_layout_slot(sts, vi, j, enums);
+            assert(has_ty(out[j], tv, Seq::empty(), ys[j]));
+        }
+    }
+}
+
+/// 中核の操作 `m` の guard、更新式、出力式は、文脈 `t` で型が付く。
+pub open spec fn act_typed(m: Action, t: TyEnv) -> bool {
+    &&& has_ty(m.guard, t, Seq::empty(), ETy::Bool)
+    &&& forall|u: int|
+        0 <= u < m.updates@.len() ==> (#[trigger] m.updates@[u]).target < t.st_tys.len() && has_ty(
+            m.updates@[u].expr,
+            t,
+            Seq::empty(),
+            crate::typing::ety_of(t.st_tys[m.updates@[u].target as int]),
+        )
+    &&& m.output matches Some(o) ==> has_ty(o.expr, t, Seq::empty(), crate::typing::ety_of(o.ty))
+}
+
 /// 位置 `off` からのスロットへの更新を、`ups` の後ろに加える。
 fn push_block(ups: &mut Vec<Update>, off: usize, out: &Vec<Expr>) -> (r: bool)
     ensures
@@ -1438,6 +1538,7 @@ proof fn lemma_upd_pre(sa: SAction, cx: LowerCtx, u: int)
 
 /// 操作を下ろす。guardの前に引数の正規形の判定を置き、代入は値のスロットごとの更新にする。
 #[verifier::spinoff_prover]
+#[verifier::rlimit(60)]
 pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<Action, LowerError>)
     requires
         cx.states is Some,
@@ -1449,10 +1550,24 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
     ensures
         r matches Ok(m) ==> act_ok(*sa, *cx, m),
         cx_wf(*cx) && sa_typed(*sa, sctx(*cx)) ==> (r matches Err(e) ==> e == LowerError::Depth),
+        cx_wf(*cx) && sa_typed(*sa, sctx(*cx)) && crate::lower_types::cx_tok(*cx) ==> (r matches Ok(m) ==> act_typed(
+            m,
+            crate::lower_types::lenv(*cx),
+        )),
 {
     let ghost enums = cx.enums@;
     let ghost doms = slot_tys_seq(stys(sa.args@), enums);
     let ghost pre = cx_wf(*cx) && sa_typed(*sa, sctx(*cx));
+    let ghost tq = pre && crate::lower_types::cx_tok(*cx);
+    let ghost tv = crate::lower_types::lenv(*cx);
+    proof {
+        assert(layout_tys(cx.args@) =~= stys(sa.args@)) by {
+            assert forall|i: int| 0 <= i < stys(sa.args@).len() implies layout_tys(cx.args@)[i] == stys(sa.args@)[i] by {
+                assert(layout_at(cx.args@[i], stys(sa.args@), i, enums));
+            }
+        }
+        assert(tv.arg_tys == doms);
+    }
     let body = match lower_prop(&sa.guard, cx) {
         Ok(g) => g,
         Err(Fail::Depth) => return Err(LowerError::Depth),
@@ -1480,6 +1595,12 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
             assert(prop_result(eval_src(sa.guard, se, Seq::empty()), eval_l(b, env, Seq::empty())));
         }
     }
+    proof {
+        if tq {
+            assert(has_ty(b, tv, Seq::empty(), ETy::Bool));
+            assert(has_ty(guard, tv, Seq::empty(), ETy::Bool));
+        }
+    }
     let domains = slot_types_list(&sa.args, &cx.enums);
     let st = match &cx.states {
         Some(st) => st,
@@ -1488,6 +1609,9 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
     let ghost c = sctx(*cx);
     let mut ups: Vec<Update> = Vec::new();
     let ghost mut bs: Seq<Seq<Update>> = Seq::empty();
+    proof {
+        reveal(ups_typed);
+    }
     let mut u = 0;
     while u < sa.updates.len()
         invariant
@@ -1498,6 +1622,10 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
             forall|k: int| 0 <= k < u ==> #[trigger] block_ok(sa.updates@[k], *cx, bs[k]),
             pre == (cx_wf(*cx) && sa_typed(*sa, sctx(*cx))),
             c == sctx(*cx),
+            tq == (pre && crate::lower_types::cx_tok(*cx)),
+            tv == crate::lower_types::lenv(*cx),
+            tq ==> ups_typed(ups@, tv),
+            enums == cx.enums@,
         decreases sa.updates@.len() - u,
     {
         let su = &sa.updates[u];
@@ -1517,6 +1645,12 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
         };
         if out.len() == 0 {
             return Err(LowerError::Update(a, u));
+        }
+        match stype_width(&l.ty, &cx.enums) {
+            Some(w) => if w != out.len() {
+                return Err(LowerError::Update(a, u));
+            },
+            None => return Err(LowerError::Update(a, u)),
         }
         let ghost before = ups@;
         if !push_block(&mut ups, l.offset, &out) {
@@ -1540,6 +1674,10 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
                 if k < u {
                     assert(bs[k] == bs0[k]);
                 }
+            }
+            if tq {
+                assert(cx.states->Some_0@[su.var as int] == *l);
+                lemma_ups_typed(before, ups@, out@, cx.states->Some_0@, su.var as int, tv, enums);
             }
         }
         u += 1;
@@ -1568,6 +1706,12 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
             };
             proof {
                 assert(out0 =~= seq![expr]);
+                if tq {
+                    assert(crate::lower_types::typed(out0, crate::lower_types::etys(slot_tys(sty(so.ty), enums)), tv, Seq::empty()));
+                    assert(has_ty(out0[0], tv, Seq::empty(), crate::lower_types::etys(slot_tys(sty(so.ty), enums))[0]));
+                    assert(ty == slot_tys(sty(so.ty), enums)[0]);
+                    assert(has_ty(expr, tv, Seq::empty(), crate::typing::ety_of(ty)));
+                }
             }
             Some(Output { ty, expr })
         },
@@ -1575,6 +1719,10 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
     let m = Action { n_params: sa.n_params, domains, guard, updates: ups, output };
     proof {
         assert(upds_ok(sa.updates@, *cx, bs, m.updates@));
+        if tq {
+            reveal(ups_typed);
+            assert(act_typed(m, tv));
+        }
     }
     Ok(m)
 }

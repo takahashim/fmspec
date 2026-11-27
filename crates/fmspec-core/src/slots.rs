@@ -15,12 +15,16 @@ use crate::encoding::{keys_product, lemma_default_len, lemma_default_vals_len, l
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{members, models_seq, sty, stys, width, width_sum, xty, xtys, xwidth, xwidth_sum, STy, SVal};
 #[cfg(verus_keep_ghost)]
+use crate::encoding::{wf_stype, wf_stypes};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{XTy, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
 use crate::equality::lemma_eq_tuple;
 use crate::equality::small_stype;
 #[cfg(verus_keep_ghost)]
 use crate::equality::{eq_ok, eq_seq_ok, lemma_eq_coll, lemma_eq_option, lemma_eq_parts, lemma_eq_scalar};
+#[cfg(verus_keep_ghost)]
+use crate::equality::{small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
@@ -31,6 +35,8 @@ use crate::limits::*;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at, rows_view, select_ok};
 #[cfg(verus_keep_ghost)]
+use crate::lower_types::*;
+#[cfg(verus_keep_ghost)]
 use crate::maps::{mparts_ok, mrow_at};
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
@@ -39,6 +45,9 @@ use crate::quant::pick_slot;
 #[cfg(verus_keep_ghost)]
 use crate::quant::picks;
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
+use crate::typing::ETy;
+#[cfg(verus_keep_ghost)]
+use crate::typing::TyEnv;
 use vstd::prelude::*;
 
 verus! {
@@ -428,6 +437,8 @@ pub fn atomic(e: &Expr) -> (r: bool)
 pub struct Block {
     pub base: usize,
     pub binds: Vec<Expr>,
+    /// 外側の局所変数（添字が `base` 未満）の中核の型。
+    pub outer: Ghost<Seq<ETy>>,
 }
 
 impl Block {
@@ -442,7 +453,7 @@ impl Block {
 
 /// `new` は `old` の束縛の列の後ろに束縛を加えたものである。
 pub open spec fn extends(old: Block, new: Block) -> bool {
-    new.base == old.base && new.wf() && old.binds@.len() <= new.binds@.len() && forall|i: int|
+    new.base == old.base && new.outer == old.outer && new.wf() && old.binds@.len() <= new.binds@.len() && forall|i: int|
         0 <= i < old.binds@.len() ==> #[trigger] new.binds@[i] == old.binds@[i]
 }
 
@@ -454,13 +465,13 @@ pub proof fn lemma_extends_refl(a: Block)
 {
 }
 
-pub fn new_block(base: usize) -> (r: Result<Block, Fail>)
+pub fn new_block(base: usize, outer: Ghost<Seq<ETy>>) -> (r: Result<Block, Fail>)
     ensures
-        r matches Ok(b) ==> b.wf() && b.base == base && b.binds@.len() == 0,
+        r matches Ok(b) ==> b.wf() && b.base == base && b.binds@.len() == 0 && b.outer == outer,
         r is Err ==> r == Err::<Block, Fail>(Fail::Depth) && base == usize::MAX,
 {
     if base < usize::MAX {
-        Ok(Block { base, binds: Vec::new() })
+        Ok(Block { base, binds: Vec::new(), outer })
     } else {
         Err(Fail::Depth)
     }
@@ -525,6 +536,7 @@ pub(crate) fn keep(blk: &mut Block, e: Expr) -> (r: Result<Expr, Fail>)
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r is Err ==> *final(blk) == *old(blk),
         r matches Ok(x) ==> added(*old(blk), *final(blk), e, x),
         r is Err ==> r == Err::<Expr, Fail>(Fail::Depth),
 {
@@ -544,6 +556,7 @@ pub(crate) fn atom(blk: &mut Block, e: Expr) -> (r: Result<Expr, Fail>)
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r is Err ==> *final(blk) == *old(blk),
         r matches Ok(x) ==> added(*old(blk), *final(blk), e, x) && (atomic_s(e) ==> x == e),
         r is Err ==> r == Err::<Expr, Fail>(Fail::Depth),
 {
@@ -563,6 +576,7 @@ pub(crate) fn check(blk: &mut Block, cond: Expr, code: i64) -> (r: Result<(), Fa
         old(blk).wf(),
     ensures
         extends(*old(blk), *final(blk)),
+        r is Err ==> *final(blk) == *old(blk),
         r is Err ==> r == Err::<(), Fail>(Fail::Depth),
         r is Ok ==> (cond == bool_lit(true) && final(blk).binds@ == old(blk).binds@) || final(blk).binds@ == old(
             blk,
@@ -584,6 +598,12 @@ pub fn wrap(binds: &Vec<Expr>, e: Expr) -> (r: Expr)
     ensures
         forall|env: Env, ls: Seq<Value>|
             #[trigger] eval_l(r, env, ls) == eval_bound_body(binds@, binds@.len(), e, env, ls),
+        forall|t: TyEnv, outer: Seq<ETy>|
+            #[trigger] binds_typed(outer, binds@, t) ==> crate::typing::type_l(r, t, outer) == crate::typing::type_l(
+                e,
+                t,
+                lts(outer, binds@, t),
+            ),
 {
     wrap_bindings(copy_exprs(binds), e)
 }
@@ -1368,6 +1388,18 @@ pub fn store(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: 
             let c = and(copy_expr(&x), copy_expr(&y));
             let out = copy_exprs(slots);
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| fits_s(xty(*t), sty(*st)) && wf_stype(sty(*st), enums@) && small(sty(*st)) && tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) && typed(out@, xetys(xty(*t), enums@), tv, lt) by {
+                    assert(xty(*t) == XTy::Int);
+                    assert(xetys(XTy::Int, enums@) =~= seq![ETy::Int]);
+                    assert(has_ty(slots@[0], tv, lt, xetys(XTy::Int, enums@)[0]));
+                    assert(has_ty(slots@[0], tv, lt, ETy::Int));
+                    assert(has_ty(Expr::Const(Value::Int(*lo)), tv, lt, ETy::Int));
+                    assert(has_ty(Expr::Const(Value::Int(*hi)), tv, lt, ETy::Int));
+                    assert(has_ty(x, tv, lt, ETy::Bool));
+                    assert(has_ty(y, tv, lt, ETy::Bool));
+                    assert(c == and_s(x, y));
+                    assert(out@ == slots@);
+                }
                 assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(c, n) && all_pure(out@, n) by {
                     assert(pure_below(slots@[0], n));
                     assert(pure_below(Expr::Const(Value::Int(*lo)), n));
@@ -1406,6 +1438,9 @@ pub fn store(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: 
             }
             let (c, out) = store_parts(t, xs, ts, slots, enums)?;
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| fits_s(xty(*t), sty(*st)) && wf_stype(sty(*st), enums@) && small(sty(*st)) && tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) && typed(out@, xetys(xty(*t), enums@), tv, lt) by {
+                    assert(typed(slots@, xetys_seq(xtys(xs@), enums@), tv, lt));
+                }
                 assert forall|env: Env, ls: Seq<Value>, v: SVal|
                     fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
                     c,
@@ -1427,6 +1462,9 @@ pub fn store(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: 
             }
             let (c, out) = store_parts(t, xs, ts, slots, enums)?;
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| fits_s(xty(*t), sty(*st)) && wf_stype(sty(*st), enums@) && small(sty(*st)) && tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) && typed(out@, xetys(xty(*t), enums@), tv, lt) by {
+                    assert(typed(slots@, xetys_seq(xtys(xs@), enums@), tv, lt));
+                }
                 assert forall|env: Env, ls: Seq<Value>, v: SVal|
                     fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
                     c,
@@ -1452,6 +1490,8 @@ pub fn store(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> (r: 
             let c = cb(true);
             let out = copy_exprs(slots);
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| fits_s(xty(*t), sty(*st)) && wf_stype(sty(*st), enums@) && small(sty(*st)) && tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) && typed(out@, xetys(xty(*t), enums@), tv, lt) by {
+                }
                 assert forall|env: Env, ls: Seq<Value>, v: SVal|
                     fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) implies store_ok(
                     c,
@@ -1557,6 +1597,37 @@ fn store_option(_parent: &XType, x: &XType, slots: &Vec<Expr>, _st: &SType, inne
                     lemma_option_out(tag, payload@, defs@, out@, env, ls, false);
                     assert(slot_vals(out@, env, ls) =~= enc(v, sty(*_st), enums@));
                 },
+            }
+        }
+    }
+    proof {
+        assert forall|tv: TyEnv, lt: Seq<ETy>|
+            fits_s(xty(*_parent), sty(*_st)) && wf_stype(sty(*_st), enums@) && small(sty(*_st)) && tv.enums == enums@
+                && #[trigger] typed(slots@, xetys(xty(*_parent), enums@), tv, lt) implies has_ty(cond, tv, lt, ETy::Bool)
+            && typed(out@, xetys(xty(*_parent), enums@), tv, lt) by {
+            let ys = xetys(xty(*x), enums@);
+            assert(xty(*_parent) == XTy::Option(Box::new(xty(*x))));
+            assert(sty(*_st) == STy::Option(Box::new(sty(*inner))));
+            assert(fits_s(xty(*x), sty(*inner)));
+            assert(wf_stype(sty(*inner), enums@) && small(sty(*inner)));
+            assert(xetys(xty(*_parent), enums@) == seq![ETy::Bool] + ys);
+            assert((seq![ETy::Bool] + ys)[0] == ETy::Bool);
+            assert(has_ty(slots@[0], tv, lt, (seq![ETy::Bool] + ys)[0]));
+            lemma_typed_sub(slots@, seq![ETy::Bool] + ys, tv, lt, 1, slots@.len() as int);
+            assert((seq![ETy::Bool] + ys).subrange(1, slots@.len() as int) =~= ys);
+            assert(rest@ =~= slots@.subrange(1, slots@.len() as int));
+            assert(typed(rest@, ys, tv, lt));
+            assert(has_ty(c, tv, lt, ETy::Bool) && typed(payload@, ys, tv, lt));
+            lemma_defaults_typed(sty(*inner), tv, lt);
+            lemma_fits_etys(xty(*x), sty(*inner), enums@);
+            assert(typed(defs@, ys, tv, lt));
+            assert forall|j: int| 0 <= j < out@.len() implies #[trigger] has_ty(out@[j], tv, lt, (seq![ETy::Bool] + ys)[j]) by {
+                if j > 0 {
+                    assert(out@[1 + (j - 1)] == ite_s(tag, payload@[j - 1], defs@[j - 1]));
+                    assert(j - 1 < payload@.len());
+                    assert(has_ty(payload@[j - 1], tv, lt, ys[j - 1]));
+                    assert(has_ty(defs@[j - 1], tv, lt, ys[j - 1]));
+                }
             }
         }
     }
@@ -1717,6 +1788,35 @@ fn store_parts(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Ex
             }
             lemma_concat_enc(outs, vs, st, env, ls, enums@);
         }
+        assert forall|tv: TyEnv, lt: Seq<ETy>|
+            fits_all_s(xtys(xs@), stys(ts@)) && wf_stypes(stys(ts@), enums@) && smalls(stys(ts@)) && tv.enums == enums@
+                && #[trigger] typed(slots@, xetys_seq(xtys(xs@), enums@), tv, lt) implies has_ty(c, tv, lt, ETy::Bool)
+            && typed(out@, xetys_seq(xtys(xs@), enums@), tv, lt) by {
+            let xt = xtys(xs@);
+            let st = stys(ts@);
+            lemma_fits_all(xt, st);
+            let yss = Seq::new(n as nat, |k: int| xetys(xt[k], enums@));
+            assert forall|k: int| 0 <= k < n implies #[trigger] typed(outs[k], yss[k], tv, lt) && has_ty(conds@[k], tv, lt, ETy::Bool) by {
+                assert(split_ok(parts@[k]@, slots@, xt, k, enums@));
+                crate::encoding::lemma_wf_stypes_at(st, enums@, k);
+                lemma_smalls_at(st, k);
+                lemma_xetys_part(xt, k, enums@);
+                lemma_typed_sub(slots@, xetys_seq(xt, enums@), tv, lt, xoff(xt, k, enums@), xoff(xt, k, enums@) + xwidth(xt[k], enums@));
+                assert(typed(parts@[k]@, xetys(xt[k], enums@), tv, lt));
+                assert(fits_s(xt[k], st[k]));
+                assert(store_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, conds@[k], outs[k]));
+            }
+            assert forall|k: int| 0 <= k < conds@.len() implies #[trigger] has_ty(conds@[k], tv, lt, ETy::Bool) by {
+                assert(typed(outs[k], yss[k], tv, lt) && has_ty(conds@[k], tv, lt, ETy::Bool));
+            }
+            lemma_tree_typed(conds@, bool_lit(true), Join::And, tv, lt, ETy::Bool);
+            assert forall|k: int| 0 <= k < outs.len() implies #[trigger] typed(outs[k], yss[k], tv, lt) by {
+                assert(typed(outs[k], yss[k], tv, lt) && has_ty(conds@[k], tv, lt, ETy::Bool));
+            }
+            lemma_concat_typed(outs, yss, tv, lt);
+            lemma_econcat_xetys(xt, enums@);
+            assert(yss =~= Seq::new(xt.len(), |k: int| xetys(xt[k], enums@)));
+        }
     }
     Some((c, out))
 }
@@ -1738,6 +1838,12 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             }
             let e = offset_rank(copy_expr(&slots[0]), *lo);
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+                    assert(xty(*t) == XTy::Int);
+                    assert(xetys(XTy::Int, enums@) =~= seq![ETy::Int]);
+                    assert(has_ty(slots@[0], tv, lt, xetys(XTy::Int, enums@)[0]));
+                    assert(has_ty(Expr::Const(Value::Int(*lo)), tv, lt, ETy::Int));
+                }
                 assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(e, n) by {
                     assert(pure_below(slots@[0], n));
                     assert(pure_below(int_lit(*lo), n));
@@ -1762,6 +1868,10 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             }
             let e = Expr::Code(Box::new(copy_expr(&slots[0])));
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+                    assert(xetys(xty(*t), enums@).len() == 1);
+                    assert(has_ty(slots@[0], tv, lt, xetys(xty(*t), enums@)[0]));
+                }
                 assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(e, n) by {
                     assert(pure_below(slots@[0], n));
                 }
@@ -1785,6 +1895,9 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             }
             let e = mixed(t, xs, ts, slots, enums)?;
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+                    assert(typed(slots@, xetys_seq(xtys(xs@), enums@), tv, lt));
+                }
                 assert forall|env: Env, ls: Seq<Value>, v: SVal|
                     fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
                         v,
@@ -1804,6 +1917,9 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             }
             let e = mixed(t, xs, ts, slots, enums)?;
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+                    assert(typed(slots@, xetys_seq(xtys(xs@), enums@), tv, lt));
+                }
                 assert forall|env: Env, ls: Seq<Value>, v: SVal|
                     fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && member(
                         v,
@@ -1826,6 +1942,21 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             let tag = copy_expr(&slots[0]);
             let e = option_rank(copy_expr(&tag), copy_expr(&payload));
             proof {
+                assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+                    let ys = xetys(xty(**x), enums@);
+                    assert(xty(*t) == XTy::Option(Box::new(xty(**x))));
+                    assert(xetys(xty(*t), enums@) == seq![ETy::Bool] + ys);
+                    assert((seq![ETy::Bool] + ys)[0] == ETy::Bool);
+                    assert(has_ty(slots@[0], tv, lt, (seq![ETy::Bool] + ys)[0]));
+                    lemma_typed_sub(slots@, seq![ETy::Bool] + ys, tv, lt, 1, slots@.len() as int);
+                    assert((seq![ETy::Bool] + ys).subrange(1, slots@.len() as int) =~= ys);
+                    assert(rest@ =~= slots@.subrange(1, slots@.len() as int));
+                    assert(typed(rest@, ys, tv, lt));
+                    assert(has_ty(payload, tv, lt, ETy::Int));
+                    assert(has_ty(Expr::Const(Value::Int(1)), tv, lt, ETy::Int));
+                    assert(has_ty(Expr::Const(Value::Int(0)), tv, lt, ETy::Int));
+                    assert(has_ty(Expr::Bin(BinOp::Add, Box::new(Expr::Const(Value::Int(1))), Box::new(payload)), tv, lt, ETy::Int));
+                }
                 assert forall|n: nat| #[trigger] all_pure(slots@, n) implies pure_below(e, n) by {
                     assert(pure_below(slots@[0], n));
                     lemma_sub_pure(slots@, 1, slots@.len() as int, n);
@@ -1862,7 +1993,13 @@ pub fn rank_expr(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -> 
             }
             Some(e)
         },
-        _ => Some(ci(0)),
+        _ => {
+            let e = ci(0);
+            proof {
+                assert(has_ty(e, arbitrary(), arbitrary(), ETy::Int));
+            }
+            Some(e)
+        },
     }
 }
 
@@ -1953,6 +2090,17 @@ fn mixed(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>, slots: &Vec<Expr>, e
     proof {
         lemma_xtys(xs@);
         lemma_stys(ts@);
+        assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ && #[trigger] typed(slots@, xetys_seq(xtys(xs@), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+            let xt = xtys(xs@);
+            assert forall|k: int| 0 <= k < ranks@.len() implies #[trigger] has_ty(ranks@[k].0, tv, lt, ETy::Int) by {
+                assert(split_ok(parts@[k]@, slots@, xt, k, enums@));
+                lemma_xetys_part(xt, k, enums@);
+                lemma_typed_sub(slots@, xetys_seq(xt, enums@), tv, lt, xoff(xt, k, enums@), xoff(xt, k, enums@) + xwidth(xt[k], enums@));
+                assert(typed(parts@[k]@, xetys(xt[k], enums@), tv, lt));
+                assert(rank_spec(xty(xs@[k]), parts@[k]@, sty(ts@[k]), enums@, ranks@[k].0));
+            }
+            assert(crate::ranking::ranks_int(ranks@, tv, lt));
+        }
         assert forall|m: nat| #[trigger] all_pure(slots@, m) implies pure_below(e, m) by {
             assert forall|k: int| 0 <= k < ranks@.len() implies pure_below(#[trigger] ranks@[k].0, m) by {
                 assert(split_ok(parts@[k]@, slots@, xtys(xs@), k, enums@));
@@ -2006,6 +2154,9 @@ pub fn rank_or_neg(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -
     let r = rank_expr(t, slots, st, enums)?;
     if is_bool_lit(&in_dom, true) {
         proof {
+            assert forall|tv: TyEnv, lt: Seq<ETy>|
+                fits_s(xty(*t), sty(*st)) && wf_stype(sty(*st), enums@) && small(sty(*st)) && tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(r, tv, lt, ETy::Int) by {
+            }
             assert forall|env: Env, ls: Seq<Value>, v: SVal|
                 fits_s(xty(*t), sty(*st)) && #[trigger] denotes(slots@, env, ls, v, xty(*t), enums@) && keys(
                     sty(*st),
@@ -2022,6 +2173,12 @@ pub fn rank_or_neg(t: &XType, slots: &Vec<Expr>, st: &SType, enums: &Vec<i64>) -
     } else {
         let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(-1));
         proof {
+            assert forall|tv: TyEnv, lt: Seq<ETy>|
+                fits_s(xty(*t), sty(*st)) && wf_stype(sty(*st), enums@) && small(sty(*st)) && tv.enums == enums@ && #[trigger] typed(slots@, xetys(xty(*t), enums@), tv, lt) implies has_ty(e, tv, lt, ETy::Int) by {
+                assert(has_ty(in_dom, tv, lt, ETy::Bool));
+                assert(has_ty(r, tv, lt, ETy::Int));
+                assert(has_ty(int_lit(-1i64), tv, lt, ETy::Int));
+            }
             assert forall|m: nat| #[trigger] all_pure(slots@, m) implies pure_below(e, m) by {
                 assert(pure_below(in_dom, m));
                 assert(pure_below(r, m));
