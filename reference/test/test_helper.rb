@@ -7,7 +7,7 @@ require_relative "../fmspec_reference"
 ROOT = File.expand_path("../..", __dir__)
 I64_MAX = 2**63 - 1
 
-# テスト用のモデル。Rust 側のテスト（crates/fmspec-cli/tests/common）と同じものを、独立に書いてある。
+# テスト用のモデル。Rust 側のテスト（crates/fmspec-search/tests/common）と同じものを、独立に書いてある。
 module Models
   module_function
 

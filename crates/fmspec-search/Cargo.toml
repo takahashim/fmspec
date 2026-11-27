@@ -11,5 +11,10 @@ fmspec-core = { path = "../fmspec-core" }
 hashbrown = { version = "0.17", default-features = false }
 rustc-hash = "2.1"
 
+[dev-dependencies]
+# 境界ケースのテスト（tests/boundary.rs）がモデルを JSON の IR から読み込む。fmspec-ir は fmspec-core にだけ依存するので循環しない。
+fmspec-ir = { path = "../fmspec-ir" }
+serde_json = "1"
+
 [lints]
 workspace = true
