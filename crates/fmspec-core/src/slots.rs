@@ -2,7 +2,7 @@
 //!
 //! 下ろしは、IRの式の値を、スロットごとの中核の式の列にする（[`crate::encoding`] の符号化）。
 //! ここにあるのは、その部品である。部品は、長さや型の合わない入力には `None` を返す。
-//! 下ろしは `None` を内部エラーにするので、`None` を返すことは健全性を損なわない。
+//! 下ろしは `None` を `Fail::Type`（内部エラー）にするので、`None` を返すことは健全性を損なわない。
 
 #[cfg(verus_keep_ghost)]
 use crate::bindings::eval_bound_body;

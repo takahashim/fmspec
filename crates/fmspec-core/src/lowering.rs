@@ -12,7 +12,8 @@
 //! 局所変数は外側から数えた添字で指すので、下ろした式は評価する深さに依存する。
 //! 束縛子を含む式は、作った深さでただちに束縛する。
 //!
-//! 下ろしは、型の合わない式や、長さの合わないスロットの列に対して `None` を返す。
+//! 下ろしは、型の合わない式や、長さの合わないスロットの列に対して `Fail::Type` を返し、
+//! 束縛の深さが上限に達すると `Fail::Depth` を返す。
 //!
 //! 下ろしが意味を保存することの補題は、[`crate::preserve`] と、式の種類ごとの `preserve_*.rs` にある。
 
@@ -2198,11 +2199,6 @@ fn low_opt(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r
     }
 }
 
-/// `forall` と `exists`。型の全体、Set の要素、Map のキー、List の要素をたどる。
-///
-/// 位置を1つの整数の局所変数でたどる。型の全体、Set、Mapでは位置は値の正規順での番号で、
-/// 束縛する値のスロットは番号から作る（[`unrank`]）。Listでは位置は添字で、スロットは
-/// その位置の要素のスロットを選ぶ。位置が対象に含まれるかは、ガードで表す。
 /// 量化でたどる値の型、位置が対象に含まれるかのガード、位置の数、束縛する値のスロットを求める。
 #[verifier::spinoff_prover]
 #[verifier::rlimit(80)]
@@ -2537,6 +2533,11 @@ fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
     }
 }
 
+/// `forall` と `exists`。型の全体、Set の要素、Map のキー、List の要素をたどる。
+///
+/// 位置を1つの整数の局所変数でたどる。型の全体、Set、Mapでは位置は値の正規順での番号で、
+/// 束縛する値のスロットは番号から作る（[`unrank`]）。Listでは位置は添字で、スロットは
+/// その位置の要素のスロットを選ぶ。位置が対象に含まれるかは、ガードで表す。
 #[verifier::spinoff_prover]
 #[verifier::rlimit(60)]
 fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<(XType, Vec<Expr>), Fail>)
