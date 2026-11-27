@@ -4,6 +4,7 @@
 //! 探索の順序は幅優先探索（`bfs`）と同じで、初期状態は与えられた順、操作は定義順、引数は辞書順である。
 //! 性質は検査しない。モデルの検査は `check` が判定ゲートを通して行う。
 
+use crate::claim::selected;
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
@@ -66,7 +67,7 @@ pub fn explore(
         }
         let state = g.states[cur].clone();
         for a in 0..model.raw().actions.len() {
-            if !cond.actions.get(a).copied().unwrap_or(false) {
+            if !selected(&cond.actions, a) {
                 continue;
             }
             let ts = match model.successors(a, &state) {

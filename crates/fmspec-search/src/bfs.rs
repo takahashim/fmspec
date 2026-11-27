@@ -3,7 +3,7 @@
 //! 初期状態は与えられた順に起点とし、操作は定義順、引数は辞書順に列挙する。したがって、状態不変条件の違反は遷移回数が最小の
 //! トレースで見つかり、同じ長さのトレースのうちでは、この列挙順で最初に見つかるものを返す。
 
-use fmspec_core::eval::ErrKind;
+use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
@@ -94,18 +94,6 @@ fn path(nodes: &[Node], mut id: usize) -> (Vec<i64>, Vec<TraceStep>) {
     (nodes[id].state.clone(), steps)
 }
 
-fn property_claim(
-    index: usize,
-    value: Result<bool, ErrKind>,
-    violated: fn(usize) -> Claim,
-    failed: fn(usize, ErrKind) -> Claim,
-) -> Claim {
-    match value {
-        Err(e) => failed(index, e),
-        Ok(_) => violated(index),
-    }
-}
-
 /// 幅優先探索で証拠を生成する。
 pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> SearchResult {
     let n_actions = model.raw().actions.len();
@@ -131,8 +119,7 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
         });
         visited.insert(&nodes, id);
         stats.visited_states = visited.len();
-        if let Some((i, v)) = model.invariants(cond, init) {
-            let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+        if let Some(claim) = invariant_claim(model, cond, init) {
             return finish(Evidence::Trace(init.clone(), Vec::new(), claim), stats);
         }
         queue.push_back(id);
@@ -145,7 +132,7 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
         let state = nodes[cur].state.clone();
         let mut enabled = false;
         for a in 0..n_actions {
-            if !cond.actions.get(a).copied().unwrap_or(false) {
+            if !selected(&cond.actions, a) {
                 continue;
             }
             let transitions = match model.successors(a, &state) {
@@ -159,7 +146,7 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
             for t in transitions {
                 enabled = true;
                 stats.transitions += 1;
-                if let Some((k, v)) = model.contracts(cond, a, &state, &t.args, &t.state, &t.output) {
+                if let Some(claim) = contract_claim(model, cond, a, &state, &t.args, &t.state, &t.output) {
                     let (start, mut steps) = path(&nodes, cur);
                     steps.push(TraceStep {
                         action: a,
@@ -167,7 +154,6 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                         output: t.output,
                         state: t.state,
                     });
-                    let claim = property_claim(k, v, Claim::Contract, Claim::ContractError);
                     return finish(Evidence::Trace(start, steps, claim), stats);
                 }
                 if visited.contains(&nodes, &t.state) {
@@ -177,25 +163,22 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                     return finish(Evidence::Unavailable(Limit::MaxStates), stats);
                 }
                 let id = nodes.len();
-                let violation = model.invariants(cond, &t.state);
+                let violation = invariant_claim(model, cond, &t.state);
                 nodes.push(Node {
                     state: t.state,
                     parent: Some((cur, a, t.args, t.output)),
                 });
                 visited.insert(&nodes, id);
                 stats.visited_states = visited.len();
-                if let Some((i, v)) = violation {
-                    let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
+                if let Some(claim) = violation {
                     return finish(trace(&nodes, id, claim), stats);
                 }
                 queue.push_back(id);
             }
         }
         if cond.deadlock && !enabled {
-            match model.terminal(&state) {
-                Ok(true) => {}
-                Ok(false) => return finish(trace(&nodes, cur, Claim::Deadlock), stats),
-                Err(e) => return finish(trace(&nodes, cur, Claim::TerminalError(e)), stats),
+            if let Some(claim) = deadlock_claim(model, &state) {
+                return finish(trace(&nodes, cur, claim), stats);
             }
         }
     }

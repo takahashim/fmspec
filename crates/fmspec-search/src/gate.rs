@@ -6,6 +6,7 @@
 //!
 //! 打ち切った検査は `Inconclusive` になる。打ち切る判断がどう誤っても、`Verified` や `Violated` の意味は変わらない。
 
+use crate::claim::selected;
 use fmspec_core::evidence::{Evidence, Limit};
 use fmspec_core::gate::{decide, CertCheck, CheckedModel, Verdict};
 use fmspec_core::model::{Expr, RawModel, Type};
@@ -58,15 +59,14 @@ fn domain_size(m: &RawModel, ty: &Type) -> u64 {
 /// 1つの状態の検査（対象の不変条件、対象の操作の全引数での遷移と遷移契約、終端条件）の評価回数の上限。
 pub fn state_cost(model: &CheckedModel, cond: &Conditions) -> u64 {
     let m = model.raw();
-    let on = |mask: &[bool], i: usize| mask.get(i).copied().unwrap_or(false);
     let mut cost: u64 = 1;
     for (i, inv) in m.invariants.iter().enumerate() {
-        if on(&cond.invariants, i) {
+        if selected(&cond.invariants, i) {
             cost = cost.saturating_add(expr_cost(inv));
         }
     }
     for (a, act) in m.actions.iter().enumerate() {
-        if !on(&cond.actions, a) {
+        if !selected(&cond.actions, a) {
             continue;
         }
         let args = act
@@ -81,7 +81,7 @@ pub fn state_cost(model: &CheckedModel, cond: &Conditions) -> u64 {
             per = per.saturating_add(expr_cost(&o.expr));
         }
         for (k, con) in m.contracts.iter().enumerate() {
-            if con.action == a && on(&cond.contracts, k) {
+            if con.action == a && selected(&cond.contracts, k) {
                 per = per.saturating_add(expr_cost(&con.expr));
             }
         }
