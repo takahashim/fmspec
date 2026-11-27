@@ -806,15 +806,6 @@ fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Op
     Some(acc)
 }
 
-/// 中核の型の既定値。Boolは偽、Intは範囲の最小値、Enumは最初のラベル。
-pub fn default_value(t: Type) -> (r: Value) {
-    match t {
-        Type::Bool => Value::Bool(false),
-        Type::Int(lo, _) => Value::Int(lo),
-        Type::Enum(id) => Value::Enum(id, 0),
-    }
-}
-
 /// 値の列を、定数の式の列にする。
 pub open spec fn lits(vs: Seq<Value>) -> Seq<Expr> {
     vs.map_values(|v: Value| Expr::Const(v))
