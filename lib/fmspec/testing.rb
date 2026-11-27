@@ -123,7 +123,12 @@ module Fmspec
       when :execution_error, :setup_error
         ["  #{r.exception.class}: #{r.exception.message}"] + locations
       when :inconclusive
-        ["  照合済み #{r.matched_steps} ステップ。未完了のケースを含む実行は、成功として扱いません"]
+        if r.reason == :incomplete_paths
+          ["  #{r.cases} 経路はすべて成功しましたが、テスト経路の探索を打ち切ったので、" \
+           "経路は到達可能な状態と入力の組の一部しか覆っていません。成功として扱いません"]
+        else
+          ["  照合済み #{r.matched_steps} ステップ。未完了のケースを含む実行は、成功として扱いません"]
+        end
       else ["  #{JSON.generate(r.detail)}"]
       end
     end
@@ -373,6 +378,24 @@ module Fmspec
     end
   end
 
+  # テスト経路（`Model#test_paths` の結果）。操作列の配列で、経路を作った探索の報告を持つ。
+  class TestPaths < Array
+    # 経路で覆う対象（状態と入力の組で、有効な遷移があるもの）の数と、経路が覆った数。
+    attr_reader :targets, :covered
+
+    def initialize(paths, complete:, targets:, covered:)
+      super(paths)
+      @complete = complete
+      @targets = targets
+      @covered = covered
+    end
+
+    # 到達可能な状態をすべて探索したか。偽なら（状態数の上限か評価エラーで打ち切った）、
+    # 経路は到達可能な状態と入力の組の一部しか覆っていない。`Model#test(paths:)` は、全経路が成功しても
+    # :passed にせず、:inconclusive（理由は :incomplete_paths）にする。
+    def complete? = @complete
+  end
+
   # テスト実行の全体。ケースを順に実行し、最初の失敗を縮小して報告する。
   class TestRun
     FAILURES = %i[conformance_failure execution_error].freeze
@@ -420,6 +443,8 @@ module Fmspec
 
     # 操作列を1つずつケースとして再実行する。最初の失敗を縮小して報告する。
     # 実装が別の遷移を選んで操作列をたどれなくなったケースは :inconclusive（invalid_input）として記録し、残りを続ける。
+    # 探索を打ち切って作ったテスト経路（`TestPaths#complete?` が偽）では、全経路が成功しても :passed にせず、
+    # :inconclusive（理由は incomplete_paths）にする。経路は到達可能な状態と入力の組の一部しか覆っていない。
     def run_paths(paths)
       matched = 0
       inconclusive = nil
@@ -435,6 +460,10 @@ module Fmspec
         return failure(outcome, @seed, i + 1, matched)
       end
       return result(inconclusive[0], @seed, paths.length, matched) if inconclusive
+      if paths.is_a?(TestPaths) && !paths.complete?
+        outcome = TestCase::Outcome.new(:inconclusive, [], 0, { "reason" => "incomplete_paths" }, nil)
+        return result(outcome, @seed, paths.length, matched)
+      end
 
       passed(paths.length, matched)
     end
@@ -455,7 +484,8 @@ module Fmspec
       options = @options.slice("actions").merge("max_steps" => max_steps, "inject" => @case.inject)
       options["max_states"] = max_states if max_states
       body = TestRun.graph_body(@native.test_paths(JSON.generate(options)))
-      body["paths"].map { |path| path["inputs"].map { |input| @case.decode_input(input) } }
+      paths = body["paths"].map { |path| path["inputs"].map { |input| @case.decode_input(input) } }
+      TestPaths.new(paths, complete: body["complete"], targets: body["targets"], covered: body["covered"])
     end
 
     private

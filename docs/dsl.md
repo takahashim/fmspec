@@ -867,7 +867,7 @@ result.assert_passed!
 | `actions:` | 対象の操作の名前の配列 |
 | `shrink:`、`shrink_runs:` | 失敗した操作列を縮小するか、縮小で再実行する回数の上限 |
 | `replay:` | 操作列（`TestResult#inputs`）か、モデル検査のトレース（`Result#trace`）。生成せずに、その操作列を1回だけ再実行する |
-| `paths:` | 操作列の配列。生成せずに、各操作列を1ケースとして再実行する。`true` なら `test_paths` で作る（`steps:` が1経路の最大ステップ数） |
+| `paths:` | 操作列の配列。生成せずに、各操作列を1ケースとして再実行する。`true` なら `test_paths` で作る（`steps:` が1経路の最大ステップ数）。探索を打ち切って作った経路では、全経路が成功しても `:inconclusive`（理由は `:incomplete_paths`）になる |
 | `max_candidates:` | 候補状態の数の上限 |
 
 ### 非決定性と部分観測
@@ -1043,6 +1043,12 @@ Tickets.test(binding, paths: true, steps: 20).assert_passed!
 まだ覆っていない組を探索順に1つずつ取り、その状態への最短の操作列にその入力を続け、さらに遷移先から覆っていない組を貪欲にたどって延ばす。
 初期状態から `max_steps:` 以内で届かない組は覆わない。
 オプションは `max_steps:`、`max_states:`（探索の状態数の上限）、`actions:` である。
+
+結果は操作列の配列（`Fmspec::TestPaths`、`Array` の子）で、経路を作った探索の報告を持つ。
+`complete?` は到達可能な状態をすべて探索したかで、状態数の上限か評価エラーで探索を打ち切ると偽になる。
+`targets` は覆う対象（状態と入力の組で、有効な遷移があるもの）の数、`covered` は経路が覆った数である。
+`complete?` が偽の経路は、到達可能な状態と入力の組の一部しか覆わない。
+`test(paths:)` にそのまま渡すと、全経路が成功しても `:passed` にせず、`:inconclusive`（理由は `:incomplete_paths`）にする（失敗はそのまま報告する）。
 
 入力は、公開引数と、binding が注入する内部選択の値である。
 注入しない内部選択がある操作では、仕様が最初に列挙した遷移をたどる前提で操作列を作る。
