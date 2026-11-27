@@ -14,9 +14,11 @@ use crate::encoding::{lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_stys, list_items_member, map_rows_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, members, models_seq, sty, stys, STy, SVal, XTy};
+use crate::encoding::{member, members, models_seq, sty, stys, xwidth, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, same_kind, Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::*;
 #[cfg(verus_keep_ghost)]
 use crate::maps::lemma_none_rows;
 #[cfg(verus_keep_ghost)]
@@ -25,6 +27,8 @@ use crate::model::{BinOp, Expr, Value};
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::slots::{and_s, bool_lit, implies_s, split_ok, tree_s, Join};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -558,14 +562,34 @@ proof fn lemma_kinds_items(items: Seq<SVal>, t: STy, enums: Seq<i64>)
 /// スロットが純粋なら `c` も純粋である。
 pub open spec fn eq_ok(t: XTy, x: Seq<Expr>, y: Seq<Expr>, c: Expr, enums: Seq<i64>) -> bool {
     &&& forall|n: nat| all_pure(x, n) && all_pure(y, n) ==> #[trigger] pure_below(c, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys(t, enums), tv, lt) && #[trigger] typed(y, xetys(t, enums), tv, lt) ==> has_ty(c, tv, lt, ETy::Bool)
     &&& forall|env: Env, l: Seq<Value>, vx: SVal, vy: SVal|
         #[trigger] denotes(x, env, l, vx, t, enums) && #[trigger] denotes(y, env, l, vy, t, enums) ==> eval_l(c, env, l)
             == Ok::<Value, ErrKind>(Value::Bool(vx == vy))
 }
 
+/// 等しさの式は、両辺に型が付けば Bool の型を持つ。
+pub proof fn lemma_eq_ok_typed(t: XTy, x: Seq<Expr>, y: Seq<Expr>, c: Expr, enums: Seq<i64>, tv: TyEnv, lt: Seq<ETy>)
+    requires
+        eq_ok(t, x, y, c, enums),
+        typed(x, xetys(t, enums), tv, lt),
+        typed(y, xetys(t, enums), tv, lt),
+    ensures
+        has_ty(c, tv, lt, ETy::Bool),
+{
+}
+
 /// 組の各部分の等しさの式をすべて満たすことは、組の等しさである。
 pub open spec fn eq_seq_ok(ts: Seq<XTy>, x: Seq<Expr>, y: Seq<Expr>, c: Expr, enums: Seq<i64>) -> bool {
     &&& forall|n: nat| all_pure(x, n) && all_pure(y, n) ==> #[trigger] pure_below(c, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys_seq(ts, enums), tv, lt) && #[trigger] typed(y, xetys_seq(ts, enums), tv, lt) ==> has_ty(
+            c,
+            tv,
+            lt,
+            ETy::Bool,
+        )
     &&& forall|env: Env, l: Seq<Value>, vs1: Seq<SVal>, vs2: Seq<SVal>|
         clean(x, env, l) && clean(y, env, l) && #[trigger] models_seq(slot_vals(x, env, l), vs1, ts, enums)
             && #[trigger] models_seq(slot_vals(y, env, l), vs2, ts, enums) ==> eval_l(c, env, l) == Ok::<Value, ErrKind>(
@@ -585,6 +609,12 @@ pub proof fn lemma_eq_scalar(t: XTy, x: Seq<Expr>, y: Seq<Expr>, enums: Seq<i64>
     let c = Expr::Bin(BinOp::Eq, Box::new(x[0]), Box::new(y[0]));
     assert forall|n: nat| all_pure(x, n) && all_pure(y, n) implies #[trigger] pure_below(c, n) by {
         assert(pure_below(x[0], n) && pure_below(y[0], n));
+    }
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys(t, enums), tv, lt) && #[trigger] typed(y, xetys(t, enums), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) by {
+        assert(xetys(t, enums).len() == 1);
+        assert(has_ty(x[0], tv, lt, xetys(t, enums)[0]));
+        assert(has_ty(y[0], tv, lt, xetys(t, enums)[0]));
     }
     assert forall|env: Env, l: Seq<Value>, vx: SVal, vy: SVal|
         #[trigger] denotes(x, env, l, vx, t, enums) && #[trigger] denotes(y, env, l, vy, t, enums) implies eval_l(
@@ -635,6 +665,20 @@ pub proof fn lemma_eq_option(inner: XTy, x: Seq<Expr>, y: Seq<Expr>, rest: Expr,
         assert(pure_below(rest, n));
         assert(pure_below(e0, n));
         assert(pure_below(imp, n));
+    }
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys(t, enums), tv, lt) && #[trigger] typed(y, xetys(t, enums), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) by {
+        let ys = xetys(inner, enums);
+        assert(xetys(t, enums) == seq![ETy::Bool] + ys);
+        assert((seq![ETy::Bool] + ys)[0] == ETy::Bool);
+        assert(has_ty(x[0], tv, lt, (seq![ETy::Bool] + ys)[0]));
+        assert(has_ty(y[0], tv, lt, (seq![ETy::Bool] + ys)[0]));
+        lemma_typed_sub(x, seq![ETy::Bool] + ys, tv, lt, 1, x.len() as int);
+        lemma_typed_sub(y, seq![ETy::Bool] + ys, tv, lt, 1, y.len() as int);
+        assert((seq![ETy::Bool] + ys).subrange(1, x.len() as int) =~= ys);
+        assert(has_ty(rest, tv, lt, ETy::Bool));
+        assert(has_ty(e0, tv, lt, ETy::Bool));
+        assert(has_ty(imp, tv, lt, ETy::Bool));
     }
     assert forall|env: Env, l: Seq<Value>, vx: SVal, vy: SVal|
         #[trigger] denotes(x, env, l, vx, t, enums) && #[trigger] denotes(y, env, l, vy, t, enums) implies eval_l(
@@ -725,6 +769,23 @@ pub proof fn lemma_eq_parts(
         }
         lemma_tree_pure(items, bool_lit(true), Join::And, n);
     }
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys_seq(ts, enums), tv, lt) && #[trigger] typed(y, xetys_seq(ts, enums), tv, lt) implies has_ty(
+        c,
+        tv,
+        lt,
+        ETy::Bool,
+    ) by {
+        assert forall|i: int| 0 <= i < items.len() implies #[trigger] has_ty(items[i], tv, lt, ETy::Bool) by {
+            assert(split_ok(xs[i], x, ts, i, enums));
+            assert(split_ok(ys[i], y, ts, i, enums));
+            assert(eq_ok(ts[i], xs[i], ys[i], items[i], enums));
+            lemma_xetys_part(ts, i, enums);
+            lemma_typed_sub(x, xetys_seq(ts, enums), tv, lt, xoff(ts, i, enums), xoff(ts, i, enums) + xwidth(ts[i], enums));
+            lemma_typed_sub(y, xetys_seq(ts, enums), tv, lt, xoff(ts, i, enums), xoff(ts, i, enums) + xwidth(ts[i], enums));
+        }
+        lemma_tree_typed(items, bool_lit(true), Join::And, tv, lt, ETy::Bool);
+    }
     assert forall|env: Env, l: Seq<Value>, vs1: Seq<SVal>, vs2: Seq<SVal>|
         clean(x, env, l) && clean(y, env, l) && #[trigger] models_seq(slot_vals(x, env, l), vs1, ts, enums)
             && #[trigger] models_seq(slot_vals(y, env, l), vs2, ts, enums) implies eval_l(c, env, l) == Ok::<
@@ -779,6 +840,10 @@ pub proof fn lemma_eq_tuple(t: XTy, ts: Seq<XTy>, x: Seq<Expr>, y: Seq<Expr>, c:
     ensures
         eq_ok(t, x, y, c, enums),
 {
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys(t, enums), tv, lt) && #[trigger] typed(y, xetys(t, enums), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) by {
+        assert(xetys(t, enums) == xetys_seq(ts, enums));
+    }
     assert forall|env: Env, l: Seq<Value>, vx: SVal, vy: SVal|
         #[trigger] denotes(x, env, l, vx, t, enums) && #[trigger] denotes(y, env, l, vy, t, enums) implies eval_l(
         c,
@@ -824,6 +889,14 @@ pub proof fn lemma_eq_coll(t: XTy, x: Seq<Expr>, y: Seq<Expr>, items: Seq<Expr>,
             assert(pure_below(x[i], n) && pure_below(y[i], n));
         }
         lemma_tree_pure(items, bool_lit(true), Join::And, n);
+    }
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        typed(x, xetys(t, enums), tv, lt) && #[trigger] typed(y, xetys(t, enums), tv, lt) implies has_ty(c, tv, lt, ETy::Bool) by {
+        assert forall|i: int| 0 <= i < items.len() implies #[trigger] has_ty(items[i], tv, lt, ETy::Bool) by {
+            assert(has_ty(x[i], tv, lt, xetys(t, enums)[i]));
+            assert(has_ty(y[i], tv, lt, xetys(t, enums)[i]));
+        }
+        lemma_tree_typed(items, bool_lit(true), Join::And, tv, lt, ETy::Bool);
     }
     assert forall|env: Env, l: Seq<Value>, vx: SVal, vy: SVal|
         #[trigger] denotes(x, env, l, vx, t, enums) && #[trigger] denotes(y, env, l, vy, t, enums) implies eval_l(

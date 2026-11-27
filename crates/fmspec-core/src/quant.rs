@@ -5,6 +5,8 @@
 //! そのため、たどる順は値の正規順になる。
 
 #[cfg(verus_keep_ghost)]
+use crate::canon::{slot_tys, slot_tys_seq};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, sty, stys, STy, SVal};
 use crate::encoding::{keys_exec, SType};
 #[cfg(verus_keep_ghost)]
@@ -12,12 +14,16 @@ use crate::encoding::{lemma_default_len, lemma_keys_pos, lemma_stys, wf_stype, w
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
 #[cfg(verus_keep_ghost)]
+use crate::equality::{small, smalls};
+#[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, decode, quant_l};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_product_len, product};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::*;
 #[cfg(verus_keep_ghost)]
 use crate::model::Type;
 use crate::model::{BinOp, Expr, Value};
@@ -28,6 +34,8 @@ use crate::slots::{bin, cb, ci, defaults, eq, ite};
 use crate::slots::{ite_s, lits};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_qstate, eval_src, qresult, select_bits, src_bool, QState, SEnv, TExpr};
+#[cfg(verus_keep_ghost)]
+use crate::typing::{ETy, TyEnv};
 #[cfg(verus_keep_ghost)]
 use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
@@ -42,6 +50,13 @@ pub open spec fn at_rank(r: Expr, env: Env, l: Seq<Value>, i: i64) -> bool {
 /// `r` が番号 `i` になるなら、`xs` は型 `t` の正規順で `i` 番目の値の符号化になる。
 pub open spec fn unrank_ok(t: STy, r: Expr, xs: Seq<Expr>, enums: Seq<i64>) -> bool {
     &&& forall|n: nat| pure_below(r, n) ==> #[trigger] all_pure(xs, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        wf_stype(t, enums) && small(t) && tv.enums == enums && #[trigger] has_ty(r, tv, lt, ETy::Int) ==> typed(
+            xs,
+            etys(slot_tys(t, enums)),
+            tv,
+            lt,
+        )
     &&& forall|env: Env, l: Seq<Value>, i: i64|
         #[trigger] at_rank(r, env, l, i) && keys(t, enums) is Some && 0 <= i < keys(t, enums)->0 ==> clean(xs, env, l)
             && slot_vals(xs, env, l) == enc(domain(t, enums)[i as int], t, enums)
@@ -50,6 +65,13 @@ pub open spec fn unrank_ok(t: STy, r: Expr, xs: Seq<Expr>, enums: Seq<i64>) -> b
 /// [`unrank_ok`] の、要素の型の列についての形。値の組は辞書順の列 [`product`] の `i` 番目である。
 pub open spec fn unrank_seq_ok(ts: Seq<STy>, r: Expr, xs: Seq<Expr>, enums: Seq<i64>) -> bool {
     &&& forall|n: nat| pure_below(r, n) ==> #[trigger] all_pure(xs, n)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>|
+        wf_stypes(ts, enums) && smalls(ts) && tv.enums == enums && #[trigger] has_ty(r, tv, lt, ETy::Int) ==> typed(
+            xs,
+            etys(slot_tys_seq(ts, enums)),
+            tv,
+            lt,
+        )
     &&& forall|env: Env, l: Seq<Value>, i: i64|
         #[trigger] at_rank(r, env, l, i) && keys_product(ts, enums) is Some && 0 <= i < keys_product(ts, enums)->0
             ==> clean(xs, env, l) && slot_vals(xs, env, l) == enc_seq(product(ts, enums)[i as int], ts, enums)
@@ -105,6 +127,13 @@ proof fn lemma_cmp_eval(op: BinOp, r: Expr, k: i64, env: Env, l: Seq<Value>, i: 
 fn unrank_enum(id: usize, n: i64, r: &Expr) -> (x: Expr)
     ensures
         forall|m: nat| pure_below(*r, m) ==> #[trigger] pure_below(x, m),
+        forall|tv: TyEnv, lt: Seq<ETy>|
+            id < tv.enums.len() && n == tv.enums[id as int] && n >= 1 && #[trigger] has_ty(*r, tv, lt, ETy::Int) ==> has_ty(
+                x,
+                tv,
+                lt,
+                ETy::Enum(id),
+            ),
         forall|env: Env, l: Seq<Value>, i: i64|
             #[trigger] at_rank(*r, env, l, i) && 0 <= i < n ==> eval_l(x, env, l) == Ok::<Value, ErrKind>(
                 Value::Enum(id, i),
@@ -123,12 +152,31 @@ fn unrank_enum(id: usize, n: i64, r: &Expr) -> (x: Expr)
                 #[trigger] at_rank(*r, env, l, i) && k <= i < n ==> eval_l(acc, env, l) == Ok::<Value, ErrKind>(
                     Value::Enum(id, i),
                 ),
+            forall|tv: TyEnv, lt: Seq<ETy>|
+                id < tv.enums.len() && n == tv.enums[id as int] && #[trigger] has_ty(*r, tv, lt, ETy::Int) ==> has_ty(
+                    acc,
+                    tv,
+                    lt,
+                    ETy::Enum(id),
+                ),
         decreases k,
     {
         k -= 1;
         let ghost prev = acc;
         acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, k)), acc);
         proof {
+            assert forall|tv: TyEnv, lt: Seq<ETy>|
+                id < tv.enums.len() && n == tv.enums[id as int] && #[trigger] has_ty(*r, tv, lt, ETy::Int) implies has_ty(
+                acc,
+                tv,
+                lt,
+                ETy::Enum(id),
+            ) by {
+                assert(has_ty(prev, tv, lt, ETy::Enum(id)));
+                assert(has_ty(Expr::Const(Value::Int(k)), tv, lt, ETy::Int));
+                assert(has_ty(Expr::Const(Value::Enum(id, k)), tv, lt, ETy::Enum(id)));
+                assert(has_ty(eq_s(*r, k), tv, lt, ETy::Bool));
+            }
             assert forall|m: nat| pure_below(*r, m) implies #[trigger] pure_below(acc, m) by {
                 lemma_bin_const_pure(BinOp::Eq, *r, k, m);
                 assert(pure_below(prev, m));
@@ -177,6 +225,12 @@ pub fn unrank(t: &SType, r: &Expr, enums: &Vec<i64>) -> (out: Option<Vec<Expr>>)
                 assert forall|n: nat| pure_below(*r, n) implies #[trigger] all_pure(out@, n) by {
                     lemma_bin_const_pure(BinOp::Gt, *r, 0, n);
                 }
+                assert forall|tv: TyEnv, lt: Seq<ETy>|
+                    wf_stype(sty(*t), enums@) && small(sty(*t)) && tv.enums == enums@ && #[trigger] has_ty(*r, tv, lt, ETy::Int) implies typed(out@, etys(slot_tys(sty(*t), enums@)), tv, lt) by {
+                    assert(etys(seq![Type::Bool]) =~= seq![ETy::Bool]);
+                    assert(has_ty(Expr::Const(Value::Int(0)), tv, lt, ETy::Int));
+                    assert(has_ty(out@[0], tv, lt, ETy::Bool));
+                }
             }
             Some(out)
         },
@@ -198,6 +252,14 @@ pub fn unrank(t: &SType, r: &Expr, enums: &Vec<i64>) -> (out: Option<Vec<Expr>>)
                 assert forall|n: nat| pure_below(*r, n) implies #[trigger] all_pure(out@, n) by {
                     lemma_bin_const_pure(BinOp::Add, *r, *lo, n);
                 }
+                assert forall|tv: TyEnv, lt: Seq<ETy>|
+                    wf_stype(sty(*t), enums@) && small(sty(*t)) && tv.enums == enums@ && #[trigger] has_ty(*r, tv, lt, ETy::Int) implies typed(out@, etys(slot_tys(sty(*t), enums@)), tv, lt) by {
+                    let hi = sty(*t)->Int_1;
+                    assert(etys(seq![Type::Int(*lo, hi)]) =~= seq![ETy::Int]);
+                    assert(has_ty(Expr::Const(Value::Int(*lo)), tv, lt, ETy::Int));
+                    assert(has_ty(out@[0], tv, lt, ETy::Int));
+                }
+
             }
             Some(out)
         },
@@ -221,6 +283,12 @@ pub fn unrank(t: &SType, r: &Expr, enums: &Vec<i64>) -> (out: Option<Vec<Expr>>)
                 assert forall|n: nat| pure_below(*r, n) implies #[trigger] all_pure(out@, n) by {
                     assert(pure_below(out@[0], n));
                 }
+                assert forall|tv: TyEnv, lt: Seq<ETy>|
+                    wf_stype(sty(*t), enums@) && small(sty(*t)) && tv.enums == enums@ && #[trigger] has_ty(*r, tv, lt, ETy::Int) implies typed(out@, etys(slot_tys(sty(*t), enums@)), tv, lt) by {
+                    assert(etys(seq![Type::Enum(*id)]) =~= seq![ETy::Enum(*id)]);
+                    assert(has_ty(out@[0], tv, lt, ETy::Enum(*id)));
+                }
+
             }
             Some(out)
         },
@@ -292,6 +360,15 @@ proof fn lemma_unrank_tuple(t: STy, ts: Seq<STy>, r: Expr, xs: Seq<Expr>, enums:
     ensures
         unrank_ok(t, r, xs, enums),
 {
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        wf_stype(t, enums) && small(t) && tv.enums == enums && #[trigger] has_ty(r, tv, lt, ETy::Int) implies typed(
+        xs,
+        etys(slot_tys(t, enums)),
+        tv,
+        lt,
+    ) by {
+        assert(slot_tys(t, enums) == slot_tys_seq(ts, enums));
+    }
     assert forall|env: Env, l: Seq<Value>, i: i64|
         #[trigger] at_rank(r, env, l, i) && keys(t, enums) is Some && 0 <= i < keys(t, enums)->0 implies clean(
         xs,
@@ -323,6 +400,32 @@ proof fn lemma_unrank_option(x: STy, r: Expr, ds: Seq<Expr>, us: Seq<Expr>, tag:
     let t = STy::Option(Box::new(x));
     let r1 = Expr::Bin(BinOp::Sub, Box::new(r), Box::new(Expr::Const(Value::Int(1))));
     let xs = tag + pv;
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        wf_stype(t, enums) && small(t) && tv.enums == enums && #[trigger] has_ty(r, tv, lt, ETy::Int) implies typed(
+        xs,
+        etys(slot_tys(t, enums)),
+        tv,
+        lt,
+    ) by {
+        let ys = etys(slot_tys(x, enums));
+        lemma_etys_concat(seq![Type::Bool], slot_tys(x, enums));
+        assert(etys(seq![Type::Bool]) =~= seq![ETy::Bool]);
+        assert(has_ty(Expr::Const(Value::Int(1)), tv, lt, ETy::Int));
+        assert(has_ty(Expr::Const(Value::Int(0)), tv, lt, ETy::Int));
+        assert(has_ty(r1, tv, lt, ETy::Int));
+        assert(typed(us, ys, tv, lt));
+        lemma_defaults_typed(x, tv, lt);
+        assert(typed(ds, ys, tv, lt));
+        assert(has_ty(eq_s(r, 0), tv, lt, ETy::Bool));
+        assert forall|q: int| 0 <= q < xs.len() implies #[trigger] has_ty(xs[q], tv, lt, (seq![ETy::Bool] + ys)[q]) by {
+            if q >= 1 {
+                assert(xs[q] == pv[q - 1]);
+                assert(has_ty(ds[q - 1], tv, lt, ys[q - 1]) && has_ty(us[q - 1], tv, lt, ys[q - 1]));
+            } else {
+                assert(xs[0] == tag[0]);
+            }
+        }
+    }
     assert forall|n: nat| pure_below(r, n) implies #[trigger] all_pure(xs, n) by {
         lemma_bin_const_pure(BinOp::Sub, r, 1, n);
         lemma_bin_const_pure(BinOp::Eq, r, 0, n);
@@ -471,6 +574,23 @@ proof fn lemma_unrank_seq_step(tn: Seq<STy>, r: Expr, k: i64, pv: Seq<Expr>, lv:
 {
     let q = Expr::Bin(BinOp::Div, Box::new(r), Box::new(Expr::Const(Value::Int(k))));
     let m = Expr::Bin(BinOp::Mod, Box::new(r), Box::new(Expr::Const(Value::Int(k))));
+    assert forall|tv: TyEnv, lt: Seq<ETy>|
+        wf_stypes(tn, enums) && smalls(tn) && tv.enums == enums && #[trigger] has_ty(r, tv, lt, ETy::Int) implies typed(
+        pv + lv,
+        etys(slot_tys_seq(tn, enums)),
+        tv,
+        lt,
+    ) by {
+        assert(has_ty(Expr::Const(Value::Int(k)), tv, lt, ETy::Int));
+        assert(has_ty(q, tv, lt, ETy::Int));
+        assert(has_ty(m, tv, lt, ETy::Int));
+        assert(wf_stypes(tn.drop_last(), enums) && wf_stype(tn.last(), enums));
+        assert(smalls(tn.drop_last()) && small(tn.last()));
+        assert(typed(pv, etys(slot_tys_seq(tn.drop_last(), enums)), tv, lt));
+        assert(typed(lv, etys(slot_tys(tn.last(), enums)), tv, lt));
+        lemma_etys_concat(slot_tys_seq(tn.drop_last(), enums), slot_tys(tn.last(), enums));
+        lemma_typed_concat(pv, etys(slot_tys_seq(tn.drop_last(), enums)), lv, etys(slot_tys(tn.last(), enums)), tv, lt);
+    }
     assert forall|n: nat| pure_below(r, n) implies #[trigger] all_pure(pv + lv, n) by {
         lemma_bin_const_pure(BinOp::Div, r, k, n);
         lemma_bin_const_pure(BinOp::Mod, r, k, n);
@@ -546,6 +666,8 @@ pub proof fn lemma_vals_weaken(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq
 /// `x` は、番号 `r` が `lo..hi` にあれば、その位置の式 `fs[r]` と同じ値になる。
 pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> bool {
     &&& forall|m: nat| pure_below(r, m) && all_pure(fs, m) ==> #[trigger] pure_below(x, m)
+    &&& forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+        lo < hi && has_ty(r, tv, lt, ETy::Int) && #[trigger] all_ty(fs, y, tv, lt) ==> has_ty(x, tv, lt, y)
     &&& forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
         #[trigger] at_rank(r, env, l, i) && #[trigger] vals_at(fs, vals, env, l) && lo <= i < hi ==> eval_l(x, env, l)
             == Ok::<Value, ErrKind>(vals[i as int])
@@ -577,6 +699,7 @@ pub(crate) fn pick_slot(fs: &Vec<Expr>, r: &Expr) -> (x: Expr)
         fs@.len() <= 0x7fff_ffff,
     ensures
         picks(x, fs@, *r),
+        fs@.len() == 0 ==> x == crate::slots::bool_lit(false),
 {
     if fs.len() == 0 {
         return cb(false);
@@ -603,6 +726,10 @@ fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
             ) == Ok::<Value, ErrKind>(vals[i as int]) by {
                 assert(i == lo);
             }
+            assert forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+                lo < hi && has_ty(*r, tv, lt, ETy::Int) && #[trigger] all_ty(fs@, y, tv, lt) implies has_ty(x, tv, lt, y) by {
+                assert(has_ty(fs@[lo as int], tv, lt, y));
+            }
         }
         return x;
     }
@@ -615,6 +742,12 @@ fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
         assert forall|m: nat| pure_below(*r, m) && all_pure(fs@, m) implies #[trigger] pure_below(x, m) by {
             lemma_bin_const_pure(BinOp::Lt, *r, mid as i64, m);
             assert(pure_below(a, m) && pure_below(b, m));
+        }
+        assert forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
+            lo < hi && has_ty(*r, tv, lt, ETy::Int) && #[trigger] all_ty(fs@, y, tv, lt) implies has_ty(x, tv, lt, y) by {
+            assert(has_ty(Expr::Const(Value::Int(mid as i64)), tv, lt, ETy::Int));
+            assert(has_ty(c, tv, lt, ETy::Bool));
+            assert(has_ty(a, tv, lt, y) && has_ty(b, tv, lt, y));
         }
         assert forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
             #[trigger] at_rank(*r, env, l, i) && #[trigger] vals_at(fs@, vals, env, l) && lo <= i < hi implies eval_l(
