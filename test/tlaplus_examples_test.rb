@@ -91,7 +91,19 @@ class TlaplusExamplesTest < Minitest::Test
                             config: "SPECIFICATION ISpec\nCONSTANTS\nSend <- MCSend\nReply <- MCReply\n" \
                                     "InitMemInt <- MCInitMemInt\nProc = {p1, p2}\nAdr = {a1, a2, a3}\nVal = {v1, v2}\n" \
                                     "NoVal = NoVal",
-                            type_ok: %w[TypeInvariant], invariants: {}, deadlock: true, expected: 4408 }
+                            type_ok: %w[TypeInvariant], invariants: {}, deadlock: true, expected: 4408 },
+    # German のキャッシュコヒーレンスのプロトコル。元の設定は SYMMETRY でノード（とデータ）の入れ替えをまとめるが、
+    # fmspec に対称性の削減はないので、SYMMETRY を外して TLC にかける。manifest.json の数は対称性で削減した数なので比べない。
+    "GermanControl" => { model: "german_control", config: "CONSTANTS\nNODE = {n1, n2}\nNoNode = noNode\nSPECIFICATION Spec",
+                         type_ok: %w[TypeOK], invariants: { "Coherence" => "coherence" }, deadlock: true, expected: nil },
+    "GermanData" => { model: "german_data",
+                      config: "CONSTANTS\nNODE = {n1, n2}\nDATA = {d1, d2}\nNoData = noData\nNoNode = noNode\nSPECIFICATION Spec",
+                      type_ok: %w[TypeOK],
+                      invariants: { "Coherence" => "coherence", "DataProp" => "data_prop",
+                                    "TransactionConsistency" => "transaction_consistency",
+                                    "DirectoryAccurate" => "directory_accurate", "ExclusiveIsolation" => "exclusive_isolation",
+                                    "WritebackCarriesLatest" => "writeback_carries_latest" },
+                      deadlock: true, expected: nil }
   }.freeze
 
   def setup
