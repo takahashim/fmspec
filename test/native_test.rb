@@ -159,6 +159,37 @@ class NativeTest < Minitest::Test
     end
   end
 
+  Counters = Struct.new(:c0, :c1, :c2)
+
+  def huge_binding
+    huge.bind do
+      setup { Counters.new(0, 0, 0) }
+      3.times { |i| command(:"inc#{i}") { |c| c[i] += 1 } }
+      3.times { |i| observe(:"c#{i}") { |c| c[i] } }
+    end
+  end
+
+  def test_coverage_and_test_paths_can_be_interrupted_by_timeout
+    binding = huge_binding
+    tested = huge.test(binding, cases: 1, steps: 3, seed: 1)
+    [-> { tested.coverage }, -> { huge.test_paths(binding) }].each do |collect|
+      started = now
+      assert_raises(Timeout::Error) { Timeout.timeout(0.3) { collect.call } }
+      assert_operator now - started, :<, 3.0, "中断に時間がかかりすぎている"
+    end
+  end
+
+  def test_coverage_and_test_paths_have_a_time_limit
+    binding = huge_binding
+    tested = huge.test(binding, cases: 1, steps: 3, seed: 1)
+    each_interrupt_without_exception do |kind|
+      refute_predicate tested.coverage(max_time_ms: 300), :complete?, kind
+      paths = huge.test_paths(binding, max_time_ms: 300)
+      refute_predicate paths, :complete?, kind
+      assert_operator paths.covered, :<, paths.targets, kind
+    end
+  end
+
   # 検査の間、GVL を解放している。
   def test_other_ruby_threads_run_during_a_check
     ticks = 0

@@ -994,7 +994,7 @@ Conformance failure: tickets / sold
 ### カバレッジ
 
 `TestResult#coverage` は、テストが確実に通った仕様の状態と遷移を、到達可能な状態と遷移と比べる。
-到達可能な状態と遷移は、`coverage` を呼んだときに探索する（`max_states:` でその探索の状態数の上限を指定できる）。
+到達可能な状態と遷移は、`coverage` を呼んだときに探索する（`max_states:` と `max_time_ms:` で、その探索の状態数と時間の上限を指定できる。上限で打ち切ると `complete?` が偽になる）。
 対象の操作は、`test` の `actions:` と同じである。
 
 ```ruby
@@ -1042,10 +1042,10 @@ Tickets.test(binding, paths: true, steps: 20).assert_passed!
 
 まだ覆っていない組を探索順に1つずつ取り、その状態への最短の操作列にその入力を続け、さらに遷移先から覆っていない組を貪欲にたどって延ばす。
 初期状態から `max_steps:` 以内で届かない組は覆わない。
-オプションは `max_steps:`、`max_states:`（探索の状態数の上限）、`actions:` である。
+オプションは `max_steps:`、`max_states:`（探索の状態数の上限）、`max_time_ms:`（探索の時間の上限）、`actions:` である。
 
 結果は操作列の配列（`Fmspec::TestPaths`、`Array` の子）で、経路を作った探索の報告を持つ。
-`complete?` は到達可能な状態をすべて探索したかで、状態数の上限か評価エラーで探索を打ち切ると偽になる。
+`complete?` は到達可能な状態をすべて探索したかで、状態数か時間の上限、評価エラーで探索を打ち切ると偽になる。
 `targets` は覆う対象（状態と入力の組で、有効な遷移があるもの）の数、`covered` は経路が覆った数である。
 `complete?` が偽の経路は、到達可能な状態と入力の組の一部しか覆わない。
 `test(paths:)` にそのまま渡すと、全経路が成功しても `:passed` にせず、`:inconclusive`（理由は `:incomplete_paths`）にする（失敗はそのまま報告する）。

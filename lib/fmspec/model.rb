@@ -163,16 +163,18 @@ module Fmspec
     # テスト経路を作る（仕様書 §11.3）。到達可能な状態と入力の組を覆う操作列の配列（`TestPaths`）を返す。
     # 各操作列は `Model#test(binding, paths: ...)` で再実行できる。
     #
-    #   max_steps   1経路の最大ステップ数
-    #   max_states  到達可能な状態の探索の、状態数の上限。上限で探索を打ち切ると、`TestPaths#complete?` が偽になる
-    #   actions     対象の操作の名前の配列。省略時はすべて
+    #   max_steps    1経路の最大ステップ数
+    #   max_states   到達可能な状態の探索の、状態数の上限
+    #   max_time_ms  到達可能な状態の探索の、時間の上限（ミリ秒）。
+    #                上限で探索を打ち切ると、`TestPaths#complete?` が偽になる
+    #   actions      対象の操作の名前の配列。省略時はすべて
     #
     # binding が注入する内部選択は入力に含める。注入しない内部選択がある操作では、モデルが最初に列挙した
     # 遷移をたどる前提で経路を作るので、実装が別の遷移を選ぶと、その経路は :inconclusive（invalid_input）になる。
-    def test_paths(binding, max_steps: 20, max_states: nil, actions: nil)
+    def test_paths(binding, max_steps: 20, max_states: nil, max_time_ms: nil, actions: nil)
       raise ArgumentError, "max_steps は1以上の整数です" unless max_steps.is_a?(Integer) && max_steps >= 1
 
-      test_run(binding, actions: actions).paths(max_steps: max_steps, max_states: max_states)
+      test_run(binding, actions: actions).paths(max_steps: max_steps, max_states: max_states, max_time_ms: max_time_ms)
     end
 
     def inspect = "#<Fmspec::Model #{name}>"

@@ -50,12 +50,13 @@ module Fmspec
     def inputs = steps.map { |s| [s.action, s.args] }
 
     # テストが確実に通ったモデルの状態と遷移を、到達可能な状態と遷移と比べる（仕様書 §11.3）。
-    # 到達可能な状態と遷移は、呼び出したときに探索する。`max_states` はその探索の状態数の上限。
+    # 到達可能な状態と遷移は、呼び出したときに探索する。`max_states` はその探索の状態数の上限、
+    # `max_time_ms` は時間の上限（ミリ秒）で、達すると探索を打ち切る（`Coverage#complete?` が偽になる）。
     # 縮小や再実行の試行は数えない。
-    def coverage(max_states: nil)
+    def coverage(max_states: nil, max_time_ms: nil)
       raise ArgumentError, "この結果はカバレッジを記録していません" unless @coverage
 
-      @coverage.call(max_states)
+      @coverage.call(max_states, max_time_ms)
     end
 
     # :inconclusive の理由。
@@ -390,7 +391,7 @@ module Fmspec
       @covered = covered
     end
 
-    # 到達可能な状態をすべて探索したか。偽なら（状態数の上限か評価エラーで打ち切った）、
+    # 到達可能な状態をすべて探索したか。偽なら（状態数か時間の上限、評価エラーで打ち切った）、
     # 経路は到達可能な状態と入力の組の一部しか覆っていない。`Model#test(paths:)` は、全経路が成功しても
     # :passed にせず、:inconclusive（理由は :incomplete_paths）にする。
     def complete? = @complete
@@ -480,9 +481,10 @@ module Fmspec
     end
 
     # 到達可能な状態と入力の組を覆う操作列を、モデルから作る。
-    def paths(max_steps:, max_states:)
+    def paths(max_steps:, max_states:, max_time_ms: nil)
       options = @options.slice("actions").merge("max_steps" => max_steps, "inject" => @case.inject)
       options["max_states"] = max_states if max_states
+      options["max_time_ms"] = max_time_ms if max_time_ms
       body = TestRun.graph_body(@native.test_paths(JSON.generate(options)))
       paths = body["paths"].map { |path| path["inputs"].map { |input| @case.decode_input(input) } }
       TestPaths.new(paths, complete: body["complete"], targets: body["targets"], covered: body["covered"])
@@ -512,9 +514,10 @@ module Fmspec
       collected = @collector
       options = @options.slice("actions")
       native = @native
-      lambda do |max_states|
+      lambda do |max_states, max_time_ms|
         request = options.merge("seen" => collected.seen)
         request["max_states"] = max_states if max_states
+        request["max_time_ms"] = max_time_ms if max_time_ms
         Coverage.new(TestRun.graph_body(native.coverage(JSON.generate(request))), collected)
       end
     end
