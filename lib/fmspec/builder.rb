@@ -26,8 +26,11 @@ module Fmspec
 
     attr_reader :enums, :states
 
-    def initialize(name)
+    # `overrides` は、定数の名前から上書きする値への Hash（`Model#with` が渡す）。
+    def initialize(name, overrides = {})
       @name = name
+      @overrides = overrides.transform_keys(&:to_sym)
+      @overridden = []
       @enums = {}
       @states = []
       @constants = {}
@@ -100,17 +103,27 @@ module Fmspec
 
     # 定数。記号的な状態から、状態変数と同じように名前で参照できる。
     # 複合型の値は、型を添えて書く（`constant :menu, set_of(item), Set[:apple, :bread]`）。
+    #
+    # 定数の値（`Model#with` で上書きしたなら、上書きした値）を Ruby の値で返す。
+    # 状態の型やプロセスの数を定数で決めるのに使える（`cap = constant :capacity, 3`、`int(0..cap + 1)`）。
     def constant(name, *args)
       claim(name, "定数")
-      case args.length
-      when 1 then @constants[name.to_sym] = Expr.lift(args[0], enums: declared_enums)
-      when 2
-        type = Types.coerce(args[0], "定数 #{name}")
-        type.check!(args[1], "定数 #{name} の値")
-        @constants[name.to_sym] = Expr.lift(args[1], type.kind, enums: declared_enums)
-      else raise BuildError, "constant は constant(名前, 値) か constant(名前, 型, 値) と書きます"
-      end
-      nil
+      raise BuildError, "constant は constant(名前, 値) か constant(名前, 型, 値) と書きます" unless [1, 2].include?(args.length)
+
+      key = name.to_sym
+      overridden = @overrides.key?(key)
+      @overridden << key if overridden
+      value = overridden ? @overrides[key] : args.last
+      @constants[key] =
+        if args.length == 1
+          declared = Expr.lift(args[0], enums: declared_enums)
+          overridden ? Expr.lift(value, declared.kind, enums: declared_enums).expect(declared.kind, "定数 #{name} の上書きの値") : declared
+        else
+          type = Types.coerce(args[0], "定数 #{name}")
+          type.check!(value, overridden ? "定数 #{name} の上書きの値" : "定数 #{name} の値")
+          Expr.lift(value, type.kind, enums: declared_enums)
+        end
+      value
     end
 
     # 操作。キーワードは公開引数で、値はそのドメイン（型、または整数の範囲）。
@@ -279,9 +292,13 @@ module Fmspec
       claim(name, "遷移契約", :contract)
     end
 
-    def build
+    # `definition` は、上書きを受け取ってモデルを作り直す手続き（`Model#with` が使う）。
+    def build(definition: nil)
+      unknown = @overrides.keys - @overridden
+      raise BuildError, "宣言していない定数は上書きできません: #{unknown.join(', ')}" unless unknown.empty?
+
       Model.new(@name.to_sym, to_ir, ghosts: @states.select { |s| s[:ghost] }.map { |s| s[:name] },
-                                     processes: @processes)
+                                     processes: @processes, definition: definition, overrides: @overrides)
     end
 
     def declared_enums = @enums.values

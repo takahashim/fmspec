@@ -37,12 +37,16 @@ require_relative "compose"
 #   Tickets.check(max_states: 10_000).verified?
 module Fmspec
   # 仕様を定義する。ブロックの中の語彙は Fmspec::Builder にある。
+  # 返すモデルはブロックを保持し、`Model#with` で定数を上書きして作り直せる。
   def self.define(name, &block)
     raise BuildError, "Fmspec.define にはブロックが必要です" unless block
 
-    builder = Builder.new(name)
-    builder.instance_eval(&block)
-    builder.build
+    definition = lambda do |overrides|
+      builder = Builder.new(name, overrides)
+      builder.instance_eval(&block)
+      builder.build(definition: definition)
+    end
+    definition.call({})
   end
 
   # モデルを合成する（仕様書 §12.5）。キーワードの名前が、各モデルの名前空間の接頭辞になる。

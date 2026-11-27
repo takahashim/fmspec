@@ -20,6 +20,9 @@ TLA+とTLCの機能のうち、fmspecに加える価値の高い3つについて
 
 ## 1. 定数を変えた繰り返し検査
 
+実装済み（`lib/fmspec/builder.rb` の `constant`、`lib/fmspec/model.rb` の `with` と `sweep`、`test/constants_test.rb`）。
+使い方は [dsl.md](../dsl.md) の「定数を変えた検査」にある。
+
 ### 目的
 
 TLCの `.cfg` で定数を差し替えるのにあたる。
@@ -52,9 +55,9 @@ Tickets.sweep(capacity: 2..4).each { |values, result| puts "#{values} #{result.s
 
 ### まだ決めていないこと
 
-- 合成した仕様での上書きの書き方（`Shop.with(stock: { capacity: 4 })` のように接頭辞で指定するか）。
+- 合成した仕様での上書きの書き方（`Shop.with(stock: { capacity: 4 })` のように接頭辞で指定するか）。今は `Fmspec::BuildError` にし、合成する前の仕様を `with` で作り直してもらう。
 - CLIの扱い。CLIはIRを受け取るので、掃引はRuby側の機能とする。型に定数を使わないモデルに限って、CLIで定数を差し替える選択肢（`--const capacity=4`）は後で検討する。
-- 結果の表示。最初に失敗した組み合わせで止めるか、すべて検査するか（既定はすべて検査し、失敗した組み合わせの最短反例を並べる案）。
+- 結果の表示。今はすべての組み合わせを検査し、組み合わせと結果の対の配列を返す。失敗した組み合わせの要約の表示や、最初の失敗で止める選択肢は後で検討する。
 
 ### 確認すること
 

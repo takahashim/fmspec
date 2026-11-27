@@ -10,8 +10,13 @@ module Fmspec
     # 並行するプロセス。プロセス名から、インスタンスの数（:count）とステップの名前の配列（:steps）への Hash。
     attr_reader :processes
 
-    def initialize(name, ir, ghosts: [], processes: {})
+    # `with` で上書きした定数の値。定数の名前（Symbol）から値への Hash。
+    attr_reader :overrides
+
+    def initialize(name, ir, ghosts: [], processes: {}, definition: nil, overrides: {})
       @name = name
+      @definition = definition
+      @overrides = overrides.dup.freeze
       @ir = Model.deep_freeze(ir)
       @ghosts = ghosts.dup.freeze
       @processes = Model.deep_freeze(processes.transform_values(&:dup))
@@ -71,6 +76,38 @@ module Fmspec
       result(native.shrink(trace, JSON.generate(attempts ? { "attempts" => attempts } : {})))
     end
 
+    # 定数を上書きして、仕様を作り直す。`Fmspec.define` のブロックをもう一度実行する。
+    # これまでの上書きに `overrides` を重ねる。値の型は、宣言した定数の型に合わなければならない。
+    #
+    #   Tickets.with(capacity: 4).check.verified?
+    #
+    # 結果は、その値のモデルについての判定である。定数のほかの値については何も主張しない。
+    def with(**overrides)
+      raise BuildError, "#{name} は Fmspec.define で定義した仕様ではないので、定数を上書きできません" unless @definition
+
+      @definition.call(@overrides.merge(overrides.transform_keys(&:to_sym)))
+    end
+
+    # 定数の値の候補の直積について、組み合わせごとに `with` で作り直して検査する。
+    # 候補は範囲か配列で書く。組み合わせ（Hash）と結果の対の配列を返す。順は候補の直積の順（最初の定数が最も遅く変わる）である。
+    # ブロックを渡すと、作り直したモデルを受け取り、その戻り値を結果にする。既定は `check`。
+    #
+    #   Tickets.sweep(capacity: 2..4).each { |values, result| puts "#{values} #{result.status}" }
+    #   Tickets.sweep(capacity: 2..4) { |m| m.check(deadlock: true) }
+    #
+    # 各結果は、その組み合わせのモデルについての判定であり、定数一般についての主張ではない。
+    def sweep(**domains)
+      raise ArgumentError, "sweep には、定数の名前と値の候補を1つ以上渡します" if domains.empty?
+
+      names = domains.keys.map(&:to_sym)
+      candidates = domains.map { |key, domain| sweep_candidates(key, domain) }
+      candidates.first.product(*candidates.drop(1)).map do |combination|
+        values = names.zip(combination).to_h
+        model = with(**values)
+        [values, block_given? ? yield(model) : model.check]
+      end
+    end
+
     # 実装との結合を宣言する（仕様書 §11.1）。ブロックの中の語彙は Fmspec::Binding にある。
     def bind(&block) = Binding.new(self, &block)
 
@@ -126,6 +163,18 @@ module Fmspec
     end
 
     private
+
+    def sweep_candidates(name, domain)
+      unless domain.is_a?(Range) || domain.is_a?(Array)
+        raise ArgumentError, "定数 #{name} の候補は、範囲か配列で書きます: #{domain.inspect}"
+      end
+      raise ArgumentError, "定数 #{name} の候補の範囲に終わりがありません" if domain.is_a?(Range) && domain.end.nil?
+
+      values = domain.to_a
+      raise ArgumentError, "定数 #{name} の候補が空です" if values.empty?
+
+      values
+    end
 
     # エンジンが検証したモデル。最初に使うときに読み込む。
     def native

@@ -91,6 +91,37 @@ constant :menu, set_of(item), Set[:apple, :bread]
 複合型の定数は、型を添えて `constant(名前, 型, 値)` と書く。
 IRには、参照した位置にリテラルとして埋め込まれる。
 
+### 定数を変えた検査
+
+`constant` は定数の値をRubyの値で返す。
+状態の型やプロセスの数を、定数で決められる。
+
+```ruby
+Tickets = Fmspec.define(:tickets) do
+  capacity = constant :capacity, 3
+  state :sold, int(0..capacity + 1), initial: 0
+  # ...
+end
+
+Tickets.with(capacity: 4).check.verified?
+Tickets.sweep(capacity: 2..4).each { |values, result| puts "#{values} #{result.status}" }
+Tickets.sweep(capacity: [2, 4]) { |model| model.check(deadlock: true) }
+```
+
+| 語彙 | 内容 |
+|---|---|
+| `Model#with(名前: 値, ...)` | `Fmspec.define` のブロックを、定数の値を上書きして実行し直し、新しいモデルを返す。これまでの上書きに重ねる |
+| `Model#overrides` | 上書きした定数の値（Symbol から値への Hash） |
+| `Model#sweep(名前: 候補, ...)` | 候補（範囲か配列）の直積の組み合わせごとに `with` で作り直して検査し、組み合わせと結果の対の配列を返す。ブロックを渡すと、作り直したモデルを受け取り、その戻り値を結果にする。既定は `check` |
+
+上書きの値は、宣言した定数の型に合わなければならない。
+宣言していない定数の上書きは `Fmspec::BuildError` になる。
+`Fmspec.compose` で合成した仕様は作り直せない。合成する前の仕様を `with` で作り直してから合成する。
+
+組み合わせごとにIRが違うので、`model_digest` も違う。
+ある値のモデルの証明書やトレースを別の値のモデルに渡すと、判定ゲートは拒否する。
+各結果は、その値のモデルについての判定であり、定数のほかの値については何も主張しない。
+
 初期値の候補を `initial_in:` に並べると、状態変数ごとの候補の組み合わせがすべて初期状態になる。
 候補は値の配列か範囲で書く。
 `bool`、`int`、`enum` の型を書くと、その型の値すべてが候補になる。
