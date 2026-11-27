@@ -471,7 +471,16 @@ JSONでは名前で並べる。
 | `certificate_states` | `verified` のとき、判定ゲートが受理した証明書の状態数 |
 | `property`、`trace` | `violated`、`error` のとき、起きた事象と、判定ゲートが受理したトレース |
 | `reason` | `inconclusive` のとき、`max_states`、`max_check_cost`、`interrupted` のいずれか |
-| `rejected` | `internal_error` のとき、判定ゲートが証拠を拒否した理由 |
+| `rejected` | 探索器が生成した証拠を判定ゲートが拒否した `internal_error` のとき、拒否した理由 |
+| `inconsistency` | 探索器が内部の不整合で証拠を生成できなかった `internal_error` のとき、不整合の内容。このとき `reason` と `rejected` は付けない |
+| `message` | `internal_error` のとき、fmspec の不具合であることを示す説明 |
+
+`inconsistency` は `{"kind": "successors", "action", "state", "encoded_state", "message"}` で、
+状態での操作の遷移を列挙できなかったことを表す（操作が未定義か、状態が状態型に従わない）。
+`action` は操作名で、未定義の操作なら添字である。
+`encoded_state` は状態の符号化列で、`state` は状態型に従うときだけ値を示し、従わなければ `null` である。
+カバレッジとテスト経路の結果（`coverage`、`test_paths`）も、グラフを集める途中で不整合を見つけたら、
+`status` を `internal_error` とし、`model`、`model_digest`、`engine_version`、`inconsistency`、`message` だけを返す。
 
 `simulate --json` の結果は、`search` と `gate` の代わりに `simulation` を持つ。
 `simulation` はシミュレータの報告で、`seed`、`traces`、`max_steps`、`prng`、`completed_traces`、`steps`、`time_ms` からなる。

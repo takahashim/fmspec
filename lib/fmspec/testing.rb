@@ -439,13 +439,22 @@ module Fmspec
       passed(paths.length, matched)
     end
 
+    # 到達可能な状態と遷移のグラフを使う結果（カバレッジとテスト経路）のJSONを読む。
+    # 使い方の誤りは ArgumentError、探索器の内部の不整合（status が internal_error）は InternalError にする。
+    # 不整合はエンジンの不具合で、集めきれなかったグラフをカバレッジの分母やテスト経路に使わない。
+    def self.graph_body(json)
+      body = JSON.parse(json)
+      raise ArgumentError, body["message"] if body["status"] == "usage_error"
+      raise InternalError, "#{body['message']}: #{JSON.generate(body['inconsistency'])}" if body["status"] == "internal_error"
+
+      body
+    end
+
     # 到達可能な状態と入力の組を覆う操作列を、モデルから作る。
     def paths(max_steps:, max_states:)
       options = @options.slice("actions").merge("max_steps" => max_steps, "inject" => @case.inject)
       options["max_states"] = max_states if max_states
-      body = JSON.parse(@native.test_paths(JSON.generate(options)))
-      raise ArgumentError, body["message"] if body["status"] == "usage_error"
-
+      body = TestRun.graph_body(@native.test_paths(JSON.generate(options)))
       body["paths"].map { |path| path["inputs"].map { |input| @case.decode_input(input) } }
     end
 
@@ -476,10 +485,7 @@ module Fmspec
       lambda do |max_states|
         request = options.merge("seen" => collected.seen)
         request["max_states"] = max_states if max_states
-        body = JSON.parse(native.coverage(JSON.generate(request)))
-        raise ArgumentError, body["message"] if body["status"] == "usage_error"
-
-        Coverage.new(body, collected)
+        Coverage.new(TestRun.graph_body(native.coverage(JSON.generate(request))), collected)
       end
     end
 
