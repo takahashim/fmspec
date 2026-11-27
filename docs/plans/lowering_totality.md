@@ -6,6 +6,9 @@
 
 ## 現状の保証と足りないもの
 
+この節は、計画を立てたときの状態である。
+手順1〜5と7を終え、全域性は証明した（「手順2〜5と7の結果」の節）。残るのは手順6の整形式性である。
+
 中核の下ろし（`lower_model`）について、今は部分正当性だけを証明している。
 `lemma_safe`（`model_safe.rs`）は、`lower_model` が中核のモデル `m` を返したなら、どの検査条件でも、`m` の安全性と、名前を解決したモデルの値の意味論での安全性が同値であることを示す。
 したがって、下ろしに不具合があっても、誤った `Verified` にはならない。
@@ -266,25 +269,30 @@ JSONの位置付きのメッセージを作るのも `fmspec-ir` である。
 
 各段階の終わりに次を通す。
 
-- `rake verus:proof`：中核の証明、信頼する項目がないこと、証明の対象外のコードの範囲、公開関数が前提条件を持たないこと。公開関数（`pub fn`）は `requires` を持てない。前提を持つ関数は `pub(crate) fn` にする。
-- 新しい証明ごとに、検査を1つ壊した変異と、到達点に置いた `assert(false)` を `rakelib/verus.rake` に加え、どれも証明に失敗することを確かめる。全件の検査は `rake verus:mutants` で、重いのでCIでは `main` へのPRと定期実行でだけ回る。
+- `rake verus:proof`：中核の証明、信頼する項目がないこと、証明の対象外のコードの範囲、公開関数が前提条件を持たないこと、使われない `use` がないこと。公開関数（`pub fn`）は `requires` を持てない。前提を持つ関数は `pub(crate) fn` にする。
+- 新しい証明ごとに、検査を1つ壊した変異と、到達点に置いた `assert(false)` を `rakelib/verus.rake` に加え、どれも証明に失敗することを確かめる。全件の検査は `rake verus:mutants` で、数時間かかるのでCIでは回さない。変えたファイルに絞って手元で実行する（`VERUS_MUTANTS_FILES=lowering.rs rake verus:mutants`）。
 - `rake lint` と `rake test`。整形はワークスペース全体の `cargo fmt` を使わず、`rake lint` と同じパッケージを指定する。ワークスペース全体にかけると `vendor/` の写しまで書き換わる。
 
 途中の検証は、`crates/fmspec-core` で Verus を直接呼ぶと速い。
 
 ```sh
 cd crates/fmspec-core
-$HOME/.local/share/verus/0.2026.10.04.426d8b0/verus --crate-type=lib --triggers-mode silent src/lib.rs --verify-module lowering
-$HOME/.local/share/verus/0.2026.10.04.426d8b0/verus --crate-type=lib --triggers-mode silent src/lib.rs --verify-only-module lowering --verify-function low_core
+$VERUS --crate-type=lib --triggers-mode silent src/lib.rs --verify-module lowering
+$VERUS --crate-type=lib --triggers-mode silent src/lib.rs --verify-only-module lowering --verify-function low_core
 ```
+
+`VERUS` は、`rakelib/verus.rake` の `VERUS_VERSION` の版のVerusである。
 
 ## 危ういところ
 
-- **検証の資源**：`lowering.rs` は約7500行で、相互に再帰する関数でできている。手順3、4、6で事後条件を強めるので、資源の上限（rlimit）に当たり、関数や補題を分け直す必要が出る可能性がある。
+- **検証の資源**：`lowering.rs` は約4700行（意味保存の補題を `preserve_*.rs` に分けた後）で、相互に再帰する関数でできている。手順3、4、6で事後条件を強めるので、資源の上限（rlimit）に当たり、関数や補題を分け直す必要が出る可能性がある。
 - **規則の食い違い**：手順1で、`type_of`、下ろし、`fmspec-ir` の食い違いが多く見つかれば、手順2の作業が増える。
 - **手順6の大きさ**：式を作る部品が多く、型の証明が意味保存の証明と同程度の量になる可能性がある。
 
 ## 完了後に更新する文書
+
+手順1〜5と7の分（全域性の定理、`fmspec-ir` の内部エラー、件数、下ろしの説明、`docs/ir.md`、`infer.rs` の冒頭）は更新した。
+手順6を終えたら、整形式性の分を更新する。
 
 - `docs/verification.md`：
   - 「証明済みの性質」の表に、全域性と整形式性の定理を加える。
