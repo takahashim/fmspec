@@ -18,8 +18,6 @@ use crate::preserve::*;
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_seq, eval_src, SEnv, TExpr, FAIL_NONE};
-#[cfg(verus_keep_ghost)]
-use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {

@@ -30,8 +30,6 @@ use crate::quant::{at_rank, picks};
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_map_items, eval_src, put_row, Item, SEnv, TExpr, FAIL_NOT_IN_DOMAIN};
-#[cfg(verus_keep_ghost)]
-use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {

@@ -13,8 +13,6 @@ use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_domain_rank};
 #[cfg(verus_keep_ghost)]
-use crate::lists::pad;
-#[cfg(verus_keep_ghost)]
 use crate::lowering::*;
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
@@ -28,8 +26,6 @@ use crate::quant::{lemma_select_prefix, lemma_vals_weaken, picks, q_step_ok, qpr
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_quant, eval_src, select_bits, src_bool, Over, SEnv, TExpr};
-#[cfg(verus_keep_ghost)]
-use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {
