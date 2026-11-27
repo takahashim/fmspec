@@ -17,9 +17,7 @@
 //! 下ろしの正しさは、下ろした中核の式の評価が、この意味論の値の符号化になることとして述べる。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys_or_zero, member};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, STy};
+use crate::encoding::{keys_or_zero, member, sty, STy};
 use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, ErrKind};

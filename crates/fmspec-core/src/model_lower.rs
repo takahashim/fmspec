@@ -5,49 +5,45 @@
 //! 初期状態は、状態変数ごとの候補の符号を整列して重複を除き、その直積から初期条件を満たすものを残す。
 //! 下ろしが成功すれば、中核のモデルの安全性は値の上のモデルの安全性と一致する（[`lowers_model`]）。
 
-#[cfg(verus_keep_ghost)]
-use crate::canon::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 use crate::canon::{slot_types, slot_types_list};
-use crate::encoding::SVal;
-use crate::encoding::{copy_stype, wf_stype_exec, SType};
+use crate::encoding::{copy_stype, wf_stype_exec, SType, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, enc_seq, lemma_stys, member, members, sty, stys, width_sum};
+use crate::encoding::{enc, enc_seq, lemma_stys, lemma_width_pos, member, members, sty, stys, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_width_pos, to_xty, XTy};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, wf_stypes, STy};
+use crate::encoding::{to_xty, wf_stype, wf_stypes, width_sum, XTy};
 use crate::equality::small_stype;
-#[cfg(verus_keep_ghost)]
-use crate::equality::{small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{code_of, eval_l, eval_spec, prop_spec, Env, ErrKind};
 use crate::eval::{eval, eval_prop, Ctx};
+use crate::expr_build::stype_width;
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::limits::{lemma_lim_small, lemma_width_sum_prefix};
-use crate::lowering::{lower_prop, lower_stored, Constant, Layout, LowerCtx};
+use crate::limits::{lemma_lim_small, lemma_width_sum_prefix, small, smalls};
+use crate::lower_ctx::{Constant, Fail, Layout, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{layout_at, layouts_at, lemma_slot_tys_len, slot_tys, slot_tys_seq};
+use crate::lowering::{lower_prop, lower_stored};
 use crate::model::{Action, Contract, Expr, RawModel, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::model_safe::*;
-use crate::model_total::check_model;
 #[cfg(verus_keep_ghost)]
-use crate::model_total::{action_typed, const_ctx, out_sty, st_ctx};
+use crate::model_total::{action_typed, const_ctx, consts_match, lemma_const_ctx, lemma_sa_typed};
+use crate::model_total::{check_model, lower_action};
 #[cfg(verus_keep_ghost)]
-use crate::model_total::{consts_match, lemma_const_ctx, lemma_sa_typed, lemma_state_ctx, model_typed, styped, tys_ok};
+use crate::model_total::{lemma_state_ctx, model_typed, out_sty, st_ctx, tys_ok};
 #[cfg(verus_keep_ghost)]
-use crate::model_wf::{lemma_model_frame, sm_wf, wf_frame};
+use crate::model_wf::{action_at, contract_at, lemma_model_frame, sm_wf, wf_frame};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{inv_env, safe, Conditions};
-use crate::slots::{stype_width, Fail};
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{act_ok, consts_ok, s_arg_tys, s_cand, s_env, s_init, s_init_var, s_prop, s_safe, s_state_tys};
+use crate::smodel::user_err;
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{codes, layout_at, layouts_at, lemma_code_in, lemma_encode_in, lemma_rel_codes, rel};
-use crate::smodel::{lower_action, Fault, LowerError, SModel};
+use crate::smodel::{codes, consts_ok, lemma_code_in, lemma_encode_in, lemma_rel_codes, rel, s_cand};
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{type_err, user_err};
+use crate::smodel::{s_env, s_init, s_init_var, s_prop, s_safe, s_state_tys, styped, type_err};
+use crate::smodel::{Fault, LowerError, SModel};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
 #[cfg(verus_keep_ghost)]
@@ -300,13 +296,13 @@ proof fn lemma_stored_val(
             }
             assert(e =~= vals);
             assert(cs =~= codes(vals));
-            assert(crate::canon::in_slots(e, tys, enums));
+            assert(crate::lower_types::in_slots(e, tys, enums));
         },
     }
 }
 
 spec fn in_slot_at(tys: Seq<Type>, vals: Seq<Value>, j: int, enums: Seq<i64>) -> bool {
-    crate::canon::in_slot(tys[j], vals[j], enums)
+    crate::lower_types::in_slot(tys[j], vals[j], enums)
 }
 
 /// 型 `t` の式を空の環境で評価する。値を `(slots, codes)` で返す。
@@ -933,26 +929,6 @@ pub open spec fn const_at(sm: SModel, cv: Seq<SVal>, q: int) -> bool {
     &&& eval_src(sm.consts@[q].expr, s_env(sm, cv.take(q), Seq::empty(), Seq::empty(), Seq::empty(), None), Seq::empty())
         == Ok::<SVal, ErrKind>(cv[q])
     &&& member(cv[q], sty(sm.consts@[q].ty), sm.enums@)
-}
-
-/// 操作 `a` を文脈 `cx` で下ろした結果 `act` の性質。
-pub open spec fn action_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, cx: LowerCtx, a: int, act: Action) -> bool {
-    let ts = s_arg_tys(sm, a);
-    &&& ctx_is(cx, sm.enums@, cv, st, cx.args@, false, None)
-    &&& layouts_at(cx.args@, ts, sm.enums@)
-    &&& wf_stypes(ts, sm.enums@)
-    &&& smalls(ts)
-    &&& act_ok(sm.actions@[a], cx, act)
-}
-
-/// 遷移契約 `k` を文脈 `kx` で下ろした結果 `con` の性質。
-pub open spec fn contract_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, kx: LowerCtx, k: int, con: Contract) -> bool {
-    let a = sm.contracts@[k].action as int;
-    &&& con.action == sm.contracts@[k].action
-    &&& a < sm.actions@.len()
-    &&& ctx_is(kx, sm.enums@, cv, st, kx.args@, true, sm.actions@[a].output)
-    &&& layouts_at(kx.args@, s_arg_tys(sm, a), sm.enums@)
-    &&& prop_low(sm.contracts@[k].expr, kx, con.expr)
 }
 
 /// 下ろした式は、中核のモデルの文脈で型を持つ。

@@ -6,17 +6,23 @@
 //! また、同じ型の値の符号化は、位置ごとに同じ種類の値になる（[`lemma_kinds`]）。
 //! そのため、スロットを位置ごとに比べる式は、型の不一致で失敗しない。
 
+#[cfg(verus_keep_ghost)]
+use crate::encoding::xwidth;
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq, keys_or_zero};
+use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
+use crate::encoding::{keys_or_zero, lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_stys, list_items_member, map_rows_member};
+use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_stys, list_items_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, members, models_seq, sty, stys, xwidth, STy, SVal, XTy};
+use crate::encoding::{map_rows_member, member, members, models_seq, sty, stys, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, same_kind, Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{and_s, bool_lit, implies_s, split_ok, tree_s, xoff, Join};
+#[cfg(verus_keep_ghost)]
+use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
 #[cfg(verus_keep_ghost)]
@@ -26,38 +32,12 @@ use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::slots::{and_s, bool_lit, implies_s, split_ok, tree_s, Join};
-#[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
 
 // ---- Listの長さの上限 ----
-
-/// 型の中のどのListも、長さの上限が `0x7fff_ffff` 以下である。
-pub open spec fn small(t: STy) -> bool
-    decreases t,
-{
-    match t {
-        STy::Tuple(ts) => smalls(ts),
-        STy::Record(_, ts) => smalls(ts),
-        STy::Option(x) => small(*x),
-        STy::Map(_, x) => small(*x),
-        STy::List(e, max) => max <= 0x7fff_ffff && small(*e),
-        _ => true,
-    }
-}
-
-pub open spec fn smalls(ts: Seq<STy>) -> bool
-    decreases ts,
-{
-    if ts.len() == 0 {
-        true
-    } else {
-        smalls(ts.drop_last()) && small(ts.last())
-    }
-}
 
 proof fn lemma_smalls_at(ts: Seq<STy>, i: int)
     requires

@@ -5,23 +5,28 @@
 //! そのため、たどる順は値の正規順になる。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::{slot_tys, slot_tys_seq};
+use crate::canon::lemma_defaults_typed;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, sty, stys, STy, SVal};
+use crate::encoding::width_sum;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, lemma_default_len};
 use crate::encoding::{keys_exec, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_default_len, lemma_keys_pos, lemma_stys, wf_stype, wf_stypes, width_sum};
+use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_keys_pos, lemma_stys};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_items_len, lemma_enc_len, list_items_member, member, width};
+use crate::encoding::{list_items_member, member, sty, stys, wf_stype, wf_stypes, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::equality::{small, smalls};
+use crate::eval::{as_bool, decode, eval_l, quant_l, Env, ErrKind};
+use crate::expr_build::{bin, cb, ci, defaults, eq, ite};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, decode, quant_l};
-#[cfg(verus_keep_ghost)]
-use crate::eval::{binop_spec, eval_l, Env, ErrKind};
+use crate::expr_build::{ite_s, lits};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_product_len, product};
+#[cfg(verus_keep_ghost)]
+use crate::limits::{small, smalls};
+#[cfg(verus_keep_ghost)]
+use crate::lists::{at_rank, lemma_bin_const, lemma_bin_const_pure, picks, picks_in, vals_at};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
 #[cfg(verus_keep_ghost)]
@@ -29,9 +34,6 @@ use crate::model::Type;
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
-use crate::slots::{bin, cb, ci, defaults, eq, ite};
-#[cfg(verus_keep_ghost)]
-use crate::slots::{ite_s, lits};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_qstate, eval_src, qresult, select_bits, src_bool, QState, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
@@ -41,11 +43,6 @@ use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
 
 verus! {
-
-/// 式 `r` が、局所変数 `l` のもとで整数 `i` になる。
-pub open spec fn at_rank(r: Expr, env: Env, l: Seq<Value>, i: i64) -> bool {
-    pure_below(r, l.len()) && eval_l(r, env, l) == Ok::<Value, ErrKind>(Value::Int(i))
-}
 
 /// `r` が番号 `i` になるなら、`xs` は型 `t` の正規順で `i` 番目の値の符号化になる。
 pub open spec fn unrank_ok(t: STy, r: Expr, xs: Seq<Expr>, enums: Seq<i64>) -> bool {
@@ -75,32 +72,6 @@ pub open spec fn unrank_seq_ok(ts: Seq<STy>, r: Expr, xs: Seq<Expr>, enums: Seq<
     &&& forall|env: Env, l: Seq<Value>, i: i64|
         #[trigger] at_rank(r, env, l, i) && keys_product(ts, enums) is Some && 0 <= i < keys_product(ts, enums)->0
             ==> clean(xs, env, l) && slot_vals(xs, env, l) == enc_seq(product(ts, enums)[i as int], ts, enums)
-}
-
-/// 整数の定数との二項演算は、`r` と同じく純粋である。
-pub proof fn lemma_bin_const_pure(op: BinOp, r: Expr, k: i64, n: nat)
-    requires
-        pure_below(r, n),
-    ensures
-        pure_below(Expr::Bin(op, Box::new(r), Box::new(Expr::Const(Value::Int(k)))), n),
-{
-    assert(pure_below(Expr::Const(Value::Int(k)), n));
-}
-
-/// 整数の定数との二項演算の値。
-pub proof fn lemma_bin_const(op: BinOp, r: Expr, k: i64, env: Env, l: Seq<Value>, i: i64)
-    requires
-        at_rank(r, env, l, i),
-    ensures
-        pure_below(Expr::Bin(op, Box::new(r), Box::new(Expr::Const(Value::Int(k)))), l.len()),
-        eval_l(Expr::Bin(op, Box::new(r), Box::new(Expr::Const(Value::Int(k)))), env, l) == binop_spec(
-            op,
-            Value::Int(i),
-            Value::Int(k),
-        ),
-{
-    lemma_bin_const_pure(op, r, k, l.len());
-    assert(eval_l(Expr::Const(Value::Int(k)), env, l) == Ok::<Value, ErrKind>(Value::Int(k)));
 }
 
 /// 整数の比較の値。
@@ -639,15 +610,6 @@ proof fn lemma_unrank_seq_step(tn: Seq<STy>, r: Expr, k: i64, pv: Seq<Expr>, lv:
 
 // ---- 番号の位置の式を選ぶ ----
 
-/// 式の列 `fs` の各式は、局所変数 `l` のもとで純粋で、値は `vals` になる。
-pub open spec fn vals_at(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq<Value>) -> bool {
-    &&& fs.len() == vals.len()
-    &&& forall|j: int|
-        0 <= j < fs.len() ==> pure_below(#[trigger] fs[j], l.len()) && eval_l(fs[j], env, l) == Ok::<Value, ErrKind>(
-            vals[j],
-        )
-}
-
 /// 局所変数を後ろに加えても、式の値は変わらない。
 pub proof fn lemma_vals_weaken(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq<Value>, l2: Seq<Value>)
     requires
@@ -663,20 +625,6 @@ pub proof fn lemma_vals_weaken(fs: Seq<Expr>, vals: Seq<Value>, env: Env, l: Seq
     }
 }
 
-/// `x` は、番号 `r` が `lo..hi` にあれば、その位置の式 `fs[r]` と同じ値になる。
-pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> bool {
-    &&& forall|m: nat| pure_below(r, m) && all_pure(fs, m) ==> #[trigger] pure_below(x, m)
-    &&& forall|tv: TyEnv, lt: Seq<ETy>, y: ETy|
-        lo < hi && has_ty(r, tv, lt, ETy::Int) && #[trigger] all_ty(fs, y, tv, lt) ==> has_ty(x, tv, lt, y)
-    &&& forall|env: Env, l: Seq<Value>, i: i64, vals: Seq<Value>|
-        #[trigger] at_rank(r, env, l, i) && #[trigger] vals_at(fs, vals, env, l) && lo <= i < hi ==> eval_l(x, env, l)
-            == Ok::<Value, ErrKind>(vals[i as int])
-}
-
-pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
-    picks_in(x, fs, r, 0, fs.len() as int)
-}
-
 /// 番号 `r` が範囲内で、その位置のスロットが真であるという式は純粋である。
 pub proof fn lemma_hit_pure(r: Expr, fs: Seq<Expr>, hit: Expr, n: nat)
     requires
@@ -685,7 +633,7 @@ pub proof fn lemma_hit_pure(r: Expr, fs: Seq<Expr>, hit: Expr, n: nat)
         all_pure(fs, n),
     ensures
         pure_below(
-            crate::slots::and_s(Expr::Bin(BinOp::Ge, Box::new(r), Box::new(Expr::Const(Value::Int(0)))), hit),
+            crate::expr_build::and_s(Expr::Bin(BinOp::Ge, Box::new(r), Box::new(Expr::Const(Value::Int(0)))), hit),
             n,
         ),
 {
@@ -699,7 +647,7 @@ pub(crate) fn pick_slot(fs: &Vec<Expr>, r: &Expr) -> (x: Expr)
         fs@.len() <= 0x7fff_ffff,
     ensures
         picks(x, fs@, *r),
-        fs@.len() == 0 ==> x == crate::slots::bool_lit(false),
+        fs@.len() == 0 ==> x == crate::expr_build::bool_lit(false),
 {
     if fs.len() == 0 {
         return cb(false);
@@ -760,21 +708,6 @@ fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
         }
     }
     x
-}
-
-/// Listの要素は、要素の型に属する。
-pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
-    requires
-        list_items_member(items, t, enums),
-        0 <= k < items.len(),
-    ensures
-        member(items[k], t, enums),
-    decreases items.len(),
-{
-    if k < items.len() - 1 {
-        lemma_items_member(items.drop_last(), t, enums, k);
-        assert(items.drop_last()[k] == items[k]);
-    }
 }
 
 /// Listの要素の符号化の、`k` 番目の要素の `j` 番目のスロット。

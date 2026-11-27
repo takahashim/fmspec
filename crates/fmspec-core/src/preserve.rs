@@ -12,34 +12,30 @@
 //! そのため、後に束縛を加えても値は変わらない（[`lemma_weaken`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::bindings::{eval_bindings, eval_bound_body};
+use crate::encoding::xwidth_sum;
 #[cfg(verus_keep_ghost)]
-use crate::canon::{in_slots, slot_tys};
+use crate::encoding::{default_val, enc, enc_rows, enc_seq, keys, keys_product, lemma_default_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_rows, enc_seq, keys, keys_product, lemma_default_len, lemma_enc_len};
+use crate::encoding::{lemma_enc_len, lemma_enc_rows_len, map_rows_member, member, members, models};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, models, models_seq, sty, width, xty};
+use crate::encoding::{models_seq, sty, wf_stype, wf_stypes, width, xty, xwidth, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, wf_stypes};
+use crate::eval::{as_bool, eval_l, int_result, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{xwidth, xwidth_sum, STy, SVal, XTy};
-#[cfg(verus_keep_ghost)]
-use crate::equality::{small, smalls};
-#[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, eval_l, lookup, Env, ErrKind};
+use crate::expr_build::{and_s, bool_lit, ite_s, join_s, lits, or_s, tree_s, xoff, Join};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{has_ty, typed, xetys, xetys_seq};
+use crate::limits::{fits_all_s, fits_s, small, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::{Bound, Layout, LowerCtx};
+use crate::lower_ctx::{extends, Block, Bound, Layout, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{added, all_pure, concat, has_ty, in_slots, pure_below, slot_tys, typed};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{xetys, xetys_seq};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};
-#[cfg(verus_keep_ghost)]
-use crate::ranking::mixed_rank_eval;
-#[cfg(verus_keep_ghost)]
-use crate::slots::{and_s, bool_lit, extends, ite_s, join_s, lits, or_s, tree_s, Block, Join};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, Item, Over, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
@@ -49,26 +45,6 @@ use vstd::prelude::*;
 verus! {
 
 // ---- スロットの式の純粋さ ----
-
-/// 束縛子（`let`、量化）を含まず、局所変数は `n` 未満だけを参照する。
-pub open spec fn pure_below(e: Expr, n: nat) -> bool
-    decreases e,
-{
-    match e {
-        Expr::Local(i) => i < n,
-        Expr::Bin(_, a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::And(a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::Or(a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::Implies(a, b) => pure_below(*a, n) && pure_below(*b, n),
-        Expr::Not(a) => pure_below(*a, n),
-        Expr::Code(a) => pure_below(*a, n),
-        Expr::Ite(c, a, b) => pure_below(*c, n) && pure_below(*a, n) && pure_below(*b, n),
-        Expr::Let(_, _) => false,
-        Expr::Forall(_, _, _, _) => false,
-        Expr::Exists(_, _, _, _) => false,
-        _ => true,
-    }
-}
 
 /// `a` は `b` の先頭部分である。
 pub open spec fn prefix(a: Seq<Value>, b: Seq<Value>) -> bool {
@@ -310,12 +286,6 @@ pub proof fn lemma_run_fresh(b0: Block, b1: Block, b2: Block, env: Env, ls: Seq<
     lemma_run_append(fresh(b0, b1), fresh(b1, b2), env, ls);
 }
 
-/// `b1` は、`b0` に `e` を束縛して `x` で指すか、`e` をそのまま `x` とするかである。
-pub open spec fn added(b0: Block, b1: Block, e: Expr, x: Expr) -> bool {
-    ||| x == e && b1.binds@ == b0.binds@
-    ||| x == Expr::Local(b0.depth_s() as usize) && b1.binds@ == b0.binds@.push(e)
-}
-
 /// 純粋で評価が成功する式を [`added`] で加えると、`x` の値はその値になる。
 pub proof fn lemma_added(b0: Block, b1: Block, e: Expr, x: Expr, env: Env, l: Seq<Value>, val: Value)
     requires
@@ -439,11 +409,6 @@ pub proof fn lemma_denotes_weaken(
 
 // ---- 値の表現の補題 ----
 
-/// 列 `ts` の `i` 番目の要素のスロットの位置。
-pub open spec fn xoff(ts: Seq<XTy>, i: int, enums: Seq<i64>) -> int {
-    xwidth_sum(ts.take(i), enums) as int
-}
-
 pub proof fn lemma_models_len(s: Seq<Value>, v: SVal, t: XTy, enums: Seq<i64>)
     requires
         models(s, v, t, enums),
@@ -547,20 +512,7 @@ pub proof fn lemma_denotes_part(
     lemma_clean_sub(slots, env, ls, a, b);
 }
 
-pub proof fn lemma_xoff_step(ts: Seq<XTy>, i: int, enums: Seq<i64>)
-    requires
-        0 <= i < ts.len(),
-    ensures
-        xoff(ts, i + 1, enums) == xoff(ts, i, enums) + xwidth(ts[i], enums),
-{
-    assert(ts.take(i + 1).drop_last() =~= ts.take(i));
-}
-
 // ---- 組み立ての部品の意味 ----
-
-pub open spec fn all_pure(s: Seq<Expr>, n: nat) -> bool {
-    forall|j: int| 0 <= j < s.len() ==> pure_below(#[trigger] s[j], n)
-}
 
 pub open spec fn bool_val(r: Result<Value, ErrKind>) -> bool {
     r is Ok && r->Ok_0 is Bool
@@ -808,17 +760,6 @@ pub proof fn lemma_members(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
     } else {
         if vs.len() == ts.len() {
         }
-    }
-}
-
-/// 式の列の列をつなげる。
-pub open spec fn concat(xss: Seq<Seq<Expr>>) -> Seq<Expr>
-    decreases xss.len(),
-{
-    if xss.len() == 0 {
-        Seq::empty()
-    } else {
-        concat(xss.drop_last()) + xss.last()
     }
 }
 
@@ -1216,34 +1157,6 @@ pub proof fn lemma_enc_rows_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i6
 
 // ---- 型の適合 ----
 
-/// 式の型 `x` の値を、格納の型 `s` の場所に置ける（整数の範囲は問わない）。
-pub open spec fn fits_s(x: XTy, s: STy) -> bool
-    decreases x,
-{
-    match (x, s) {
-        (XTy::Bool, STy::Bool) => true,
-        (XTy::Int, STy::Int(_, _)) => true,
-        (XTy::Enum(a), STy::Enum(b)) => a == b,
-        (XTy::Tuple(xs), STy::Tuple(ts)) => fits_all_s(xs, ts),
-        (XTy::Record(a, xs), STy::Record(b, ts)) => a == b && fits_all_s(xs, ts),
-        (XTy::Option(x), STy::Option(u)) => fits_s(*x, *u),
-        (XTy::Set(a), STy::Set(b)) => a == b,
-        (XTy::Map(ka, va), STy::Map(kb, vb)) => ka == kb && va == vb,
-        (XTy::List(a, n), STy::List(b, m)) => n == m && a == b,
-        _ => false,
-    }
-}
-
-pub open spec fn fits_all_s(xs: Seq<XTy>, ts: Seq<STy>) -> bool
-    decreases xs,
-{
-    if xs.len() == 0 {
-        ts.len() == 0
-    } else {
-        ts.len() == xs.len() && fits_all_s(xs.drop_last(), ts.drop_last()) && fits_s(xs.last(), ts.last())
-    }
-}
-
 pub proof fn lemma_fits_all(xs: Seq<XTy>, ts: Seq<STy>)
     ensures
         fits_all_s(xs, ts) <==> (xs.len() == ts.len() && forall|i: int|
@@ -1473,17 +1386,6 @@ pub open spec fn top_ok(cx: LowerCtx, env: Env, se: SEnv, ls: Seq<Value>, d: nat
 /// `x` は、束縛の列 `binds` を評価してから `body` を評価する式である。
 pub open spec fn wraps(x: Expr, binds: Seq<Expr>, body: Expr) -> bool {
     forall|env: Env, ls: Seq<Value>| #[trigger] eval_l(x, env, ls) == eval_bound_body(binds, binds.len(), body, env, ls)
-}
-
-/// 状態変数、遷移後の状態変数、引数の参照。
-pub open spec fn kind_expr(kind: u8, i: usize) -> Expr {
-    if kind == 0 {
-        Expr::Var(i)
-    } else if kind == 1 {
-        Expr::Next(i)
-    } else {
-        Expr::Arg(i)
-    }
 }
 
 /// 下ろしの各関数が意味の保存を示す式の範囲。すべての式を含む（[`lemma_frag_total`]）。
@@ -2217,6 +2119,69 @@ pub open spec fn closed_slots(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, d: nat, t:
             t,
             se.enums,
         )
+}
+
+/// 束縛の列を先頭から評価する。最初のエラーで止まる。
+pub open spec fn eval_bindings(
+    bindings: Seq<Expr>,
+    n: nat,
+    env: Env,
+    locals: Seq<Value>,
+) -> Result<Seq<Value>, ErrKind>
+    recommends n <= bindings.len(),
+    decreases n,
+{
+    if n == 0 {
+        Ok(locals)
+    } else {
+        match eval_bindings(bindings, (n - 1) as nat, env, locals) {
+            Err(error) => Err(error),
+            Ok(prefix) => match eval_l(bindings[n - 1], env, prefix) {
+                Err(error) => Err(error),
+                Ok(value) => Ok(prefix.push(value)),
+            },
+        }
+    }
+}
+
+pub open spec fn eval_bound_body(
+    bindings: Seq<Expr>,
+    n: nat,
+    body: Expr,
+    env: Env,
+    locals: Seq<Value>,
+) -> Result<Value, ErrKind> {
+    match eval_bindings(bindings, n, env, locals) {
+        Err(error) => Err(error),
+        Ok(final_locals) => eval_l(body, env, final_locals),
+    }
+}
+
+pub open spec fn mixed_rank_eval(
+    parts: Seq<(Expr, i64)>, count: nat, env: Env, locals: Seq<Value>,
+) -> Result<Value, ErrKind>
+    recommends count <= parts.len(),
+    decreases count,
+{
+    if count == 0 {
+        Ok(Value::Int(0))
+    } else if count == 1 {
+        eval_l(parts[0].0, env, locals)
+    } else {
+        match mixed_rank_eval(parts, (count - 1) as nat, env, locals) {
+            Err(error) => Err(error),
+            Ok(Value::Int(high)) => match int_result((high as int) * (parts[count - 1].1 as int)) {
+                Err(error) => Err(error),
+                Ok(Value::Int(base)) => match eval_l(parts[count - 1].0, env, locals) {
+                    Err(error) => Err(error),
+                    Ok(Value::Int(low)) => int_result((base as int) + (low as int)),
+                    _ => Err(ErrKind::TypeMismatch),
+                },
+                _ => Err(ErrKind::TypeMismatch),
+            },
+            _ => Err(ErrKind::TypeMismatch),
+        }
+    }
 }
 
 } // verus!

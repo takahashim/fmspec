@@ -3,19 +3,21 @@
 //! 下ろしの実装は [`crate::lowering`] にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::XTy;
+use crate::encoding::{default_val, enc, lemma_default_len, lemma_xwidth_of, models_seq, sty, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, lemma_default_len, lemma_xwidth_of, models_seq, sty, to_xty, STy, SVal};
+use crate::encoding::{to_xty, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::*;
+use crate::expr_build::{bool_lit, ite_s, lits, split_ok};
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::pure_below;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
-#[cfg(verus_keep_ghost)]
-use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_seq, eval_src, SEnv, TExpr, FAIL_NONE};
 use vstd::prelude::*;

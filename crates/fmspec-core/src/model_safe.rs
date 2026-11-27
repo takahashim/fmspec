@@ -7,15 +7,15 @@
 //! 値を表す状態どうしでは、不変条件、遷移、遷移契約、終端条件の評価が一致する（[`lemma_state_safe`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::slot_tys_seq;
-#[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, member, sty, wf_stypes, width, STy, SType, SVal};
-#[cfg(verus_keep_ghost)]
-use crate::equality::smalls;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{decode, eval_l, prop_spec, Env};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::{Constant, Layout, LowerCtx};
+use crate::limits::smalls;
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{Constant, Layout, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{layout_at, layouts_at, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, RawModel, Type};
 #[cfg(verus_keep_ghost)]
@@ -301,7 +301,7 @@ proof fn lemma_con(
             let s = so->Some_0;
             let ot = sty(s.ty);
             let oo = mo->Some_0;
-            assert(oo.ty == crate::canon::slot_tys(ot, enums)[0]);
+            assert(oo.ty == crate::lower_types::slot_tys(ot, enums)[0]);
             assert(width(ot, enums) == 1);
             assert(crate::encoding::wf_stype(ot, enums)) by {
                 crate::encoding::lemma_enc_len(v, ot, enums);

@@ -9,15 +9,17 @@ use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
+use crate::expr_build::{bool_lit, ite_s, tree_s};
+#[cfg(verus_keep_ghost)]
 use crate::infer::type_of;
 #[cfg(verus_keep_ghost)]
-use crate::lowering::*;
+use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{added, all_pure, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
-#[cfg(verus_keep_ghost)]
-use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_fold, eval_src, src_bool, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
@@ -516,7 +518,11 @@ pub proof fn lemma_ite_prefix(
                     }
                     lemma_prefix_trans(l2, lj, lk);
                 },
-                Err(_) => {},
+                Err(kk) => {
+                    assert(eval_l(fj, env, lj) == Err::<Value, ErrKind>(kk));
+                    assert(eval_l(x, env, lj) == Err::<Value, ErrKind>(kk));
+                    assert(run(ite_binds(c, fa, fb, k), env, l2) == Err::<Seq<Value>, ErrKind>(kk));
+                },
             }
         }
     }

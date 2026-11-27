@@ -1518,7 +1518,7 @@ fn widths(ts: &Vec<SType>, n: usize, enums: &Vec<i64>) -> (r: Option<usize>)
             w as int == crate::encoding::width_sum(crate::encoding::stys(ts@.take(i as int)), enums@),
         decreases n - i,
     {
-        let x = match crate::slots::stype_width(&ts[i], enums) {
+        let x = match crate::expr_build::stype_width(&ts[i], enums) {
             Some(x) => x,
             None => return None,
         };

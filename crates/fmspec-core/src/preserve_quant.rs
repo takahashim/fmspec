@@ -5,25 +5,29 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, enc_rows, keys, lemma_default_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_models_enc, lemma_repeat_len, member, sty, to_xty};
+use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_models_enc, lemma_repeat_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{width, xty, STy, SType, SVal, XTy};
+use crate::encoding::{member, sty, to_xty, width, xty, STy, SType, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
+use crate::expr_build::bool_lit;
+#[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_domain_rank};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::*;
+use crate::lists::{at_rank, lemma_items_member, picks, vals_at};
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::{all_pure, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::quant::{at_rank, lemma_items_index, lemma_items_member, lemma_qscan, lemma_select_all};
+use crate::quant::{lemma_items_index, lemma_qscan, lemma_select_all, lemma_select_prefix};
 #[cfg(verus_keep_ghost)]
-use crate::quant::{lemma_select_prefix, lemma_vals_weaken, picks, q_step_ok, qprefix, unrank_ok, vals_at};
-#[cfg(verus_keep_ghost)]
-use crate::slots::*;
+use crate::quant::{lemma_vals_weaken, q_step_ok, qprefix, unrank_ok};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_quant, eval_src, select_bits, src_bool, Over, QState, SEnv, TExpr};
 use vstd::prelude::*;

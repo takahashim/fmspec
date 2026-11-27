@@ -5,33 +5,23 @@
 //! 公開引数のスロットの数が引数のスロットの数以下）を満たすことを前提にする。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_slot_tys_seq_len;
+use crate::encoding::{sty, stys, wf_stype, wf_stypes, width, width_sum, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::canon::{slot_tys, slot_tys_seq, ty_repeat};
+use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, SVal};
+use crate::lower_ctx::{Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{stys, wf_stype, wf_stypes, width, width_sum, STy};
+use crate::lower_types::ty_repeat;
 #[cfg(verus_keep_ghost)]
-use crate::equality::{small, smalls};
+use crate::lower_types::{layout_at, layouts_at, lemma_slot_tys_seq_len, slot_tys, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::Layout;
+use crate::model::{Action, Contract, RawModel, Type, Update};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::LowerCtx;
-#[cfg(verus_keep_ghost)]
-use crate::model::Type;
-#[cfg(verus_keep_ghost)]
-use crate::model::{RawModel, Update};
-#[cfg(verus_keep_ghost)]
-use crate::model_lower::{action_at, contract_at};
-#[cfg(verus_keep_ghost)]
-use crate::model_safe::{init_ok, init_src};
+use crate::model_safe::{ctx_is, init_ok, init_src, prop_low};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, model_typed};
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{act_ok, block_ok, flat_ups, upds_ok};
-#[cfg(verus_keep_ghost)]
-use crate::smodel::{layout_at, layouts_at, SModel};
+use crate::smodel::{act_ok, block_ok, flat_ups, s_arg_tys, upds_ok, SModel};
 #[cfg(verus_keep_ghost)]
 use crate::step::state_ok;
 #[cfg(verus_keep_ghost)]
@@ -237,7 +227,7 @@ pub proof fn lemma_action_frame(sm: SModel, m: RawModel, a: int, cx: LowerCtx)
         assert(block_ok(sa.updates@[u], cx, bs[u]));
         let v = sa.updates@[u].var as int;
         assert(layout_at(st[v], ts, v, enums));
-        crate::model_total::lemma_layout_end(st, ts, enums, v);
+        crate::smodel::lemma_layout_end(st, ts, enums, v);
     }
     assert forall|k: int| 0 <= k < act.updates@.len() implies #[trigger] update_fresh(m, a, k) by {
         assert forall|w: int| 0 <= w < k implies (#[trigger] m.actions@[a].updates@[w]).target
@@ -343,11 +333,11 @@ pub proof fn lemma_layout_tys_eq(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>)
     requires
         layouts_at(ls, ts, enums),
     ensures
-        crate::total::layout_tys(ls) == ts,
-        layouts_at(ls, crate::total::layout_tys(ls), enums),
+        crate::lower_types::layout_tys(ls) == ts,
+        layouts_at(ls, crate::lower_types::layout_tys(ls), enums),
 {
-    assert(crate::total::layout_tys(ls) =~= ts) by {
-        assert forall|i: int| 0 <= i < ts.len() implies crate::total::layout_tys(ls)[i] == ts[i] by {
+    assert(crate::lower_types::layout_tys(ls) =~= ts) by {
+        assert forall|i: int| 0 <= i < ts.len() implies crate::lower_types::layout_tys(ls)[i] == ts[i] by {
             assert(layout_at(ls[i], ts, i, enums));
         }
     }
@@ -367,7 +357,7 @@ pub proof fn lemma_cx_tok(cx: LowerCtx, cv: Seq<SVal>, ts: Seq<STy>, ats: Seq<ST
     let enums = cx.enums@;
     lemma_layout_tys_eq(cx.states->Some_0@, ts, enums);
     lemma_layout_tys_eq(cx.args@, ats, enums);
-    assert forall|i: int| 0 <= i < cx.consts@.len() implies #[trigger] crate::canon::in_slots(
+    assert forall|i: int| 0 <= i < cx.consts@.len() implies #[trigger] crate::lower_types::in_slots(
         cx.consts@[i].slots@,
         slot_tys(sty(cx.consts@[i].ty), enums),
         enums,
@@ -457,7 +447,7 @@ pub proof fn lemma_inv_env(sm: SModel, cv: Seq<SVal>, stg: Seq<Layout>, sx: Lowe
         crate::lower_types::lenv(sx) == crate::typing::inv_tyenv(m),
 {
     lemma_layout_tys_eq(stg, stys(sm.states@), sm.enums@);
-    assert(crate::total::layout_tys(sx.args@) =~= Seq::<STy>::empty());
+    assert(crate::lower_types::layout_tys(sx.args@) =~= Seq::<STy>::empty());
     assert(slot_tys_seq(Seq::<STy>::empty(), sm.enums@) =~= Seq::<Type>::empty());
     lemma_same_env(crate::lower_types::lenv(sx), crate::typing::inv_tyenv(m));
 }
@@ -506,6 +496,26 @@ pub proof fn lemma_con_env(
     lemma_layout_tys_eq(kx.args@, crate::smodel::s_arg_tys(sm, a), sm.enums@);
     assert(crate::smodel::out_ok(sm.actions@[a].output, cx, m.actions@[a].output));
     lemma_same_env(crate::lower_types::lenv(kx), crate::typing::con_tyenv(m, a));
+}
+
+/// 操作 `a` を文脈 `cx` で下ろした結果 `act` の性質。
+pub open spec fn action_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, cx: LowerCtx, a: int, act: Action) -> bool {
+    let ts = s_arg_tys(sm, a);
+    &&& ctx_is(cx, sm.enums@, cv, st, cx.args@, false, None)
+    &&& layouts_at(cx.args@, ts, sm.enums@)
+    &&& wf_stypes(ts, sm.enums@)
+    &&& smalls(ts)
+    &&& act_ok(sm.actions@[a], cx, act)
+}
+
+/// 遷移契約 `k` を文脈 `kx` で下ろした結果 `con` の性質。
+pub open spec fn contract_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, kx: LowerCtx, k: int, con: Contract) -> bool {
+    let a = sm.contracts@[k].action as int;
+    &&& con.action == sm.contracts@[k].action
+    &&& a < sm.actions@.len()
+    &&& ctx_is(kx, sm.enums@, cv, st, kx.args@, true, sm.actions@[a].output)
+    &&& layouts_at(kx.args@, s_arg_tys(sm, a), sm.enums@)
+    &&& prop_low(sm.contracts@[k].expr, kx, con.expr)
 }
 
 } // verus!

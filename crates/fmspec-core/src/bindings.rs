@@ -1,53 +1,19 @@
 //! 評価の順に並べた束縛の列を、中核の `let` の入れ子にする。
 
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, Env, ErrKind};
+use crate::eval::{eval_l, Env};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{binds_typed, lemma_lts_at, lemma_lts_len, lemma_lts_prefix, lts};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 #[cfg(verus_keep_ghost)]
+use crate::preserve::{eval_bindings, eval_bound_body};
+#[cfg(verus_keep_ghost)]
 use crate::typing::{type_l, ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
-
-/// 束縛の列を先頭から評価する。最初のエラーで止まる。
-pub open spec fn eval_bindings(
-    bindings: Seq<Expr>,
-    n: nat,
-    env: Env,
-    locals: Seq<Value>,
-) -> Result<Seq<Value>, ErrKind>
-    recommends n <= bindings.len(),
-    decreases n,
-{
-    if n == 0 {
-        Ok(locals)
-    } else {
-        match eval_bindings(bindings, (n - 1) as nat, env, locals) {
-            Err(error) => Err(error),
-            Ok(prefix) => match eval_l(bindings[n - 1], env, prefix) {
-                Err(error) => Err(error),
-                Ok(value) => Ok(prefix.push(value)),
-            },
-        }
-    }
-}
-
-pub open spec fn eval_bound_body(
-    bindings: Seq<Expr>,
-    n: nat,
-    body: Expr,
-    env: Env,
-    locals: Seq<Value>,
-) -> Result<Value, ErrKind> {
-    match eval_bindings(bindings, n, env, locals) {
-        Err(error) => Err(error),
-        Ok(final_locals) => eval_l(body, env, final_locals),
-    }
-}
 
 /// 束縛を順に評価してから本体を評価する式を返す。
 pub fn wrap_bindings(bindings: Vec<Expr>, body: Expr) -> (out: Expr)
