@@ -106,6 +106,61 @@ fn a_deadlock_and_an_error_at_the_depth_are_reported() {
     assert!(trace(&o).0.is_empty());
 }
 
+/// `counter(1, actions)` に、`action` の遷移契約 `kept`（式 `expr`）を加えたモデル。
+fn with_contract(actions: serde_json::Value, action: &str, expr: serde_json::Value) -> Model {
+    let mut ir = counter(1, actions);
+    ir["contracts"] = json!([{"name": "kept", "action": action, "expr": expr}]);
+    model(&ir)
+}
+
+/// 0による除算で評価エラーになる式。
+fn failing() -> serde_json::Value {
+    json!({"eq": [{"div": [{"int": 1}, {"int": 0}]}, {"int": 0}]})
+}
+
+#[test]
+fn a_contract_violation_back_to_a_visited_state_beyond_the_depth_is_not_reported() {
+    // 自己ループは訪問済みの状態に戻るが、遷移契約の違反を報告すると、トレースは1ステップで上限0を超える。
+    let m = with_contract(json!([stay()]), "stay", json!({"bool": false}));
+    depth_limited(&with_depth(&m, false, 0));
+    let o = with_depth(&m, false, 1);
+    assert_eq!(o.status, Status::Violated);
+    assert_eq!(*trace(&o).1, Claim::Contract(0));
+    assert_eq!(trace(&o).0.len(), 1);
+}
+
+#[test]
+fn contract_and_invariant_errors_beyond_the_depth_are_not_reported() {
+    // 遷移契約の評価エラーは、遷移を含むトレースで報告するので、上限の深さからの遷移では打ち切りとして扱う。
+    let m = with_contract(json!([stay()]), "stay", failing());
+    depth_limited(&with_depth(&m, false, 0));
+    let o = with_depth(&m, false, 1);
+    assert_eq!(o.status, Status::Error);
+    assert!(matches!(trace(&o).1, Claim::ContractError(0, _)), "{:?}", trace(&o).1);
+    assert_eq!(trace(&o).0.len(), 1);
+
+    // 遷移先の不変条件の評価エラーも、遷移先が上限より深いので、評価せずに打ち切りとして扱う。
+    let mut ir = counter(1, json!([go("go", 0, 1)]));
+    ir["invariants"] = json!([{"name": "p", "expr": {"implies": [{"eq": [{"var": 0}, {"int": 1}]}, failing()]}}]);
+    let m = model(&ir);
+    depth_limited(&with_depth(&m, false, 0));
+    let o = with_depth(&m, false, 1);
+    assert_eq!(o.status, Status::Error);
+    assert!(matches!(trace(&o).1, Claim::InvariantError(0, _)), "{:?}", trace(&o).1);
+    assert_eq!(trace(&o).0.len(), 1);
+}
+
+#[test]
+fn transitions_after_the_depth_is_cut_are_still_counted_and_not_reported() {
+    // 上限の深さの状態0で、未訪問の状態1への遷移で打ち切りが決まったあとに、遷移契約に違反する自己ループがある。
+    // どちらも報告せず、探索器の報告の遷移数は両方を数える。
+    let m = with_contract(json!([go("go", 0, 1), stay()]), "stay", json!({"bool": false}));
+    let o = with_depth(&m, false, 0);
+    depth_limited(&o);
+    assert_eq!(o.stats.transitions, 2);
+    assert_eq!(o.stats.visited_states, 1);
+}
+
 #[test]
 fn the_depth_and_the_state_limits_are_told_apart() {
     let m = model(&tickets());

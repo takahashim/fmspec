@@ -10,7 +10,7 @@
 pub mod bfs;
 pub mod check;
 mod claim;
-pub mod gate;
+mod gate;
 pub mod graph;
 pub mod inconsistency;
 pub mod refine;
@@ -21,7 +21,7 @@ mod stop;
 pub mod sym;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
-pub use check::{check, check_evidence, check_evidence_with, sample, Internal, Outcome, Sampled, Status};
+pub use check::{check, check_evidence, sample, Internal, Outcome, Sampled, Status};
 pub use gate::{evidence_cost, judge, GateOptions};
 pub use graph::{explore, input_of, test_paths, Edge, Graph, Paths, TestPath};
 pub use inconsistency::Inconsistency;

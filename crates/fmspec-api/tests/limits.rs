@@ -68,6 +68,16 @@ fn evidence_over_the_budget_is_not_checked() {
     let enough = verify_certificate(&m, &cert, &json!({"max_check_cost": 1_000_000}), None).unwrap();
     assert_eq!(enough["status"], "verified", "{enough}");
 
+    // 検査条件の違う証明書は、見積もりが上限を超えても、判定ゲートが検査条件の不一致で拒否する。
+    for opts in [
+        json!({"invariants": [], "max_check_cost": 10}),
+        json!({"invariants": [], "max_time_ms": 0}),
+    ] {
+        let mismatch = verify_certificate(&m, &cert, &opts, None).unwrap();
+        assert_eq!(mismatch["status"], "rejected", "{mismatch}");
+        assert_eq!(mismatch["rejected"]["reason"], "condition_mismatch", "{mismatch}");
+    }
+
     // 違反のトレースも、上限を超えれば検査しない。
     let bad = with_invariant(json!({"lt": [{"var": 0}, {"int": 2}]}));
     let violated = check(&bad, &json!({}), None).unwrap();

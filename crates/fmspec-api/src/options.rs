@@ -18,6 +18,8 @@ fn object(v: &Value, accepts: impl Fn(&str) -> bool) -> Result<&Map<String, Valu
 }
 
 /// `allowed` のキーだけを受け付けるオプションのオブジェクトを取り出す。
+/// 検査条件の一部しか使わない関数は、使う検査条件のキーだけを `allowed` に含めて、使わないキーを拒否する。
+/// 含めなかった検査条件は、`conditions` の既定（すべてが対象で、デッドロック検査は無効）になる。
 pub(crate) fn keys<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, String> {
     object(v, |k| allowed.contains(&k))
 }
@@ -27,7 +29,9 @@ pub(crate) fn options<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<Stri
     object(v, |k| CONDITION_KEYS.contains(&k) || allowed.contains(&k))
 }
 
-fn select(
+/// 名前の配列の指定で、`mask` の対象を選ぶ。省略または `null` なら `mask` を変えない。
+/// 誤りの文は `what`（「操作」など）で始め、型の誤りには指定の値を添える。
+pub(crate) fn select(
     mask: &mut [bool],
     wanted: Option<&Value>,
     what: &str,
@@ -36,7 +40,7 @@ fn select(
     let Some(wanted) = wanted.filter(|v| !v.is_null()) else {
         return Ok(());
     };
-    let not_names = || format!("{what}の指定は名前の配列です");
+    let not_names = || format!("{what}の指定は名前の配列です（{wanted}）");
     let names = wanted.as_array().ok_or_else(not_names)?;
     mask.fill(false);
     for name in names {
@@ -92,11 +96,16 @@ pub(crate) fn deadline(map: &Map<String, Value>) -> Result<Option<Instant>, Stri
     Ok(count(map, "max_time_ms", 0)?.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms))))
 }
 
+/// 真偽値のオプション。省略または `null` なら `None`。
+pub(crate) fn optional_flag(map: &Map<String, Value>, key: &str) -> Result<Option<bool>, String> {
+    match map.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(v) => Err(format!("{key} は真偽値です（{v}）")),
+    }
+}
+
 /// 真偽値のオプション。省略または `null` なら偽。
 pub(crate) fn flag(map: &Map<String, Value>, key: &str) -> Result<bool, String> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(false),
-        Some(Value::Bool(b)) => Ok(*b),
-        Some(_) => Err(format!("{key} は真偽値です")),
-    }
+    Ok(optional_flag(map, key)?.unwrap_or(false))
 }

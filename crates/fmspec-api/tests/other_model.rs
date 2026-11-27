@@ -155,6 +155,8 @@ fn evidence_that_does_not_fit_the_current_model_is_unreadable() {
         assert!(message.contains(what), "{message}");
         // 読めない証拠には、読めていない検査条件を付けない。
         assert!(body.get("conditions").is_none(), "{body}");
+        // 表示では、このモデルで扱ったとは書かず、digest は拒否の理由に1度だけ示す。
+        assert_eq!(human(&body), format!("Rejected: counter\n  拒否の理由: {message}\n"));
     }
     // JSONとして読めない証拠と、版の誤りは、digest を読む前の誤りなので、そのまま報告する。
     let body = replay_with(&old, "{", &allow()).unwrap();
@@ -184,6 +186,18 @@ fn a_certificate_for_another_model_is_checked_against_the_current_model() {
     let body = verify_certificate(&reset, &cert, &allowed, None).unwrap();
     assert_eq!(body["rejected"]["reason"], "condition_mismatch");
 
+    // 見積もりが上限を超えて検査しなかった結果にも、別のモデルに対する証拠を扱ったことを残す。
+    let mut limited = allowed.clone();
+    limited["max_check_cost"] = json!(1);
+    let body = verify_certificate(&new, &cert, &limited, None).unwrap();
+    assert_eq!(body["status"], "inconclusive", "{body}");
+    assert_eq!(body["reason"], "max_check_cost", "{body}");
+    assert_eq!(body["evidence_model_digest"], json!(old.digest), "{body}");
+    // 検査条件の違う証明書は、上限があっても判定ゲートが拒否する。
+    let body = verify_certificate(&reset, &cert, &limited, None).unwrap();
+    assert_eq!(body["rejected"]["reason"], "condition_mismatch", "{body}");
+    assert_eq!(body["evidence_model_digest"], json!(old.digest), "{body}");
+
     // 状態の範囲を広げると、証明書の状態 3 からの遷移先 4 が証明書にないので拒否する。
     let wider = counter(5, 1, |_| {});
     let body = verify_certificate(&wider, &cert, &allowed, None).unwrap();
@@ -192,11 +206,39 @@ fn a_certificate_for_another_model_is_checked_against_the_current_model() {
     assert_eq!(body["evidence_model_digest"], json!(old.digest));
 }
 
+/// 1状態の検査の見積もりが、証明書の検査の区切りの目安（約2^20回の評価）を超える遷移契約 `heavy` を加える。
+/// 判定ゲートは1状態ごとに、中断要求と時間の上限を確かめる。
+fn with_heavy_contract(ir: &mut Value) {
+    let range = json!({"int": {"min": 0, "max": 1023}});
+    let body = json!({"forall": {"name": "y", "type": range, "body": {"bool": true}}});
+    ir["contracts"] = json!([{"name": "heavy", "action": "inc",
+                              "expr": {"forall": {"name": "x", "type": range, "body": body}}}]);
+}
+
+#[test]
+fn a_certificate_check_for_another_model_stopped_by_a_limit_keeps_the_digest() {
+    let opts = json!({"invariants": [], "certificate": true});
+    let old = counter(3, 1, with_heavy_contract);
+    let cert = check(&old, &opts, None).unwrap()["certificate"].to_string();
+    let new = counter(3, 2, with_heavy_contract);
+    let allowed = json!({"invariants": [], "allow_other_model": true, "max_time_ms": 0});
+    let body = verify_certificate(&new, &cert, &allowed, None).unwrap();
+    assert_eq!(body["status"], "inconclusive", "{body}");
+    assert_eq!(body["reason"], "max_time_ms", "{body}");
+    assert_eq!(body["evidence_model_digest"], json!(old.digest), "{body}");
+
+    let allowed = json!({"invariants": [], "allow_other_model": true});
+    let body = verify_certificate(&new, &cert, &allowed, Some(&|| true)).unwrap();
+    assert_eq!(body["status"], "inconclusive", "{body}");
+    assert_eq!(body["reason"], "interrupted", "{body}");
+    assert_eq!(body["evidence_model_digest"], json!(old.digest), "{body}");
+}
+
 #[test]
 fn allow_other_model_is_a_boolean() {
     let m = counter(3, 1, |_| {});
     let trace = violation(&m);
-    let expected = "allow_other_model は真偽値です";
+    let expected = "allow_other_model は真偽値です（\"yes\"）";
     let bad = json!({"allow_other_model": "yes"});
     assert_eq!(replay_with(&m, &trace, &bad).unwrap_err(), expected);
     assert_eq!(shrink(&m, &trace, &bad, None).unwrap_err(), expected);

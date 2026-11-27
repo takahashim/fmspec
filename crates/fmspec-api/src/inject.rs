@@ -10,14 +10,14 @@ pub(crate) fn parse_inject(model: &Model, v: Option<&Value>) -> Result<Vec<Vec<u
     let Some(v) = v.filter(|v| !v.is_null()) else {
         return Ok(injected);
     };
-    let message = "inject は、操作名から内部選択の名前の配列へのオブジェクトです";
-    for (action_name, choices) in v.as_object().ok_or(message)? {
+    let message = || format!("inject は、操作名から内部選択の名前の配列へのオブジェクトです（{v}）");
+    for (action_name, choices) in v.as_object().ok_or_else(message)? {
         let a = model
             .names
             .action_index(action_name)
             .ok_or(format!("未定義の操作 {action_name:?}"))?;
-        for choice in choices.as_array().ok_or(message)? {
-            let choice = choice.as_str().ok_or(message)?;
+        for choice in choices.as_array().ok_or_else(message)? {
+            let choice = choice.as_str().ok_or_else(message)?;
             let k = model.names.actions[a]
                 .choices
                 .iter()

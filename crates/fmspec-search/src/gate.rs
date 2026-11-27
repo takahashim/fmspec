@@ -33,7 +33,7 @@ fn range_len(lo: i64, hi: i64) -> u64 {
 }
 
 /// 式を1回評価するときの、部分式の評価回数の上限。
-pub fn expr_cost(e: &Expr) -> u64 {
+fn expr_cost(e: &Expr) -> u64 {
     match e {
         Expr::Const(_)
         | Expr::Var(_)
@@ -65,7 +65,7 @@ fn domain_size(m: &RawModel, ty: &Type) -> u64 {
 }
 
 /// 1つの状態の検査（対象の不変条件、対象の操作の全引数での遷移と遷移契約、終端条件）の評価回数の上限。
-pub fn state_cost(model: &CheckedModel, cond: &Conditions) -> u64 {
+fn state_cost(model: &CheckedModel, cond: &Conditions) -> u64 {
     let m = model.raw();
     let mut cost: u64 = 1;
     for (i, inv) in m.invariants.iter().enumerate() {
@@ -113,8 +113,22 @@ pub fn evidence_cost(model: &CheckedModel, cond: &Conditions, evidence: &Evidenc
     }
 }
 
+/// 検査条件が同じか。証明書を見積もらずに判定ゲートへ渡すかを決めるためだけに使う。
+/// 判定ゲートは自分で検査条件を比べるので、この判断がどう誤っても判定は変わらない（誤れば打ち切りの理由が変わるだけである）。
+fn same_conditions(a: &Conditions, b: &Conditions) -> bool {
+    a.actions == b.actions && a.invariants == b.invariants && a.contracts == b.contracts && a.deadlock == b.deadlock
+}
+
 /// 証拠を判定ゲートで検査する。検査を打ち切ったときは、証拠を `Unavailable`（打ち切った理由）に置き換えて返す。
+///
+/// 検査条件の違う証明書は、見積もりも区切りもせずに判定ゲートへ渡す。判定ゲートは検査条件を比べてから検査するので、
+/// 状態を検査せずに検査条件の不一致で拒否する。
 pub fn judge(model: &CheckedModel, cond: &Conditions, evidence: Evidence, opts: &GateOptions) -> (Verdict, Evidence) {
+    if let Evidence::Certificate(cert) = &evidence {
+        if !same_conditions(&cert.conditions, cond) {
+            return (decide(model, cond, &evidence), evidence);
+        }
+    }
     let given_up = |limit: Limit| {
         let evidence = Evidence::Unavailable(limit);
         (decide(model, cond, &evidence), evidence)

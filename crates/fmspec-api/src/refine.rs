@@ -1,6 +1,6 @@
 //! 詳細化の検査（docs/ir.md の「詳細化」）。
 
-use crate::options::{count, deadline, max_states, options, size};
+use crate::options::{count, deadline, max_states, options, select, size};
 use crate::report::{inconsistency_json, limit_name, reject_json_in, INCONSISTENCY_MESSAGE};
 use crate::Interrupt;
 use fmspec_core::evidence::TraceStep;
@@ -21,17 +21,9 @@ fn ref_conditions(model: &Model, opts: &serde_json::Map<String, Value>) -> Resul
         contracts: vec![false; model.names.contracts.len()],
         deadlock: false,
     };
-    if let Some(wanted) = opts.get("actions").filter(|v| !v.is_null()) {
-        let names = wanted.as_array().ok_or("操作の指定は名前の配列です")?;
-        c.actions.fill(false);
-        for name in names {
-            let name = name.as_str().ok_or("操作の指定は名前の配列です")?;
-            match model.names.action_index(name) {
-                Some(i) => c.actions[i] = true,
-                None => return Err(format!("未定義の操作 {name:?}")),
-            }
-        }
-    }
+    select(&mut c.actions, opts.get("actions"), "操作", |n| {
+        model.names.action_index(n)
+    })?;
     Ok(c)
 }
 

@@ -55,7 +55,7 @@ pub fn check_evidence(model: &CheckedModel, cond: &Conditions, evidence: Evidenc
 }
 
 /// `check_evidence` に、証拠の検査の資源上限と中断を付けたもの。
-pub fn check_evidence_with(
+pub(crate) fn check_evidence_with(
     model: &CheckedModel,
     cond: &Conditions,
     evidence: Evidence,

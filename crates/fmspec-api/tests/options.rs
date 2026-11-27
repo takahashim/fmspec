@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_api::{check, coverage, load, shrink, simulate, to_text, Model, Session};
+use fmspec_api::{check, coverage, load, shrink, simulate, test_paths, to_text, Model, Session};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -27,18 +27,25 @@ fn check_error(opts: Value) -> String {
 fn condition_errors() {
     assert_eq!(check_error(json!([])), "オプションはオブジェクトです");
     assert_eq!(check_error(json!({"bogus": 1})), "未知のオプション \"bogus\"");
-    assert_eq!(check_error(json!({"deadlock": 1})), "deadlock は真偽値です");
-    assert_eq!(check_error(json!({"actions": "inc"})), "操作の指定は名前の配列です");
+    assert_eq!(check_error(json!({"deadlock": 1})), "deadlock は真偽値です（1）");
+    assert_eq!(
+        check_error(json!({"actions": "inc"})),
+        "操作の指定は名前の配列です（\"inc\"）"
+    );
     assert_eq!(
         check_error(json!({"invariants": [1]})),
-        "不変条件の指定は名前の配列です"
+        "不変条件の指定は名前の配列です（[1]）"
     );
     assert_eq!(check_error(json!({"contracts": ["c"]})), "未定義の遷移契約 \"c\"");
     assert_eq!(
         check_error(json!({"max_states": 0})),
         "max_states は1以上の整数です（0）"
     );
-    assert_eq!(check_error(json!({"certificate": 1})), "certificate は真偽値です");
+    assert_eq!(check_error(json!({"certificate": 1})), "certificate は真偽値です（1）");
+    assert_eq!(
+        check_error(json!({"symmetry": "on"})),
+        "symmetry は真偽値です（\"on\"）"
+    );
     assert_eq!(
         check_error(json!({"max_depth": -1})),
         "max_depth は0以上の整数です（-1）"
@@ -70,10 +77,38 @@ fn each_function_accepts_only_its_keys() {
     assert_eq!(err, "オプションはオブジェクトです");
     let err = coverage(&m, &json!({"seen": {"edges": []}}), None).unwrap_err();
     assert_eq!(err, "seen の未知のキー \"edges\"");
-    let err = Session::new(Arc::new(counter()), &json!({"deadlock": "yes"}))
+    // セッションの照合はデッドロックを検査しないので、deadlock は受け付けない。
+    // 検査条件のうち、受け付けるキーの型の誤りは報告する。
+    for deadlock in [json!(true), json!("yes")] {
+        let err = Session::new(Arc::new(counter()), &json!({"deadlock": deadlock}))
+            .err()
+            .unwrap();
+        assert_eq!(err, "未知のオプション \"deadlock\"");
+    }
+    let err = Session::new(Arc::new(counter()), &json!({"invariants": "small"}))
         .err()
         .unwrap();
-    assert_eq!(err, "deadlock は真偽値です");
+    assert!(err.starts_with("不変条件の指定は名前の配列です"), "{err}");
+    // カバレッジとテスト経路のグラフは、対象の操作だけで決まる。不変条件、遷移契約、デッドロックは使わない。
+    for key in ["invariants", "contracts", "deadlock"] {
+        let opts = json!({ key: null });
+        assert_eq!(
+            coverage(&m, &opts, None).unwrap_err(),
+            format!("未知のオプション {key:?}")
+        );
+        assert_eq!(
+            test_paths(&m, &opts, None).unwrap_err(),
+            format!("未知のオプション {key:?}")
+        );
+    }
+    assert_eq!(
+        coverage(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"],
+        "ok"
+    );
+    assert_eq!(
+        test_paths(&m, &json!({"actions": ["inc"]}), None).unwrap()["status"],
+        "ok"
+    );
 }
 
 #[test]
@@ -83,4 +118,22 @@ fn usage_errors_have_the_shape_of_a_result() {
         text,
         r#"{"message":"未知のオプション \"bogus\"","status":"usage_error"}"#
     );
+}
+
+#[test]
+fn option_errors_are_found_before_the_search() {
+    // 探索は状態を取り出すごとに中断要求を確かめる。誤った指定なら、探索を始めずに誤りを返す。
+    let asked = std::cell::Cell::new(0);
+    let interrupt = || {
+        asked.set(asked.get() + 1);
+        false
+    };
+    for opts in [json!({"certificate": 1}), json!({"certificate": "yes", "max_depth": 1})] {
+        let err = check(&counter(), &opts, Some(&interrupt)).unwrap_err();
+        assert!(err.starts_with("certificate は真偽値です"), "{err}");
+    }
+    assert_eq!(asked.get(), 0);
+    // 正しい指定なら探索する。
+    check(&counter(), &json!({"certificate": true}), Some(&interrupt)).unwrap();
+    assert!(asked.get() > 0);
 }
