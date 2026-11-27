@@ -193,11 +193,18 @@ fn malformed_requests_are_errors_with_a_message() {
         .unwrap();
     assert_eq!(answer["matched"], 1, "{answer}");
     // 型には合うがドメインの外の引数は、読めるが、どの候補でも有効な入力ではない。
-    let answer = started(json!({"actions": ["pay"]}))
+    let mut session = started(json!({"actions": ["pay"]}));
+    let answer = session
         .observe(&json!({"action": "pay", "args": {"id": 5}, "output": "success",
                          "observation": {"charges": 1, "open": true}}))
         .unwrap();
     assert_eq!(answer, json!({"status": "invalid_input"}));
+    // 無効な入力は候補集合を変えずに退けるだけなので、セッションは続く。
+    let answer = session
+        .observe(&json!({"action": "pay", "args": {"id": 0}, "output": "success",
+                         "observation": {"charges": 1, "open": true}}))
+        .unwrap();
+    assert_eq!(answer["status"], "continue", "{answer}");
 }
 
 /// Setの要素の重複は、値のJSONとして不正である。観測値なら、どの値とも一致しない値として不適合にし、

@@ -34,7 +34,8 @@ pub struct Session {
 const FINISHED: &str = "セッションは終わっています";
 
 /// 照合が続くことを示す応答の `status`。これ以外の応答を返したら、セッションは終わる。
-const GOING_ON: [&str; 4] = ["continue", "input", "valid", "invalid"];
+/// `invalid` と `invalid_input`（ある候補で無効な入力）は、候補集合を変えずに入力を退けるだけなので、終わらない。
+const GOING_ON: [&str; 5] = ["continue", "input", "valid", "invalid", "invalid_input"];
 
 /// 観測した値を、状態変数のスロットごとの値にする。型の符号にできなければ、すべてのスロットを一致しない値とする。
 fn seen(model: &Model, var: usize, v: Option<&Value>) -> Vec<Seen> {
