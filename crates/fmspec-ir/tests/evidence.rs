@@ -228,6 +228,12 @@ fn conditions_name_defined_items_only() {
     assert!(with("invariants", json!("small")).contains("名前の配列"));
     assert!(with("deadlock", json!(null)).contains("deadlock"));
     assert!(with("fairness", json!(true)).contains("未知のキー"));
+    // Setの要素の重複と同じく、名前の重複は形式の誤りとする。
+    assert_eq!(
+        with("actions", json!(["move", "move"])),
+        "conditions.actions: 名前 \"move\" が重複しています"
+    );
+    assert!(with("invariants", json!(["small", "small"])).contains("重複"));
 }
 
 /// 証拠の状態にあるSetの要素の重複は、形式の誤りとして拒否する。

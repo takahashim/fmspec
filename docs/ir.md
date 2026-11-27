@@ -465,6 +465,7 @@ fmspec-api の `coverage` と `test_paths` も受け付ける。
 証明書が持てるキーは、`certificate_version`、`model_digest`、`engine_version`、`conditions`、`states` で、トレースが持てるキーは、`trace_version`、`model_digest`、`engine_version`、`seed`、`conditions`、`initial`、`steps`、`claim` である。
 証拠の中のオブジェクト（証明書、トレース、検査条件、ステップ、`claim`、`claim.error`）は、書けるキーが決まっており、未知のキーは、書き間違いを黙って無視しないよう、形式の誤りとする。
 名前（操作、状態変数、不変条件、遷移契約）を書くキーに文字列でない値があれば、形式の誤りとする。
+`conditions` は、`actions`、`invariants`、`contracts`（対象の名前の配列）と `deadlock`（真偽値）をすべて持つ。未定義の名前と、同じ名前の重複は形式の誤りとする。
 形式の誤りの証拠と、`model_digest` が違う証拠は、判定ゲートにかけずに読めない証拠として拒否する（「検査の結果」を参照）。
 
 ## トレース

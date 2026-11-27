@@ -44,6 +44,10 @@ fn mask(v: Option<&Value>, what: &str, len: usize, find: impl Fn(&str) -> Option
             .as_str()
             .ok_or_else(|| format!("conditions.{what} は名前の配列です"))?;
         let i = find(name).ok_or_else(|| format!("conditions.{what}: 未定義の名前 {name:?}"))?;
+        // Setの要素の重複と同じく、名前の重複は誤りとする（書き出す検査条件は名前を1度ずつ並べる）。
+        if mask[i] {
+            return Err(format!("conditions.{what}: 名前 {name:?} が重複しています"));
+        }
         mask[i] = true;
     }
     Ok(mask)
