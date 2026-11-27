@@ -5,7 +5,7 @@ fmspecのエンジンが読み書きするJSONの形式を定める。
 Rubyの `Fmspec::Result#to_h` も同じ結果を返す。
 
 設計の背景は[設計仕様書](ruby_model_checker_spec.md)にある。
-仕様書§18の未決事項のうち、公開引数、内部選択、出力、遷移契約、終端条件のIRでの表現と、探索順に依存する結果の扱いは、本書の内容で実装した。
+仕様書§18で未決事項としていた、公開引数、内部選択、出力、遷移契約、終端条件のIRでの表現、有限型の値の符号化、探索順に依存する結果の扱い、`model_digest` の対象範囲は、本書で定める。
 証拠の形式の互換性ポリシーは未定である。
 
 ## JSON Schema
@@ -47,6 +47,9 @@ IRの互換性ポリシーは未定である。
 定数は `{"const": "名前"}` で参照し、それより前に定義した定数の値の式にも使える。
 状態変数、操作、不変条件、遷移契約は、`source`（`{"file", "line"}`）でソース位置を持てる。
 ソース位置は診断に使うだけで、モデルの意味にもdigestにも関わらない。
+
+モデルの**digest**（`model_digest`）は、IRのJSONからソース位置（`source`）のキーを除き、オブジェクトのキーを整列して直列化した文字列のSHA-256で、`sha256:` に続けて16進で書く。
+ソース位置だけが違うIRは、同じモデルとして扱う。
 
 ### 初期状態
 
@@ -168,6 +171,7 @@ Bool、Int、Enumは1スロットで、Boolは0と1、Intは値そのもの、En
 スロットの列の辞書式順序は、正規順と一致する。
 
 状態は状態変数のスロットを定義順に並べた列である。
+
 ## 式
 
 式は、演算子を表すキーを1つだけ持つオブジェクトである。
@@ -408,10 +412,14 @@ JSONでは名前で並べる。
 `states` は状態の配列で、各状態は状態変数の値のJSONを定義順に並べた配列である。
 初期状態をすべて含まなければならない。
 到達できる状態の上位集合でもよい。
-読み込み時にスロットの列の辞書順（正規順）に整列するので、ファイル中の順序は問わない。
+読み込み時にスロットの列の辞書順（正規順）に整列し、重複を除くので、ファイル中の順序は問わない。
 
 `verify-certificate` は、証明書の検査条件が要求された検査条件と一致することを確かめてから、証明書を検査する。
 `model_digest` が違う証明書は、別のモデルに対するものとして拒否する。
+
+証明書とトレースは、`certificate_version` または `trace_version`、`model_digest`（文字列）、`conditions` を必須とし、欠けていれば形式の誤りとする。
+`engine_version` は記録のためのもので、読み込み時には使わない。
+形式の誤りの証拠と、`model_digest` が違う証拠は、判定ゲートにかけずに読めない証拠として拒否する（「検査の結果」を参照）。
 
 ## トレース
 
@@ -431,7 +439,10 @@ JSONでは名前で並べる。
 }
 ```
 
-`seed` は、シミュレーションが見つけたトレースではそのseed、それ以外では `null` である（省略してもよい）。再生には使わない。
+`seed` は、シミュレーションが見つけたトレースではそのseed、`check` が見つけたトレースでは `null` である。
+`replay` と `shrink` の結果のトレースは、提示されたトレースの `seed` をそのまま残す。
+読み込むときは、省略と `null` をseedなしとし、0以上の整数でない値は形式の誤りとする。
+seedは再生には使わない。
 
 `initial` は、トレースの開始状態である。
 初期状態が1つのモデルでは省略でき、省略するとその初期状態から始める。
@@ -455,6 +466,7 @@ JSONでは名前で並べる。
 範囲外更新は `{"kind": "out_of_range", "value": 5, "type": {...}}` で、範囲外の値と、その値を置こうとした整数の型を持つ。
 `type` は表示用で、読み込み時には使わない。
 複数のスロットを持つ状態変数の範囲外更新では、`claim` の `slot` に、範囲外の整数のスロットの位置（状態変数の中で0から数える）を書く。
+`slot` を省略すると、状態変数の最初のスロットとする。0以上の整数でない値は形式の誤りとする。
 
 `replay` は、トレースに記録された検査条件で、各ステップの出力と状態、末尾の主張を検査する。
 
@@ -471,10 +483,11 @@ JSONでは名前で並べる。
 | `status` | `verified`、`violated`、`error`、`inconclusive`、`internal_error` |
 | `model`、`model_digest`、`engine_version`、`ir_version` | モデルとエンジンの識別 |
 | `conditions` | 検査条件 |
+| `strategy` | 探索方式。`check` は `bfs`、`simulate` は `random` |
 | `search` | 探索器の報告。`complete`、`visited_states`、`transitions`、`time_ms`。検査済みの値ではない |
 | `gate` | 判定ゲートが証拠の検査にかけた時間 |
 | `certificate_states` | `verified` のとき、判定ゲートが受理した証明書の状態数 |
-| `property`、`trace` | `violated`、`error` のとき、起きた事象と、判定ゲートが受理したトレース |
+| `property`、`trace` | `violated`、`error` のとき、起きた事象と、判定ゲートが受理したトレース。`property` は `claim` と同じ形で、対象の定義のソース位置 `source`（なければ `null`）を加える |
 | `reason` | `inconclusive` のとき、`max_states`、`max_check_cost`、`interrupted` のいずれか |
 | `rejected` | 探索器が生成した証拠を判定ゲートが拒否した `internal_error` のとき、拒否した理由 |
 | `inconsistency` | 探索器が内部の不整合で証拠を生成できなかった `internal_error` のとき、不整合の内容。このとき `reason` と `rejected` は付けない |
@@ -492,7 +505,14 @@ JSONでは名前で並べる。
 違反も評価エラーも見つからなければ `status` は `sampled` で、指定したサンプルの検査を完了したことだけを表す。
 見つかった場合の `status`、`property`、`trace` は `check` と同じで、トレースの `seed` にシミュレーションのseedを記録する。
 
-`verify-certificate` と `replay` の結果は同じ形で、`search` を持たない。
-提示された証拠を判定ゲートが拒否した場合の `status` は `rejected` である。
+`verify-certificate`、`replay`、`shrink` の結果は同じ形で、`search`、`gate`、`strategy` を持たない。
+`shrink` の結果は、縮小したときに `original_steps` を加える。
+提示された証拠を判定ゲートが拒否した場合の `status` は `rejected` で、`rejected` に拒否の理由（`reason` と `message`）を持つ。
+証拠を読めなかった場合（形式の誤りか、`model_digest` の不一致）も `status` は `rejected` で、`rejected` の `reason` は `unreadable` である。
+このときは検査条件を読めていないので、`ir_version` と `conditions` を付けない。
 
-終了コードは、`verified` と `sampled` が0、`violated` と `rejected` が1、`error`、不正な入力、`internal_error` が2、`inconclusive` が3である。
+CLIの `validate` の結果の `status` は `valid` で、モデルの名前と digest、状態変数、操作、不変条件、遷移契約の数を持つ。
+結果を返せなかった場合は、`status` と `message` だけを返す。
+`status` は、IRを読み込めなければ `invalid_model`、引数やオプションの誤りなら `usage_error`、ファイルを読めなければ `input_error`、証明書やトレースを書き出せなければ `output_error` である。
+
+終了コードは、`verified`、`sampled`、`valid` が0、`violated` と `rejected` が1、`error`、`invalid_model`、`usage_error`、`input_error`、`output_error`、`internal_error` が2、`inconclusive` が3である。
