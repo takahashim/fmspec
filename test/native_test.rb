@@ -110,6 +110,7 @@ class NativeTest < Minitest::Test
     assert_equal "usage_error", JSON.parse(model.simulate("[]"))["status"]
     assert_equal "rejected", JSON.parse(model.replay("{}"))["status"]
     assert_equal "rejected", JSON.parse(model.verify_certificate("not json", "{}"))["status"]
+    assert_raises(ArgumentError) { Fmspec::Native.format("not json") }
   end
 
   # エンジンのIR検証は、Ruby 側で検査済みであることを信頼しない。
