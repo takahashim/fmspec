@@ -790,9 +790,38 @@ module FmspecTla
     module_function
 
     def parse(text)
-      text.split(/^State \d+:\n/).drop(1).map do |block|
-        block.scan(%r{^/\\ (\w+) = (.*?)(?=\n/\\ |\n*\z)}m).to_h { |name, value| [name, value(value.gsub(/\s+/, " "))] }
+      text.split(/^State \d+:\n/).drop(1).map { |block| state(block) }
+    end
+
+    # 状態の「/\ 変数 = 値」の並びを読む。
+    def state(block)
+      block.scan(%r{^/\\ (\w+) = (.*?)(?=\n/\\ |\n*\z)}m).to_h { |name, value| [name, value(value.gsub(/\s+/, " "))] }
+    end
+
+    # -dump dot の出力を読む。状態、遷移、初期状態からの最短の遷移回数を返す。
+    # 状態は変数名から値へのハッシュで、"_depth" に最短の遷移回数を加える。初期状態は塗りつぶして書き出される。
+    def parse_dot(text)
+      nodes = {}
+      initial = []
+      edges = Hash.new { |h, k| h[k] = [] }
+      text.each_line do |line|
+        if (m = line.match(/\A(-?\d+) \[label="((?:[^"\\]|\\.)*)"(,style = filled)?\]/))
+          label = m[2].gsub(/\\(.)/) { ::Regexp.last_match(1) == "n" ? "\n" : ::Regexp.last_match(1) }
+          nodes[m[1]] = state(label)
+          initial << m[1] if m[3]
+        elsif (m = line.match(/\A(-?\d+) -> (-?\d+) /))
+          edges[m[1]] << m[2]
+        end
       end
+      depth = initial.to_h { |id| [id, 0] }
+      frontier = initial
+      level = 0
+      until frontier.empty?
+        level += 1
+        frontier = frontier.flat_map { |id| edges[id] }.uniq.reject { |id| depth.key?(id) }
+        frontier.each { |id| depth[id] = level }
+      end
+      nodes.map { |id, st| st.merge("_depth" => depth.fetch(id)) }
     end
 
     def value(text)

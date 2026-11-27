@@ -19,8 +19,15 @@ require "set"
 #
 # - fmspec が verified なら、事象は1つもなく、到達できる状態の集合が証明書の状態の集合と一致する。
 # - fmspec が violated か error なら、トレースの状態はどれも到達でき、末尾の主張は TLC の事象の1つである。
+#   さらに、その事象の展開の段は最小で、トレースの長さは段から決まる長さである（反例が最短であること）。
 #
-# どの事象を報告するか、反例がどれだけ短いかは探索の順序で決まり、参照実装との比較テストが検査する。
+# 同じ段に事象が複数あるとき、どれを報告するかは探索の順序で決まり、参照実装との比較テストが検査する。
+#
+# fmspec の探索は幅優先なので、報告する事象は、TLC の状態のグラフで「展開の段」が最小の事象の1つで、
+# トレースの長さはその段で決まる。深さ d の状態を展開するときに、操作の適用の評価エラー、デッドロック、
+# 終端条件の評価エラー（トレースの長さ d）、その状態から出る遷移の遷移契約（長さ d + 1）、
+# 新しく見つけた深さ d + 1 の状態の不変条件（長さ d + 1）を調べる。初期状態の不変条件は、展開の前に調べる。
+# 深さは、TLC が -dump dot で書き出す遷移から、初期状態からの最短の遷移回数として求める。
 #
 #   TLA2TOOLS    tla2tools.jar のパス（必須。なければ skip）
 #   JAVA         java の実行ファイル（既定は java）
@@ -82,7 +89,7 @@ class TlcTest < Minitest::Test
     tmp = File.join(job.dir, "java-tmp")
     FileUtils.mkdir_p(tmp)
     command = [JAVA, "-XX:+UseSerialGC", "-Djava.io.tmpdir=#{tmp}", "-cp", JAR, "tlc2.TLC", "-workers", "1", "-deadlock",
-               "-dump", "states", "-metadir", "meta", "-nowarning", "M"]
+               "-dump", "dot", "states", "-metadir", "meta", "-nowarning", "M"]
     out, status = Open3.popen2e(*command, chdir: job.dir) do |stdin, output, wait|
       stdin.close
       reader = Thread.new { output.read }
@@ -99,7 +106,7 @@ class TlcTest < Minitest::Test
     end
 
     found = Integer(out[/(\d+) distinct states found/, 1])
-    states = FmspecTla::Dump.parse(File.read(File.join(job.dir, "states.dump"), encoding: Encoding::UTF_8))
+    states = FmspecTla::Dump.parse_dot(File.read(File.join(job.dir, "states.dot"), encoding: Encoding::UTF_8))
     job.tlc = { "distinct" => found, "states" => states }
   end
 
@@ -136,7 +143,8 @@ class TlcTest < Minitest::Test
     (bindings || []).map { |b| json.fetch(b["name"]) }
   end
 
-  # TLC の状態から、fmspec の安全性の意味での事象を集める。
+  # TLC の状態から、fmspec の安全性の意味での事象を集める。事象から、その展開の段へのハッシュを返す。
+  # 段は、事象を調べるときに展開している状態の深さである（初期状態の不変条件は -1）。
   def tlc_events(job)
     ir = job.ir
     opts = job.options
@@ -144,7 +152,8 @@ class TlcTest < Minitest::Test
     invariants = ir["invariants"] || []
     targets = opts[:invariants] || invariants.map { |i| i["name"] }
     reachable = []
-    events = []
+    events = {}
+    depths = {}
     json = job.translator.method(:json_of)
     types = ir["states"].map { |st| st["type"] }
     args = lambda do |name, params, choices|
@@ -152,26 +161,32 @@ class TlcTest < Minitest::Test
       [(action["params"] || []).zip(params).map { |b, v| json.(b["type"], v) },
        (action["choices"] || []).zip(choices).map { |b, v| json.(b["type"], v) }]
     end
-    job.tlc["states"].each do |s|
+    rows = job.tlc["states"].map do |s|
       # TLC の値を、IR の値の JSON（トレースや証明書と同じ形）に直してから比べる。
       values = Array.new(n) { |i| json.(types[i], s.fetch("v#{i}")) }
+      depths[values] = s.fetch("_depth") if s.fetch("bad").empty?
+      [s, values]
+    end
+    rows.each do |s, values|
       bad = s.fetch("bad")
       if bad.empty?
+        depth = depths.fetch(values)
         reachable << values
         obs = s.fetch("obs")
         failing = invariants.each_with_index.find { |inv, i| targets.include?(inv["name"]) && obs[i] != "true" }
         if failing
           inv, i = failing
-          events << [:invariant, values, inv["name"], obs[i]]
+          events[[:invariant, values, inv["name"], obs[i]]] = depth - 1
         end
         enabled, terminal = obs.last(2)
-        events << [:deadlock, values, terminal] if opts[:deadlock] && !enabled && terminal != "true"
+        events[[:deadlock, values, terminal]] = depth if opts[:deadlock] && !enabled && terminal != "true"
       elsif bad[0] == "apply"
         _, action, params, choices, site, target, kind, value = bad
-        events << [:apply, values, action, *args.(action, params, choices), site, target, kind, value]
+        # 吸い込み状態は遷移前の状態変数を保つので、遷移前の状態の深さが段になる。
+        events[[:apply, values, action, *args.(action, params, choices), site, target, kind, value]] = depths.fetch(values)
       else
         _, action, params, choices, name, result = bad
-        events << [:contract, values, action, *args.(action, params, choices), name, result]
+        events[[:contract, values, action, *args.(action, params, choices), name, result]] = depths.fetch(values)
       end
     end
     [reachable, events]
@@ -226,7 +241,12 @@ class TlcTest < Minitest::Test
       # 初期状態が1つのモデルでは、トレースの開始状態を省略できる。
       states = states.drop(1) if states.first.nil?
       states.each { |s| assert_includes reachable, s, context }
-      assert_includes events, event, context
+      assert_includes events.keys, event, context
+      # 反例が最短であること。
+      level = events.fetch(event)
+      assert_equal events.values.min, level, -> { "#{context.call}\n展開の段が最小の事象: #{events.select { |_, l| l == events.values.min }.keys}" }
+      length = %i[invariant contract].include?(event[0]) ? level + 1 : level
+      assert_equal length, job.engine["trace"]["steps"].length, context
     else
       flunk "想定外の結果\n#{context.call}"
     end
