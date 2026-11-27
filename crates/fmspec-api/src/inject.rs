@@ -1,6 +1,9 @@
 //! 注入する内部選択の指定と、入力のJSON。セッションとテスト経路の生成が共有する。
+//!
+//! 入力のJSON（`{"action", "args", "choices"}`）の読み取り（`parse_input`）と書き出し（`input_json`）は、
+//! 互いに逆の変換なので、ここに並べて置く。
 
-use fmspec_ir::{value_to_json, Model};
+use fmspec_ir::{value_from_json, value_to_json, Model};
 use serde_json::{json, Map, Value};
 
 /// `inject` オプション（操作名から、注入する内部選択の名前の配列へのオブジェクト）を、
@@ -71,4 +74,39 @@ pub(crate) fn input_json(model: &Model, injected: &[Vec<usize>], action: usize, 
         }
     }
     json!({"action": names.name, "args": args, "choices": choices})
+}
+
+/// 入力のJSON（`{"action", "args", "choices"}`）を、操作の添字と、入力（公開引数に、注入する選択の値を続けた列）にする。
+/// `choices` は注入する選択の値で、`input_json` の逆である。ほかのキー（`output` など）は見ない。
+pub(crate) fn parse_input(model: &Model, injected: &[Vec<usize>], v: &Value) -> Result<(usize, Vec<i64>), String> {
+    let map = v.as_object().ok_or("入力はオブジェクトです")?;
+    let name = map
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or("action は操作の名前です")?;
+    let action = model.names.action_index(name).ok_or(format!("未定義の操作 {name:?}"))?;
+    let empty = Map::new();
+    let named = |key: &str| match map.get(key) {
+        None => Ok(&empty),
+        Some(v) => v.as_object().ok_or(format!("{key} はオブジェクトです")),
+    };
+    let args = named("args")?;
+    let choices = named("choices")?;
+    let names = &model.names.actions[action];
+    let injected = &injected[action];
+    if args.len() != names.params.len() || choices.len() != injected.len() {
+        return Err(format!("操作 {name:?} の引数または注入する選択の個数が合いません"));
+    }
+    let read = |given: &Map<String, Value>, binding: &String, index: usize| -> Result<Vec<i64>, String> {
+        let v = given.get(binding).ok_or(format!("引数 {binding:?} がありません"))?;
+        value_from_json(&model.names.enums, &names.arg_types[index], v).map_err(|e| format!("引数 {binding:?}: {e}"))
+    };
+    let mut values = Vec::new();
+    for (i, param) in names.params.iter().enumerate() {
+        values.extend(read(args, param, i)?);
+    }
+    for k in injected {
+        values.extend(read(choices, &names.choices[*k], names.params.len() + k)?);
+    }
+    Ok((action, values))
 }

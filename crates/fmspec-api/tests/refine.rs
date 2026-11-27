@@ -167,7 +167,11 @@ fn the_document_is_checked_when_loaded() {
 #[test]
 fn invariants_and_contracts_cannot_be_selected() {
     let r = load_refinement(&doc(basket(), counter(true), size_map())).unwrap();
-    assert!(refine(&r, &json!({"invariants": []}), None).is_err());
+    // 検査しない検査条件は、ほかのAPIの受け付けないオプションと同じく、未知のオプションとして拒否する。
+    for key in ["invariants", "contracts", "deadlock"] {
+        let err = refine(&r, &json!({key: null}), None).unwrap_err();
+        assert_eq!(err, format!("未知のオプション {key:?}"));
+    }
     assert!(refine(&r, &json!({"actions": ["nope"]}), None).is_err());
     let only_add = refine(&r, &json!({"actions": ["add"]}), None).unwrap();
     assert_eq!(only_add["status"], "refines", "{only_add}");

@@ -138,10 +138,18 @@ fn reason_text(reason: &Value) -> String {
     }
 }
 
-pub fn human(body: &Value) -> String {
-    let mut out = String::new();
-    let status = body["status"].as_str().unwrap_or("?");
-    let refinement = body.get("refinement").is_some();
+fn status(body: &Value) -> &str {
+    body["status"].as_str().unwrap_or("?")
+}
+
+/// 詳細化の検査の結果か。
+fn is_refinement(body: &Value) -> bool {
+    body.get("refinement").is_some()
+}
+
+/// 1行目（見出し）。モデルのない結果（`usage_error`、`invalid_model` など）では `None`。
+fn headline(body: &Value) -> Option<String> {
+    let refinement = is_refinement(body);
     let model = if refinement {
         format!(
             "{}（{} → {}）",
@@ -152,33 +160,37 @@ pub fn human(body: &Value) -> String {
     } else {
         plain(&body["model"])
     };
-    let property = if refinement {
-        refinement_property(&body["property"])
-    } else {
-        property_text(&body["property"])
+    let property = || {
+        if refinement {
+            refinement_property(&body["property"])
+        } else {
+            property_text(&body["property"])
+        }
     };
-    let headline = match status {
+    let line = match status(body) {
         "refines" => format!("Refines: {model}"),
-        "not_refines" => format!("NotRefines: {model} / {property}"),
+        "not_refines" => format!("NotRefines: {model} / {}", property()),
         "valid" => format!("Valid: {model}"),
         "verified" => format!("Verified: {model}"),
         "sampled" => format!("Sampled: {model}（網羅性の主張なし）"),
-        "violated" => format!("Violated: {model} / {property}"),
-        "error" => format!("Error: {model} / {property}"),
+        "violated" => format!("Violated: {model} / {}", property()),
+        "error" => format!("Error: {model} / {}", property()),
         "inconclusive" => format!("Inconclusive: {model}"),
         "internal_error" => format!("InternalError: {model}"),
         "rejected" => format!("Rejected: {model}"),
-        // モデルのない結果（usage_error、invalid_model など）は、CLI の標準エラー出力と同じく status と message を示す。
-        other if body.get("model").is_none() && !refinement => {
-            let _ = writeln!(out, "{other}: {}", plain(&body["message"]));
-            return out;
-        }
+        _ if body.get("model").is_none() && !refinement => return None,
         other => format!("{other}: {model}"),
     };
-    let _ = writeln!(out, "{headline}");
-    if let Some(reason) = body.get("reason").filter(|_| status == "inconclusive") {
+    Some(line)
+}
+
+fn reason_section(body: &Value, out: &mut String) {
+    if let Some(reason) = body.get("reason").filter(|_| status(body) == "inconclusive") {
         let _ = writeln!(out, "  打ち切りの理由: {}", reason_text(reason));
     }
+}
+
+fn other_model_section(body: &Value, out: &mut String) {
     // 読めなかった証拠（unreadable）は扱っていない。その digest は拒否の理由の文が示す。
     let unreadable = body["rejected"]["reason"] == json!("unreadable");
     if let Some(digest) = body.get("evidence_model_digest").filter(|_| !unreadable) {
@@ -188,38 +200,70 @@ pub fn human(body: &Value) -> String {
             plain(digest)
         );
     }
-    if status == "valid" && !refinement {
+}
+
+fn summary_section(body: &Value, out: &mut String) {
+    if status(body) == "valid" && !is_refinement(body) {
         let _ = writeln!(
             out,
             "  状態変数 {}、操作 {}、不変条件 {}、遷移契約 {}",
             body["states"], body["actions"], body["invariants"], body["contracts"]
         );
     }
+}
+
+fn source_section(body: &Value, out: &mut String) {
     if let Some(source) = body["property"]["source"].as_object() {
         let _ = writeln!(out, "  定義: {}:{}", plain(&source["file"]), source["line"]);
     }
+}
+
+fn trace_section(body: &Value, out: &mut String) {
     if body.get("trace").is_some() {
-        trace_text(&mut out, &body["trace"]);
+        trace_text(out, &body["trace"]);
     }
-    if let Some(rejected) = body.get("rejected") {
-        let _ = writeln!(out, "  拒否の理由: {}", plain(&rejected["message"]));
-        for key in ["state", "action", "invariant", "contract", "step"] {
-            if let Some(v) = rejected.get(key).filter(|v| !v.is_null()) {
-                let _ = writeln!(out, "    {key}: {}", pairs(v));
-            }
+}
+
+/// `key` の項目の `message` と、`fields` のうち `null` でない項目。
+fn detail_section(body: &Value, out: &mut String, key: &str, label: &str, fields: &[&str]) {
+    let Some(detail) = body.get(key) else {
+        return;
+    };
+    let _ = writeln!(out, "  {label}: {}", plain(&detail["message"]));
+    for field in fields {
+        if let Some(v) = detail.get(*field).filter(|v| !v.is_null()) {
+            let _ = writeln!(out, "    {field}: {}", pairs(v));
         }
     }
-    if let Some(inconsistency) = body.get("inconsistency") {
-        let _ = writeln!(out, "  不整合: {}", plain(&inconsistency["message"]));
-        for key in ["action", "state", "encoded_state"] {
-            if let Some(v) = inconsistency.get(key).filter(|v| !v.is_null()) {
-                let _ = writeln!(out, "    {key}: {}", pairs(v));
-            }
-        }
-    }
+}
+
+fn rejected_section(body: &Value, out: &mut String) {
+    detail_section(
+        body,
+        out,
+        "rejected",
+        "拒否の理由",
+        &["state", "action", "invariant", "contract", "step"],
+    );
+}
+
+fn inconsistency_section(body: &Value, out: &mut String) {
+    detail_section(
+        body,
+        out,
+        "inconsistency",
+        "不整合",
+        &["action", "state", "encoded_state"],
+    );
+}
+
+fn message_section(body: &Value, out: &mut String) {
     if let Some(message) = body.get("message") {
         let _ = writeln!(out, "  {}", plain(message));
     }
+}
+
+fn shrink_section(body: &Value, out: &mut String) {
     if let Some(n) = body.get("original_steps") {
         let _ = writeln!(out, "  縮小前は {n} ステップ");
     }
@@ -231,14 +275,20 @@ pub fn human(body: &Value) -> String {
             shrink["attempts"]
         );
     }
+}
+
+fn certificate_section(body: &Value, out: &mut String) {
     if let Some(n) = body.get("certificate_states") {
-        let checked = if status == "verified" || status == "refines" {
+        let checked = if matches!(status(body), "verified" | "refines") {
             "（判定ゲートが受理）"
         } else {
             ""
         };
         let _ = writeln!(out, "  証明書の状態数 {n}{checked}");
     }
+}
+
+fn simulation_section(body: &Value, out: &mut String) {
     if let Some(sim) = body.get("simulation") {
         let _ = writeln!(
             out,
@@ -250,6 +300,9 @@ pub fn human(body: &Value) -> String {
             plain(&sim["prng"])
         );
     }
+}
+
+fn search_section(body: &Value, out: &mut String) {
     if let Some(search) = body.get("search") {
         let complete = if search["complete"] == json!(true) {
             "完走"
@@ -262,5 +315,89 @@ pub fn human(body: &Value) -> String {
             search["visited_states"], search["transitions"]
         );
     }
+}
+
+/// 見出しに続く行。この順に示し、各節は対応する項目がなければ何も書かない。
+const SECTIONS: [fn(&Value, &mut String); 12] = [
+    reason_section,
+    other_model_section,
+    summary_section,
+    source_section,
+    trace_section,
+    rejected_section,
+    inconsistency_section,
+    message_section,
+    shrink_section,
+    certificate_section,
+    simulation_section,
+    search_section,
+];
+
+pub fn human(body: &Value) -> String {
+    let mut out = String::new();
+    let Some(headline) = headline(body) else {
+        // モデルのない結果は、CLI の標準エラー出力と同じく status と message を示す。
+        let _ = writeln!(out, "{}: {}", status(body), plain(&body["message"]));
+        return out;
+    };
+    let _ = writeln!(out, "{headline}");
+    for section in SECTIONS {
+        section(body, &mut out);
+    }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::error_text;
+    use fmspec_core::eval::ErrKind;
+    use fmspec_core::source::{FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_MISSING_KEY, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
+    use fmspec_ir::{error_to_json, load};
+    use serde_json::json;
+
+    /// `ErrKind` のすべての種類。種類を足したら、ここと `error_text` に足す（`match` が網羅を強いる）。
+    fn every_error() -> Vec<ErrKind> {
+        let kinds = vec![
+            ErrKind::Overflow,
+            ErrKind::TypeMismatch,
+            ErrKind::Unbound,
+            ErrKind::OutOfRange(5),
+            ErrKind::DivByZero,
+            ErrKind::Failed(FAIL_NONE),
+            ErrKind::Failed(FAIL_MISSING_KEY),
+            ErrKind::Failed(FAIL_INDEX),
+            ErrKind::Failed(FAIL_FULL),
+            ErrKind::Failed(FAIL_EMPTY),
+            ErrKind::Failed(FAIL_NOT_IN_DOMAIN),
+        ];
+        for k in &kinds {
+            match k {
+                ErrKind::Overflow
+                | ErrKind::TypeMismatch
+                | ErrKind::Unbound
+                | ErrKind::OutOfRange(_)
+                | ErrKind::DivByZero
+                | ErrKind::Failed(_) => {}
+            }
+        }
+        kinds
+    }
+
+    /// `error_to_json` が書くすべての種類に、`error_text` の文がある（JSONの文字列のまま示さない）。
+    #[test]
+    fn every_error_kind_has_a_text() {
+        let ir = json!({
+            "ir_version": 1,
+            "name": "m",
+            "states": [{"name": "x", "type": {"int": {"min": 0, "max": 1}}, "initial": {"int": 0}}],
+            "actions": []
+        });
+        let m = load(&ir.to_string()).unwrap();
+        for kind in every_error() {
+            let e = error_to_json(&m, &kind, None);
+            assert_ne!(error_text(&e), e.to_string(), "{kind:?}");
+        }
+    }
 }

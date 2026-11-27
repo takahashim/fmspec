@@ -4,7 +4,7 @@
 //! モデルの検査ではないので、判定ゲートを通さず、`Verified` などの判定も返さない。
 
 use crate::inject::{inject_slots, input_json, parse_inject};
-use crate::options::{conditions, count, deadline, keys, max_states, size};
+use crate::options::{conditions, count, deadline, max_states, nested_object, options_only, size};
 use crate::report::inconsistency_report;
 use crate::Interrupt;
 use fmspec_ir::{args_to_json, state_to_json, Model};
@@ -32,11 +32,8 @@ fn parse_seen(v: Option<&Value>) -> Result<(HashSet<Vec<i64>>, Vec<TransitionCod
     let empty = serde_json::Map::new();
     let seen = match v {
         None | Some(Value::Null) => &empty,
-        Some(v) => v.as_object().ok_or("seen はオブジェクトです")?,
+        Some(v) => nested_object(v, "seen", &["states", "transitions"])?,
     };
-    if let Some(key) = seen.keys().find(|k| !["states", "transitions"].contains(&k.as_str())) {
-        return Err(format!("seen の未知のキー {key:?}"));
-    }
     let list = |key: &str| -> Result<&[Value], String> {
         match seen.get(key) {
             None | Some(Value::Null) => Ok(&[]),
@@ -75,7 +72,7 @@ fn parse_seen(v: Option<&Value>) -> Result<(HashSet<Vec<i64>>, Vec<TransitionCod
 /// `seen`（`{"states": [状態の符号], "transitions": [[状態の符号, 操作, 引数の符号]]}`）。
 /// グラフは対象の操作だけで決まるので、ほかの検査条件（`invariants`、`contracts`、`deadlock`）は受け付けない。
 pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = keys(opts, &["actions", "max_states", "max_time_ms", "seen"])?;
+    let map = options_only(opts, &["actions", "max_states", "max_time_ms", "seen"])?;
     let cond = conditions(model, map)?;
     let (states, seen_transitions) = parse_seen(map.get("seen"))?;
     let transitions: HashSet<(&[i64], usize, &[i64])> = seen_transitions
@@ -138,7 +135,7 @@ pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
 /// オプションは、`actions`（対象の操作）、`max_states`、`max_time_ms`、`max_steps`（1経路の最大入力数、既定は20）、
 /// `inject`（セッションと同じ、注入する内部選択）。`coverage` と同じく、ほかの検査条件は受け付けない。
 pub fn test_paths(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
-    let map = keys(opts, &["actions", "max_states", "max_time_ms", "max_steps", "inject"])?;
+    let map = options_only(opts, &["actions", "max_states", "max_time_ms", "max_steps", "inject"])?;
     let cond = conditions(model, map)?;
     let max_steps = size(count(map, "max_steps", 1)?.unwrap_or(DEFAULT_MAX_STEPS));
     let injected = parse_inject(model, map.get("inject"))?;
