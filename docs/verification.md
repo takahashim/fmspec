@@ -85,7 +85,7 @@ CI では回さず、証明を変えたときに手元で、変えたファイ�
 
 | 対象 | 検査 |
 |---|---|
-| 幅優先探索（`fmspec-search`） | 手作りのグラフでの訪問状態と最短性、状態数の上限、参照実装との比較 |
+| 幅優先探索（`fmspec-search`） | 手作りのグラフでの訪問状態と最短性、状態数の上限、参照実装との比較。内部の不整合（遷移を列挙できない状態）を、中断と区別して `internal_error` にすること |
 | シミュレータ（`fmspec-search`） | 同じ乱数列を使う参照実装との、トレースの比較 |
 | 縮小（`fmspec-search`） | 縮小結果は判定ゲートが受理したトレースに限る。最短の反例に達することの確認 |
 | MBTのセッション（`fmspec-search`） | 入力の無作為な選択と不適合の診断（モデルが許す結果の列挙）。仕様書§17.2.1の境界ケース、参照実装との候補集合の比較 |
@@ -98,6 +98,7 @@ CI では回さず、証明を変えたときに手元で、変えたファイ�
 | Rails統合（`fmspec-rails/`） | 決済、ジョブ、Webhookを持つアプリケーションでの4種類の変異の検出、隔離の失敗の検出。PostgreSQLでの分離レベル別の適合と不適合（READ COMMITTED、REPEATABLE READ、SERIALIZABLE）、行のロックを書き落とした仕様のスケジュールの未完了 |
 | IRと証拠の読み書き（`fmspec-ir`） | 不正なIRの拒否、往復、参照実装との比較 |
 | 複合型の下ろし（`fmspec-ir`） | 複合型の値を直接解釈する参照実装との比較。ランダムに生成したモデルと、評価の順序、検査の順序、範囲外更新の位置を決める境界のモデル |
+| JSONレベルのAPI（`fmspec-api`） | オプションの誤りの文、結果のJSONの項目と人間向けの表示、セッションの応答の形、資源上限と中断。3状態の全有向グラフでの、IR変換、探索、証拠の検査の照合 |
 | CLI（`fmspec-cli`） | 終了コードと出力 |
 | Ruby DSL（`lib/`） | 生成したIRと期待するIRの比較、参照実装による意味の確認、誤用の拒否。仕様のブロックを具体的な値で実行した結果との比較（後述） |
 | native extension（`ext/fmspec`） | 中断、他スレッドの動作、複数スレッドからの検査、panicの例外化、引数の検査 |
@@ -194,6 +195,7 @@ DSLに意図的な誤り（比較演算子、Setの `&`、単項の `-`、`impli
 
 探索器に不具合があっても、誤った `Verified` や `Violated` にはならない。
 探索器が保証しないのは、判定への到達、反例の最短性、探索統計の正しさである。
+探索器が内部の不整合を見つけたときは、判定ゲートに証拠がないことだけを渡し（判定は `Inconclusive`）、結果は `internal_error` になる。
 
 ## 信頼基盤
 
@@ -312,7 +314,7 @@ lintが直れば `expect` が満たされなくなり、`rake nupur:lint` が失
 | Rust | 1.100.0（cargoビルド）、1.99.1（Verus）、nightly-2026-08-20（`nupur_lints`） |
 | Nupur | Makiri v0.17.0.rc3（`rakelib/nupur.rake` の `NUPUR_COMMIT`） |
 | Ruby | 3.3以上。開発は4.0.10 |
-| Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite |
+| Rails（`fmspec-rails` のテスト） | 8.1.4.1、SQLite。分離レベル別のテストは PostgreSQL（CIでは17） |
 | json_schemer（IRのスキーマのテスト） | 2.5.0 |
 | TLC（TLCとの比較テスト） | tla2tools.jar v1.7.4（`rakelib/tlc.rake` の `TLA2TOOLS_VERSION`）。Java 11以上 |
 
