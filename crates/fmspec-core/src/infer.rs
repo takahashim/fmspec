@@ -1142,7 +1142,7 @@ fn check_list(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
     }
 }
 
-proof fn lemma_all_typed_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
+pub proof fn lemma_all_typed_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
     ensures
         all_bool(es, c, lt) == all_typed(es, XTy::Bool, c, lt),
     decreases es.len(),
@@ -1153,7 +1153,7 @@ proof fn lemma_all_typed_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
 }
 
 /// 列の型付けは、要素ごとの型付けと同じである。
-proof fn lemma_all_typed_iff(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>)
+pub proof fn lemma_all_typed_iff(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>)
     ensures
         all_typed(es, x, c, lt) == forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) == Some(x),
     decreases es.len(),
@@ -1177,7 +1177,7 @@ proof fn lemma_all_typed_iff(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>)
     }
 }
 
-proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
+pub proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
     ensures
         types_of(es, c, lt) is Some == forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) is Some,
         types_of(es, c, lt) matches Some(ts) ==> ts.len() == es.len(),
@@ -1202,7 +1202,7 @@ proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
     }
 }
 
-proof fn lemma_items_typed_iff(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt: Seq<XTy>)
+pub proof fn lemma_items_typed_iff(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt: Seq<XTy>)
     ensures
         items_typed(items, k, v, c, lt) == forall|j: int|
             0 <= j < items.len() ==> type_of((#[trigger] items[j]).key, c, lt) == Some(k) && type_of(items[j].value, c, lt)
