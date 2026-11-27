@@ -13,10 +13,7 @@ use std::collections::{HashSet, VecDeque};
 pub const MAX: i64 = i64::MAX;
 
 pub fn model(ir: &Value) -> Model {
-    match load(&ir.to_string()) {
-        Ok(m) => m,
-        Err(e) => panic!("モデルを読み込めません: {e}"),
-    }
+    load(&ir.to_string()).unwrap_or_else(|e| panic!("モデルを読み込めません: {e}"))
 }
 
 /// 仕様書 §4.1 のチケット例。
@@ -93,19 +90,15 @@ pub fn conditions(m: &Model, deadlock: bool) -> Conditions {
 }
 
 pub fn run(m: &Model) -> Outcome {
-    check(m.checked(), &conditions(m, false), &BfsOptions::default())
+    run_with(m, false, None)
 }
 
 pub fn run_with(m: &Model, deadlock: bool, max_states: Option<usize>) -> Outcome {
-    check(
-        m.checked(),
-        &conditions(m, deadlock),
-        &BfsOptions {
-            max_states,
-            interrupt: None,
-            max_check_cost: None,
-        },
-    )
+    let options = BfsOptions {
+        max_states,
+        ..BfsOptions::default()
+    };
+    check(m.checked(), &conditions(m, deadlock), &options)
 }
 
 /// 不具合のある探索器。状態数が `limit` に達すると、新しい状態を黙って捨て、完走したものとして証明書を出す。

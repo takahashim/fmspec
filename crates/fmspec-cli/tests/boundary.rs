@@ -8,13 +8,14 @@ use common::*;
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
 use fmspec_core::gate::{decide, decide_raw, VerdictKind};
+use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Site;
 use fmspec_core::typing::InvalidModel;
-use fmspec_ir::parse;
-use fmspec_search::{check_evidence, Stats, Status};
-use serde_json::json;
+use fmspec_ir::{parse, Model};
+use fmspec_search::{check_evidence, Outcome, Stats, Status};
+use serde_json::{json, Value};
 
-fn accepted_again(m: &fmspec_ir::Model, o: &fmspec_search::Outcome, deadlock: bool) -> VerdictKind {
+fn accepted_again(m: &Model, o: &Outcome, deadlock: bool) -> VerdictKind {
     decide(m.checked(), &conditions(m, deadlock), &o.evidence).kind()
 }
 
@@ -83,7 +84,7 @@ fn a_violating_initial_state_is_a_zero_step_counterexample() {
 }
 
 /// 1状態で、同じ公開入力が内部選択に応じて success または forbidden を返す自己ループ。
-fn responder() -> serde_json::Value {
+fn responder() -> Value {
     let label = |v: &str| json!({"enum": {"type": "result", "variant": v}});
     json!({
         "ir_version": 1,
@@ -201,7 +202,7 @@ fn a_certificate_may_be_a_superset_of_the_reachable_states() {
 fn certificates_missing_states_or_made_for_other_conditions_are_rejected() {
     let m = model(&counter(1, json!([go("go", 0, 1)])));
     let cond = conditions(&m, false);
-    let decide_cert = |cert_cond: &fmspec_core::semantics::Conditions, states: Vec<Vec<i64>>| {
+    let decide_cert = |cert_cond: &Conditions, states: Vec<Vec<i64>>| {
         let cert = Certificate {
             conditions: cert_cond.clone(),
             states,
@@ -232,7 +233,7 @@ fn certificates_missing_states_or_made_for_other_conditions_are_rejected() {
 
 // ---- 式の境界ケース ----
 
-fn status_of(invariant: serde_json::Value) -> Status {
+fn status_of(invariant: Value) -> Status {
     let m = model(&big(invariant));
     let o = run(&m);
     match o.status {
@@ -314,7 +315,7 @@ fn updates_are_not_evaluated_when_the_guard_is_false() {
 // ---- 不具合を注入した探索器 ----
 
 /// 購入の枚数のドメインを1枚だけに狭める。2枚購入を列挙し忘れる探索器が見るモデルに相当する。
-fn only_single_purchase(mut ir: serde_json::Value) -> serde_json::Value {
+fn only_single_purchase(mut ir: Value) -> Value {
     ir["actions"][0]["params"][0]["type"] = json!({"int": {"min": 1, "max": 1}});
     ir
 }
@@ -408,7 +409,7 @@ fn a_valid_but_longer_counterexample_is_accepted() {
 #[test]
 fn the_gate_rejects_a_model_that_skipped_validation() {
     let (mut raw, _, _) = parse(&tickets().to_string()).unwrap();
-    let cond = fmspec_core::semantics::Conditions {
+    let cond = Conditions {
         actions: vec![true, true],
         invariants: vec![true],
         contracts: vec![],
