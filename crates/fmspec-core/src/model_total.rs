@@ -9,9 +9,9 @@ use crate::encoding::{copy_stype, xtype_eq, SType, XType};
 use crate::encoding::{lemma_enc_len, member, width, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_stys, sty, stys, to_xty, width_sum, xty, xtys, STy, XTy};
-#[cfg(verus_keep_ghost)]
-use crate::infer::{agrees, scope_view, type_of, SCtx};
 use crate::infer::{check, Scope};
+#[cfg(verus_keep_ghost)]
+use crate::infer::{scope_view, type_of, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lemma_width_sum_prefix;
 #[cfg(verus_keep_ghost)]

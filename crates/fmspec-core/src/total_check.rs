@@ -5,14 +5,14 @@
 
 use crate::encoding::{distinct_names, keys_exec, wf_stype_exec, SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys_or_zero, lemma_stys, lemma_xtys, sty, stys};
+use crate::encoding::{lemma_stys, lemma_xtys, sty, stys};
 use crate::encoding::{stype_eq, to_xtype};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, wf_xtype, wf_xtypes, width, width_sum};
+use crate::encoding::{wf_xtype, wf_xtypes, width, width_sum};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xtys, xwidth, xwidth_sum, STy, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::infer::{agrees, scope_view, type_of};
+use crate::infer::{agrees, scope_view};
 use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
@@ -21,7 +21,7 @@ use crate::source::{Item, Over, TExpr};
 #[cfg(verus_keep_ghost)]
 use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_seq_at, lim_ok};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok_items, lim_ok_seq, ok_x, quant_bound};
+use crate::total::{lim_ok_items, lim_ok_seq, quant_bound};
 use vstd::prelude::*;
 
 verus! {
