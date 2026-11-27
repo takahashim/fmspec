@@ -15,7 +15,7 @@ use crate::limits::{lim_s, lim_ss, lim_x, lim_xs};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at, select_ok};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::{mark_s, setop_s, Bound, Constant, Layout, LowerCtx};
+use crate::lowering::{Bound, Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::maps::{mparts_ok, mrow_at};
 #[cfg(verus_keep_ghost)]
@@ -24,6 +24,8 @@ use crate::model::Expr;
 use crate::model::{BinOp, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{all_pure, lemma_pure_mono, pure_below};
+#[cfg(verus_keep_ghost)]
+use crate::preserve_set::{mark_s, setop_s};
 #[cfg(verus_keep_ghost)]
 use crate::quant::{picks, picks_in};
 #[cfg(verus_keep_ghost)]

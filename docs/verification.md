@@ -38,7 +38,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | Type Soundness | `lemma_type_sound`：型の付いた式の評価は、型どおりの値になるか、オーバーフロー、0による除算、明示的な失敗（`Fail`）のいずれかで失敗する。局所変数と量化を含む式は `lemma_type_sound_l` が扱う。`lemma_step_typed`：整形式なモデルでは、型に従う状態からの遷移先は型に従い、失敗は式の評価の失敗か範囲外更新である | `typing.rs` |
 | Evaluation Correctness | `eval` の結果は、意味論 `eval_spec` と一致する。除算と剰余は床除算で、絶対値の符号なし除算で計算した結果が意味論の `floor_div`、`floor_mod` と一致する | `eval.rs` |
 | Transition Soundness / Completeness | `step` の結果は `step_spec` と一致する。`enumerate` は、有効な遷移だけを、ドメイン内のすべての引数について漏れなく返すか、評価エラーになる引数を1つ返す | `step.rs` |
-| Lowering Preservation（§14.1の表の外） | `lemma_safe`：`lower_model` が返した中核のモデルが安全であることと、名前を解決したモデルが値の意味論で安全であることは同値である。式ごとの意味保存は `preserve.rs` にある。詳しくは「信頼基盤」の節で述べる | `model_safe.rs` |
+| Lowering Preservation（§14.1の表の外） | `lemma_safe`：`lower_model` が返した中核のモデルが安全であることと、名前を解決したモデルが値の意味論で安全であることは同値である。式ごとの意味保存は `preserve.rs` と `preserve_*.rs` にある。詳しくは「信頼基盤」の節で述べる | `model_safe.rs` |
 | Lowering Totality（§14.1の表の外） | `lower_model` は、まず `check_model` でモデルの式の型と大きさの条件（`model_typed`）を確かめる。事後条件：失敗するなら、利用者の誤り（値の評価の失敗、初期状態の数、式が大きすぎること）か、`model_typed` が偽のときの型の誤り（状態変数と引数の型の `State`、`Args` と、それ以外の `Type`）である。式ごとには、`lower_prop` と `lower_stored` は、文脈が整形式で（`cx_wf`）、式に型が付き（`type_of`）、部分式の型が大きさの条件を満たす（`lim_ok`）なら、束縛の深さの上限（`Fail::Depth`）でしか失敗せず、置く値は型の幅だけのスロットになる | `model_lower.rs`、`lowering.rs`、`total.rs`、`model_total.rs` |
 | State Equality | 状態は符号化列そのもので、等価性は列の一致である。`lemma_decode_injective`：型に属する符号は値と一対一に対応する | `step.rs` |
 | Certificate Soundness | `check_certificate` が受理したなら、証明書は帰納的で、`safe` が成り立つ | `cert.rs` |
@@ -225,7 +225,7 @@ Listの要素をたどる量化では、位置は添字で、スロットの式�
 `fmspec-ir` は、`LowerError::Type` を「`fmspec-ir` と中核の型検査が食い違います」という内部エラーとして、`Depth` を式が大きすぎるという誤りとして報告する。
 ランダムに生成した型の合うIRで、`fmspec-ir` が受理したモデルを中核も受理することをテストしている（`crates/fmspec-ir/tests/random_ir.rs`）。
 
-すべての種類の式について、下ろしが意味を保つことを証明した（`preserve.rs`）。
+すべての種類の式について、下ろしが意味を保つことを証明した（`preserve.rs` と `preserve_*.rs`）。
 対象は、リテラル、状態変数、遷移後の状態変数、引数、出力、局所変数、定数の参照、整数の算術と比較、等価比較、否定、含意、`all` と `any`、条件式、`let`、TupleとRecordの構成と要素の取り出し、Optionの構成と有無の検査と中身の取り出し、Setのリテラル、要素を含むかの検査、要素の追加と削除、和、積、差、部分集合の判定、Mapのリテラル、`Map#get`、`Map#put`、`Map#delete`、キーを持つかの検査とキーの集合、Listのリテラル、添字での参照、先頭と末尾、`push`、`pop`、`shift`、要素を含むかの検査、Set、Map、Listの大きさと空かの判定、量化（型の全体、Setの要素、Mapのキー、Listの要素をたどるもの）を組み合わせた式である。
 ここで「環境が対応する」とは、中核の環境にある状態、引数、出力、定数のスロットの値が、意味論の環境の値の符号化であることをいう。
 

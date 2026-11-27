@@ -14,6 +14,8 @@
 //! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
+//! - [`preserve_ops`]、[`preserve_tuple`]、[`preserve_list`]、[`preserve_set`]、[`preserve_map`]、[`preserve_quant`]：
+//!   演算子と条件式、Tuple と Option、List、Set、Map、量化の下ろしが意味を保存することの補題
 //! - [`smodel`]：名前を解決したIRのモデルと、値の上の意味論
 //! - [`model_lower`]：モデル全体の下ろし
 //! - [`model_safe`]：モデル全体の下ろしが安全性を保存することの証明
@@ -53,6 +55,12 @@ pub mod model_lower;
 pub mod model_safe;
 pub mod model_total;
 pub mod preserve;
+pub mod preserve_list;
+pub mod preserve_map;
+pub mod preserve_ops;
+pub mod preserve_quant;
+pub mod preserve_set;
+pub mod preserve_tuple;
 pub mod quant;
 pub mod ranking;
 pub mod semantics;
