@@ -856,20 +856,22 @@ pub open spec fn member_rel(d: (nat, Json), e: TExpr, ns: IrNames, c: ECtx) -> b
     }
 }
 
-/// guard。動的ドメインがあれば、その検査を引数の順に並べ、最後に guard の式を置いた `all` にする。
-/// guard を省略すれば真。
+/// 利用者の書いた guard。省略すれば真。
+pub open spec fn user_guard_rel(j: Json, u: TExpr, ns: IrNames, c: ECtx) -> bool {
+    if absent(j, "guard"@) {
+        u == TExpr::Lit(Value::Bool(true))
+    } else {
+        ex_rel(at(j, "guard"@), u, ns, c, Seq::empty())
+    }
+}
+
+/// guard。動的ドメインがあれば、その検査を引数の順に並べ、最後に利用者の guard を置いた `all` にする。
 pub open spec fn guard_rel(j: Json, ds: Seq<(nat, Json)>, g: TExpr, ns: IrNames, c: ECtx) -> bool {
-    let user = |u: TExpr|
-        if absent(j, "guard"@) {
-            u == TExpr::Lit(Value::Bool(true))
-        } else {
-            ex_rel(at(j, "guard"@), u, ns, c, Seq::empty())
-        };
     if ds.len() == 0 {
-        user(g)
+        user_guard_rel(j, g, ns, c)
     } else {
         match g {
-            TExpr::Fold(all, es) => all && es@.len() == ds.len() + 1 && user(es@.last()) && forall|q: int|
+            TExpr::Fold(all, es) => all && es@.len() == ds.len() + 1 && user_guard_rel(j, es@.last(), ns, c) && forall|q: int|
                 0 <= q < ds.len() ==> #[trigger] member_rel(ds[q], es@[q], ns, c),
             _ => false,
         }
