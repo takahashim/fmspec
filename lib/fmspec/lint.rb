@@ -40,12 +40,24 @@ module Fmspec
     RUBY_COLLECTIONS = %i[map flat_map collect select filter reject to_a to_set each_with_index each_slice each_cons
                           zip product combination permutation repeated_permutation values sort uniq].freeze
 
+    # 値を計算するだけで、効果を持たない DSL の関数。文として書くと、結果は捨てられる。
+    PURE_FUNCTIONS = %i[ite all any min max forall exists let implies not_ some none].freeze
+
+    # 記号式の演算子とメソッドのうち、型や IR を調べるためのもの。式の文の判定から除く。
+    EXPR_INTERNALS = %i[node kind inspect to_s coerce expect].freeze
+
     @parsed = {}
 
     module_function
 
     # ブロックを検査する。使えない構文があれば BuildError。
-    def check!(block, what)
+    #
+    # statements は、ブロックの文の種類である。
+    #   :value   値を返すブロック（invariant、terminal、ensures など）。最後の文の値がブロックの値になるので、
+    #            それより前の、式だけの文の結果は捨てられる。
+    #   :effect  効果を書くブロック（action、step、on_accept など）。guard や update などの語彙で効果を書くので、
+    #            式だけの文の結果は捨てられる。guard の書き忘れにあたる。
+    def check!(block, what, statements: :value)
       file, line = block.source_location
       unless file && File.file?(file)
         raise BuildError, "#{what}: ブロックのソースを読めないので、構文を検査できません（#{file.inspect}）"
@@ -56,6 +68,58 @@ module Fmspec
 
       # 同じ行で始まるブロックが複数あれば、どれが対象かを決めずに、すべて検査する。
       blocks.each { |node| scan(node, file, what) }
+      # 文の検査は、ブロックの最上位の文だけが対象なので、対象のブロックを引数の名前で1つに決められるときだけ行う。
+      target = blocks.select { |node| parameter_names(node) == block.parameters.map(&:last) }
+      discarded!(target.first, file, what, statements) if target.length == 1
+    end
+
+    # 結果が捨てられる、式だけの文があれば BuildError。
+    def discarded!(block, file, what, statements)
+      body = block.body
+      list = body.is_a?(Prism::StatementsNode) ? body.body : []
+      list = list[0...-1] if statements == :value
+      list.each do |statement|
+        next unless expression?(statement)
+
+        hint = if statements == :effect
+                 "guard や update を書き忘れていませんか"
+               else
+                 "ブロックの値は最後の式だけです。条件は & や all(...) でつなぎます"
+               end
+        raise BuildError, "#{what}: #{file}:#{statement.location.start_line}: 記号ブロックの中で、式の結果が使われていません。#{hint}"
+      end
+    end
+
+    # 値を計算するだけの式。記号式の演算子とメソッドの呼び出し、DSL の関数の呼び出し、リテラル、変数の読み出し。
+    # ヘルパーの lambda やメソッドの呼び出しは、中で guard や update を呼ぶかもしれないので含めない。
+    def expression?(node)
+      case node
+      when Prism::ParenthesesNode
+        node.body.is_a?(Prism::StatementsNode) && expression?(node.body.body.last)
+      when Prism::CallNode
+        node.receiver.nil? ? PURE_FUNCTIONS.include?(node.name) : expression_methods.include?(node.name)
+      when Prism::LocalVariableReadNode, Prism::TrueNode, Prism::FalseNode, Prism::NilNode, Prism::IntegerNode,
+           Prism::SymbolNode, Prism::StringNode
+        true
+      else false
+      end
+    end
+
+    def expression_methods
+      @expression_methods ||= (Expr.public_instance_methods(false) - EXPR_INTERNALS).to_set
+    end
+
+    # ブロックの位置引数の名前。名前を決められない引数（分割代入、番号付き引数など）があれば nil。
+    def parameter_names(node)
+      params = node.parameters
+      return [] if params.nil?
+
+      params = params.parameters if params.is_a?(Prism::BlockParametersNode)
+      return [] if params.nil?
+      return nil unless params.is_a?(Prism::ParametersNode)
+
+      list = params.requireds + params.optionals + [params.rest].compact + params.posts
+      list.map { |p| p.respond_to?(:name) ? p.name : (return nil) }
     end
 
     def blocks_at(file, line)

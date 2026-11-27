@@ -219,6 +219,74 @@ class LintTest < Minitest::Test
     assert_equal [false, true, true], [true & false, false | true, nil ^ true]
   end
 
+  # 効果を書くブロックの式だけの文と、値を返すブロックの最後より前の式だけの文は、結果が捨てられる。
+  def test_discarded_expressions_are_rejected
+    rejected(/操作 x: .*式の結果が使われていません。guard や update を書き忘れていませんか/) do
+      action :x do |s|
+        s.n < 3
+        update n: s.n + 1
+      end
+    end
+    rejected(/不変条件 a: .*式の結果が使われていません。ブロックの値は最後の式だけです/) do
+      invariant :a do |s|
+        s.n >= 0
+        s.n <= 3
+      end
+    end
+    rejected(/操作 x の on_accept: .*guard や update を書き忘れていませんか/) do
+      action :x do |s|
+        accept_if s.on
+        on_accept do
+          s.n.eq(0)
+          update n: 1
+        end
+      end
+    end
+    # 効果を書くブロックでは、最後の文も捨てられる。
+    rejected(/操作 x: .*guard や update を書き忘れていませんか/) do
+      action(:x) { |s| ite(s.on, s.n, 0) }
+    end
+    rejected(/遷移契約 grows: .*ブロックの値は最後の式だけです/) do
+      action :x do |s|
+        update n: s.n
+        ensures(:grows) do |after|
+          (after.n >= s.n)
+          after.on
+        end
+      end
+    end
+    error = assert_raises(Fmspec::BuildError) do
+      Fmspec.define(:m) do
+        state :n, int(0..3), initial: 0
+        process(:p) { step(:a) { |s| s.n.eq(0) } }
+      end
+    end
+    assert_match(/ステップ a: .*式の結果が使われていません/, error.message)
+  end
+
+  # 代入、ヘルパーの呼び出し、記号ブロックの中の Ruby のブロックの文は対象外である。
+  # 外側の Ruby のブロックと記号ブロックが同じ行で始まっても、外側のブロックの文は調べない。
+  def test_statements_that_are_not_discarded_expressions_are_allowed
+    noop = ->(_s) { nil }
+    model = base do
+      action :x do |s|
+        bumped = s.n + 1
+        noop.(s)
+        guard bumped <= 3
+        update n: bumped
+      end
+      %i[y z].each { |name| action(name) { |s| update on: s.on.not_ } }
+      invariant :a do |s|
+        limit = [1, 2].map do |i|
+          j = i + 1
+          s.n.ne(j + 2)
+        end
+        all(*limit)
+      end
+    end
+    assert_equal %w[x y z], model.to_ir["actions"].map { |a| a["name"] }
+  end
+
   def test_allowed_forms
     model = base do
       action :x do |s|

@@ -47,7 +47,7 @@ module Fmspec
         raise BuildError, "プロセス #{@name}: ステップの名前 done は予約されています" if name == :done
         raise BuildError, "プロセス #{@name}: ステップ #{name} は定義済みです" if @steps.any? { |s| s[0] == name }
 
-        Lint.check!(block, "プロセス #{@name} のステップ #{name}")
+        Lint.check!(block, "プロセス #{@name} のステップ #{name}", statements: :effect)
         @steps << [name, block, caller_locations(1, 1)&.first]
         nil
       end
