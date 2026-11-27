@@ -408,7 +408,10 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     assert_eq!((code, &body["shrink"]["limit"]), (1, &json!("max_time_ms")), "{body}");
     assert_eq!(body["trace"]["steps"], f.get("long.json")["steps"]);
     let (code, body) = f.json(&["shrink", "noguard.json", "long.json", "--attempts", "0"]);
-    assert_eq!((code, &body["message"]), (2, &json!("attempts は1以上の整数です（0）")));
+    assert_eq!(
+        (code, &body["message"]),
+        (2, &json!("--attempts は1以上の整数です（\"0\"）"))
+    );
     // 見積もりが上限を超えるトレースは検査しない。
     for command in ["replay", "shrink"] {
         let (code, body) = f.json(&[command, "noguard.json", "long.json", "--max-check-cost", "1"]);
@@ -546,11 +549,41 @@ fn usage_errors_go_to_stderr_without_json() {
         ),
         (
             vec!["check", "tickets.json", "--max-states", "-1"],
-            "--max-states は0以上の整数です（\"-1\"）",
+            "--max-states は1以上の整数です（\"-1\"）",
         ),
         (
             vec!["simulate", "tickets.json", "--seed", "x"],
             "--seed は0以上の整数です（\"x\"）",
+        ),
+        // 下限はフラグごとに違い、fmspec-api のキー名でなくフラグの名前で報告する。
+        (
+            vec!["check", "tickets.json", "--max-states", "0"],
+            "--max-states は1以上の整数です（\"0\"）",
+        ),
+        (
+            vec!["simulate", "tickets.json", "--traces", "0"],
+            "--traces は1以上の整数です（\"0\"）",
+        ),
+        (
+            vec!["shrink", "tickets.json", "t.json", "--attempts", "0"],
+            "--attempts は1以上の整数です（\"0\"）",
+        ),
+        // 数字だけを整数として読む。
+        (
+            vec!["check", "tickets.json", "--max-states", "+5"],
+            "--max-states は1以上の整数です（\"+5\"）",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-depth", " 5"],
+            "--max-depth は0以上の整数です（\" 5\"）",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-depth", ""],
+            "--max-depth は0以上の整数です（\"\"）",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-depth", "18446744073709551616"],
+            "--max-depth が大きすぎます（\"18446744073709551616\"）",
         ),
         (vec!["check", "tickets.json", "--bogus"], "未知のオプション --bogus"),
     ] {

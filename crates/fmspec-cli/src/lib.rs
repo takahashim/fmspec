@@ -71,14 +71,14 @@ const USAGE: &str = "\
 
 /// fmspec-api に渡す、値を取るオプション。[フラグ, オプションのキー, 種類]。
 const VALUED: [(&str, &str, Kind); 11] = [
-    ("--max-states", "max_states", Kind::Count),
-    ("--max-depth", "max_depth", Kind::Count),
-    ("--max-time-ms", "max_time_ms", Kind::Count),
-    ("--max-check-cost", "max_check_cost", Kind::Count),
-    ("--traces", "traces", Kind::Count),
-    ("--max-steps", "max_steps", Kind::Count),
-    ("--seed", "seed", Kind::Count),
-    ("--attempts", "attempts", Kind::Count),
+    ("--max-states", "max_states", Kind::Count(1)),
+    ("--max-depth", "max_depth", Kind::Count(0)),
+    ("--max-time-ms", "max_time_ms", Kind::Count(0)),
+    ("--max-check-cost", "max_check_cost", Kind::Count(0)),
+    ("--traces", "traces", Kind::Count(1)),
+    ("--max-steps", "max_steps", Kind::Count(0)),
+    ("--seed", "seed", Kind::Count(0)),
+    ("--attempts", "attempts", Kind::Count(1)),
     ("--actions", "actions", Kind::Names),
     ("--invariants", "invariants", Kind::Names),
     ("--contracts", "contracts", Kind::Names),
@@ -86,8 +86,21 @@ const VALUED: [(&str, &str, Kind); 11] = [
 
 #[derive(Clone, Copy)]
 enum Kind {
-    Count,
+    /// 下限以上の整数。下限は fmspec-api と同じで、誤りはフラグの名前で報告する。
+    Count(u64),
     Names,
+}
+
+/// 数字だけからなる、`min` 以上の整数。`u64::from_str` は `+5` も受け付けるので、先に数字だけかを確かめる。
+fn count(flag: &str, text: &str, min: u64) -> Result<u64, String> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("{flag} は{min}以上の整数です（{text:?}）"));
+    }
+    match text.parse::<u64>() {
+        Ok(n) if n >= min => Ok(n),
+        Ok(_) => Err(format!("{flag} は{min}以上の整数です（{text:?}）")),
+        Err(_) => Err(format!("{flag} が大きすぎます（{text:?}）")),
+    }
 }
 
 struct Args {
@@ -182,10 +195,7 @@ fn parse_args(command: &str, allowed: &[&str], conditions: bool, args: &[String]
                 if let Some((_, key, kind)) = VALUED.iter().find(|(name, _, _)| *name == arg) {
                     let text = value()?;
                     let option = match kind {
-                        Kind::Count => match text.parse::<u64>() {
-                            Ok(n) => json!(n),
-                            Err(_) => return Err(format!("{arg} は0以上の整数です（{text:?}）")),
-                        },
+                        Kind::Count(min) => json!(count(arg, &text, *min)?),
                         Kind::Names => json!(text.split(',').filter(|s| !s.is_empty()).collect::<Vec<_>>()),
                     };
                     parsed.options.insert(key.to_string(), option);
