@@ -195,10 +195,25 @@ class SessionTest < Minitest::Test
     assert_raises(TypeError) { Fmspec::Native::Session.start(Object.new, "{}") }
     assert_raises(NoMethodError, TypeError) { Fmspec::Native::Session.new }
     s = session(workflow)
+    # セッションはモデルの代わりにならない。
+    assert_raises(TypeError) { Fmspec::Native::Session.start(s, "{}") }
+    assert_raises(TypeError) { s.observe(nil) }
+    assert_raises(ArgumentError) { s.check_input("not json") }
+    assert_raises(ArgumentError) { s.initial("\xff".b.force_encoding("UTF-8")) }
     assert_equal "usage_error", ask(s.next_input)["status"]
     assert_equal "usage_error", ask(s.initial('{"started": false}'))["status"]
     s.initial('{"started": false, "shown": false}')
     assert_equal "usage_error", ask(s.observe('{"action": "launch", "args": {}, "observation": {}}'))["status"]
+  end
+
+  # セッションはモデルを Rust 側で共有する。Ruby のモデルが回収されたあとも使える。
+  def test_a_session_outlives_its_ruby_model
+    s = Fmspec::Native::Session.start(Fmspec::Native::Model.load(workflow.to_json), '{"observe": ["started", "shown"]}')
+    GC.start
+    GC.compact if GC.respond_to?(:compact)
+    assert_equal "continue", ask(s.initial('{"started": false, "shown": false}'))["status"]
+    assert_equal "start", ask(s.next_input)["action"]
+    assert_equal 2, observe(s, "start", started: true)["candidates"]
   end
 
   def test_a_model_error_is_not_a_conformance_failure
