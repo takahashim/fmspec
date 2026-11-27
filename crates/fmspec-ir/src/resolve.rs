@@ -1,6 +1,6 @@
 //! IRの式の名前解決。JSONの式を、中核の型付き構文木（[`TExpr`]）にする。
 //!
-//! 名前を番号に解決し、型を検査する。型の誤りのメッセージと位置は、下ろし（`lower`）と同じである。
+//! 名前を番号に解決し、型を検査する。
 //! 構文木は、意味論が必要とする要素の型を注釈として持つ。
 //! 構文木は、中核の検証済みの下ろし（[`fmspec_core::lowering`]）が型を検査し直してから中核の式にする。
 //! したがって、この名前解決の型検査は信頼の基盤に入らない。信頼の基盤に入るのは、名前を正しい番号に
@@ -9,7 +9,8 @@
 //! Recordのフィールドの名前は、モデル全体で共有する [`Fields`] で番号にする。
 
 use crate::json::{array, index, int, object, operands, required, schema, single, string};
-use crate::lower::{parse_type, type_error, type_name, Ctx, Res};
+use crate::model::{EnumNames, LoadError};
+use crate::type_syntax::{parse_type, type_name};
 use crate::types::{SType, XType, MAX_KEYS};
 use fmspec_core::encoding::SType as CS;
 use fmspec_core::model::{BinOp, Value as CV};
@@ -53,6 +54,72 @@ impl Fields {
     }
 }
 
+/// 名前解決の誤り。`Type` は型の誤りと未定義の参照で、どの定義で起きたかを呼び出し側が付ける。
+#[derive(Debug)]
+pub(crate) enum Error {
+    Schema(LoadError),
+    Type(String),
+}
+
+impl From<LoadError> for Error {
+    fn from(e: LoadError) -> Self {
+        Error::Schema(e)
+    }
+}
+
+pub(crate) type Res<T> = Result<T, Error>;
+
+pub(crate) fn type_error<T>(path: &str, message: impl Into<String>) -> Res<T> {
+    Err(Error::Type(format!("{path}: {}", message.into())))
+}
+
+/// 状態変数や引数の、スロットの列での位置。
+#[derive(Clone, Debug)]
+pub struct Layout {
+    pub ty: SType,
+    pub offset: usize,
+}
+
+/// 名前付きの定数。値は中核の下ろしが式を評価して求める。
+#[derive(Clone, Debug)]
+pub(crate) struct Constant {
+    pub name: String,
+    pub ty: SType,
+}
+
+/// 式を名前解決する文脈。
+#[derive(Clone, Copy)]
+pub(crate) struct Ctx<'a> {
+    pub enums: &'a [EnumNames],
+    /// 状態変数。`None` なら状態を参照できない（初期値と定数）。
+    pub states: Option<&'a [Layout]>,
+    /// 公開引数に続けて内部選択。
+    pub args: &'a [Layout],
+    pub n_params: usize,
+    /// 遷移後の状態を参照できる（遷移契約）。
+    pub next: bool,
+    pub output: Option<&'a SType>,
+    pub constants: &'a [Constant],
+    /// Recordのフィールドの名前の番号。モデル全体で共有する。
+    pub fields: &'a Fields,
+}
+
+impl<'a> Ctx<'a> {
+    /// 状態も引数も参照できない文脈（定数と初期値）。
+    pub(crate) fn closed(enums: &'a [EnumNames], constants: &'a [Constant], fields: &'a Fields) -> Self {
+        Ctx {
+            enums,
+            states: None,
+            args: &[],
+            n_params: 0,
+            next: false,
+            output: None,
+            constants,
+            fields,
+        }
+    }
+}
+
 /// 名前で参照する局所変数。番号は、外側から数えた位置である。
 struct Local {
     name: String,
@@ -63,21 +130,45 @@ fn b(e: TExpr) -> Box<TExpr> {
     Box::new(e)
 }
 
-/// 名前解決の文脈。
-pub(crate) struct Resolver<'c, 'a> {
-    cx: &'c Ctx<'a>,
-}
-
-impl<'a> std::ops::Deref for Resolver<'_, 'a> {
-    type Target = Ctx<'a>;
-    fn deref(&self) -> &Ctx<'a> {
-        self.cx
+impl<'a> Ctx<'a> {
+    /// 型の誤り「`want` が必要ですが、`t` です」。
+    fn mismatch<T>(&self, path: &str, want: &str, t: &XType) -> Res<T> {
+        type_error(path, format!("{want} が必要ですが、{} です", type_name(self.enums, t)))
     }
-}
 
-impl<'c, 'a> Resolver<'c, 'a> {
-    pub(crate) fn new(cx: &'c Ctx<'a>) -> Self {
-        Resolver { cx }
+    fn expect(&self, path: &str, t: &XType, want: &XType) -> Res<()> {
+        if t != want {
+            return self.mismatch(path, &type_name(self.enums, want), t);
+        }
+        Ok(())
+    }
+
+    fn expect_fits(&self, path: &str, t: &XType, st: &SType) -> Res<()> {
+        if !t.fits(st) {
+            return self.mismatch(path, &type_name(self.enums, &st.xtype()), t);
+        }
+        Ok(())
+    }
+
+    fn set_elem(&self, t: &XType, path: &str) -> Res<SType> {
+        match t {
+            XType::Set(e) => Ok((**e).clone()),
+            _ => self.mismatch(path, "set", t),
+        }
+    }
+
+    fn map_types(&self, t: &XType, path: &str) -> Res<(SType, SType)> {
+        match t {
+            XType::Map(k, v) => Ok(((**k).clone(), (**v).clone())),
+            _ => self.mismatch(path, "map", t),
+        }
+    }
+
+    fn list_type(&self, t: &XType, path: &str) -> Res<(SType, usize)> {
+        match t {
+            XType::List(e, n) => Ok(((**e).clone(), *n)),
+            _ => self.mismatch(path, "list", t),
+        }
     }
 
     /// 述語を名前解決する。
@@ -86,10 +177,8 @@ impl<'c, 'a> Resolver<'c, 'a> {
     }
 
     /// 型 `st` の場所に置く値を名前解決する。
-    pub(crate) fn stored(&self, v: &Value, path: &str, st: &SType) -> Res<(XType, TExpr)> {
-        let (t, e) = self.tree(v, path, &mut Vec::new())?;
-        self.expect_fits(path, &t, st)?;
-        Ok((t, e))
+    pub(crate) fn stored(&self, v: &Value, path: &str, st: &SType) -> Res<TExpr> {
+        self.fitting(v, path, &mut Vec::new(), st)
     }
 
     fn scalar(&self, v: &Value, path: &str, sc: &mut Vec<Local>, want: &XType) -> Res<TExpr> {
@@ -99,7 +188,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
     }
 
     /// 独立に評価する述語の位置（`all` と `any` の2番目以降、`implies` の後件、量化の本体）。
-    /// スカラー型でなければ、Boolでない場合と別のメッセージにする（下ろしと同じ）。
+    /// スカラー型でなければ、Boolでない場合と別のメッセージにする。
     fn closed_bool(&self, v: &Value, path: &str, sc: &mut Vec<Local>) -> Res<TExpr> {
         let (t, e) = self.tree(v, path, sc)?;
         if !t.is_scalar() {
@@ -120,30 +209,30 @@ impl<'c, 'a> Resolver<'c, 'a> {
 
     fn tree(&self, v: &Value, path: &str, sc: &mut Vec<Local>) -> Res<(XType, TExpr)> {
         let Some(map) = v.as_object() else {
-            return Ok(schema(path, "式はオブジェクトです")?);
+            return schema(path, "式はオブジェクトです");
         };
         let (key, body) = single(map, path, "式は演算子を表すキーを1つだけ持つオブジェクトです")?;
         let path = format!("{path}.{key}");
         let path = path.as_str();
         let enums = self.enums;
-        let f = &self.fields;
+        let f = self.fields;
         let ops = |n: usize| operands(body, path, n);
         let at = |i: usize| format!("{path}[{i}]");
         match key.as_str() {
             "int" => Ok((XType::Int, TExpr::Lit(CV::Int(int(body, path)?)))),
             "bool" => match body.as_bool() {
                 Some(x) => Ok((XType::Bool, TExpr::Lit(CV::Bool(x)))),
-                None => Ok(schema(path, "真偽値が必要です")?),
+                None => schema(path, "真偽値が必要です"),
             },
             "enum" => {
                 let m = object(body, path, &["type", "variant"])?;
                 let ty = string(required(m, path, "type")?, &format!("{path}.type"))?;
                 let variant = string(required(m, path, "variant")?, &format!("{path}.variant"))?;
                 let Some(id) = enums.iter().position(|e| e.name == ty) else {
-                    return Ok(schema(path, format!("未定義の列挙型 {ty:?}"))?);
+                    return schema(path, format!("未定義の列挙型 {ty:?}"));
                 };
                 let Some(k) = enums[id].variants.iter().position(|x| *x == variant) else {
-                    return Ok(schema(path, format!("列挙型 {ty:?} に未定義のラベル {variant:?}"))?);
+                    return schema(path, format!("列挙型 {ty:?} に未定義のラベル {variant:?}"));
                 };
                 Ok((XType::Enum(id), TExpr::Lit(CV::Enum(id, k as i64))))
             }
@@ -186,14 +275,14 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let name = string(body, path)?;
                 match sc.iter().rposition(|x| x.name == name) {
                     Some(i) => Ok((sc[i].ty.clone(), TExpr::Local(i))),
-                    None => Ok(schema(path, format!("未定義の局所変数 {name:?}"))?),
+                    None => schema(path, format!("未定義の局所変数 {name:?}")),
                 }
             }
             "const" => {
                 let name = string(body, path)?;
                 match self.constants.iter().position(|c| c.name == name) {
                     Some(i) => Ok((self.constants[i].ty.xtype(), TExpr::Const(i))),
-                    None => Ok(schema(path, format!("未定義の定数 {name:?}"))?),
+                    None => schema(path, format!("未定義の定数 {name:?}")),
                 }
             }
             "add" | "sub" | "mul" | "div" | "mod" | "lt" | "le" | "gt" | "ge" => {
@@ -265,7 +354,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
             "tuple" => {
                 let items = array(body, path)?;
                 if items.is_empty() {
-                    return Ok(schema(path, "tuple は1つ以上の要素を持ちます")?);
+                    return schema(path, "tuple は1つ以上の要素を持ちます");
                 }
                 let mut ts = Vec::new();
                 let mut es = Vec::new();
@@ -279,7 +368,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
             "record" => {
                 let items = array(body, path)?;
                 if items.is_empty() {
-                    return Ok(schema(path, "record は1つ以上のフィールドを持ちます")?);
+                    return schema(path, "record は1つ以上のフィールドを持ちます");
                 }
                 let mut seen = HashSet::new();
                 let mut fs = Vec::new();
@@ -290,7 +379,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                     let fv = object(item, &path, &["name", "expr"])?;
                     let name = string(required(fv, &path, "name")?, &format!("{path}.name"))?;
                     if !seen.insert(name.clone()) {
-                        return Ok(schema(&path, format!("フィールド {name:?} が重複しています"))?);
+                        return schema(&path, format!("フィールド {name:?} が重複しています"));
                     }
                     let (t, e) = self.tree(required(fv, &path, "expr")?, &format!("{path}.expr"), sc)?;
                     ids.push(f.id(&name));
@@ -304,7 +393,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let (t, x) = self.tree(required(m, path, "of")?, &format!("{path}.of"), sc)?;
                 let i = index(required(m, path, "index")?, &format!("{path}.index"))?;
                 let XType::Tuple(ts) = &t else {
-                    return type_error(path, format!("tuple が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "tuple", &t);
                 };
                 match ts.get(i) {
                     Some(t) => Ok((t.clone(), TExpr::Nth(b(x), i))),
@@ -316,7 +405,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let (t, x) = self.tree(required(m, path, "of")?, &format!("{path}.of"), sc)?;
                 let name = string(required(m, path, "name")?, &format!("{path}.name"))?;
                 let XType::Record(fs) = &t else {
-                    return type_error(path, format!("record が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "record", &t);
                 };
                 match fs.iter().position(|(n, _)| *n == name) {
                     Some(i) => Ok((fs[i].1.clone(), TExpr::Field(b(x), f.id(&name), i))),
@@ -336,7 +425,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let items = ops(1)?;
                 let (t, x) = self.tree(&items[0], &at(0), sc)?;
                 if !matches!(t, XType::Option(_)) {
-                    return type_error(path, format!("option が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "option", &t);
                 }
                 Ok((
                     XType::Bool,
@@ -351,7 +440,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let items = ops(1)?;
                 let (t, x) = self.tree(&items[0], &at(0), sc)?;
                 let XType::Option(inner) = t else {
-                    return type_error(path, format!("option が必要ですが、{} です", type_name(enums, &t)));
+                    return self.mismatch(path, "option", &t);
                 };
                 Ok((*inner, TExpr::Unwrap(b(x))))
             }
@@ -425,10 +514,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                         let x = self.fitting(&items[1], &at(1), sc, elem)?;
                         Ok((XType::Bool, TExpr::ListContains(b(c), b(x))))
                     }
-                    _ => type_error(
-                        path,
-                        format!("set か list が必要ですが、{} です", type_name(enums, &tc)),
-                    ),
+                    _ => self.mismatch(path, "set か list", &tc),
                 }
             }
             "insert" | "remove" => {
@@ -461,10 +547,7 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let items = ops(1)?;
                 let (t, x) = self.tree(&items[0], &at(0), sc)?;
                 if !matches!(t, XType::Set(_) | XType::Map(_, _) | XType::List(_, _)) {
-                    return type_error(
-                        path,
-                        format!("set、map、list が必要ですが、{} です", type_name(enums, &t)),
-                    );
+                    return self.mismatch(path, "set、map、list", &t);
                 }
                 Ok(if key == "size" {
                     (XType::Int, TExpr::Size(b(x)))
@@ -487,8 +570,8 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let items = ops(3)?;
                 let (tm, m) = self.tree(&items[0], &at(0), sc)?;
                 let (k, v) = self.map_types(&tm, &at(0))?;
-                let x = self.fitting(&items[1], &format!("{path}[1]"), sc, &k)?;
-                let y = self.fitting(&items[2], &format!("{path}[2]"), sc, &v)?;
+                let x = self.fitting(&items[1], &at(1), sc, &k)?;
+                let y = self.fitting(&items[2], &at(2), sc, &v)?;
                 Ok((tm, TExpr::Put(f.stype(&k), f.stype(&v), b(m), b(x), b(y))))
             }
             "keys" => {
@@ -522,13 +605,13 @@ impl<'c, 'a> Resolver<'c, 'a> {
                 let x = self.fitting(&items[1], &at(1), sc, &t)?;
                 Ok((tl, TExpr::Push(f.stype(&t), max, b(l), b(x))))
             }
-            _ => Ok(schema(path, format!("未知の演算子 {key:?}"))?),
+            _ => schema(path, format!("未知の演算子 {key:?}")),
         }
     }
 
     fn quantifier(&self, all: bool, body: &Value, path: &str, sc: &mut Vec<Local>) -> Res<(XType, TExpr)> {
         let enums = self.enums;
-        let f = &self.fields;
+        let f = self.fields;
         let m = object(body, path, &["name", "in", "type", "body"])?;
         let name = string(required(m, path, "name")?, &format!("{path}.name"))?;
         let body_v = required(m, path, "body")?;
@@ -540,25 +623,20 @@ impl<'c, 'a> Resolver<'c, 'a> {
                     XType::Set(e) => (Over::Set(f.stype(&e), b(x)), e.xtype()),
                     XType::Map(k, _) => (Over::Map(f.stype(&k), b(x)), k.xtype()),
                     XType::List(e, _) => (Over::List(b(x)), e.xtype()),
-                    _ => {
-                        return type_error(
-                            &format!("{path}.in"),
-                            format!("set、map、list が必要ですが、{} です", type_name(enums, &t)),
-                        )
-                    }
+                    _ => return self.mismatch(&format!("{path}.in"), "set、map、list", &t),
                 }
             }
             (None, Some(t)) => {
                 let st = parse_type(t, &format!("{path}.type"), enums)?;
                 if st.keys(enums).is_none() {
-                    return Ok(schema(
+                    return schema(
                         &format!("{path}.type"),
                         format!("量化する型は、値の数が {MAX_KEYS} 以下で、set、map、list を含まない型に限ります"),
-                    )?);
+                    );
                 }
                 (Over::Type(f.stype(&st)), st.xtype())
             }
-            _ => return Ok(schema(path, "in と type のどちらか一方が必要です")?),
+            _ => return schema(path, "in と type のどちらか一方が必要です"),
         };
         sc.push(Local { name, ty });
         let r = self.closed_bool(body_v, &body_path, sc);

@@ -6,11 +6,12 @@ use std::collections::HashSet;
 
 pub(crate) type Res<T> = Result<T, LoadError>;
 
-pub(crate) fn schema<T>(path: &str, message: impl Into<String>) -> Res<T> {
-    Err(LoadError::Schema {
+/// 形式の誤り。名前解決の誤り（[`crate::resolve::Error`]）としても返せる。
+pub(crate) fn schema<T, E: From<LoadError>>(path: &str, message: impl Into<String>) -> Result<T, E> {
+    Err(E::from(LoadError::Schema {
         path: path.to_string(),
         message: message.into(),
-    })
+    }))
 }
 
 pub(crate) fn object<'a>(v: &'a Value, path: &str, allowed: &[&str]) -> Res<&'a Map<String, Value>> {

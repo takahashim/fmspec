@@ -117,6 +117,8 @@ fn duplicate_definitions_are_rejected() {
 #[test]
 fn type_errors_are_rejected() {
     assert!(schema_error(|ir| ir["states"][1]["initial"] = json!({"int": 0})).contains("初期値の型"));
+    let constant = json!([{"name": "k", "type": {"int": {"min": 0, "max": 3}}, "value": {"bool": true}}]);
+    assert!(schema_error(|ir| ir["constants"] = constant).contains("定数の値の型"));
     assert_eq!(
         invalid(|ir| ir["states"][0]["initial"] = json!({"int": 4})),
         InvalidModel::Initial(0)
@@ -182,6 +184,15 @@ fn type_errors_are_rejected() {
         .unwrap()
         .to_string();
     assert!(message.contains("\"inc\""), "{message}");
+    // ドメインの式は、それより後の引数を参照できない。
+    let message = with(|ir| ir["actions"][0]["params"][0]["in"] = json!({"choice": 0}))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("操作 \"inc\" の引数 \"d\" のドメインが不正です"),
+        "{message}"
+    );
 }
 
 #[test]
