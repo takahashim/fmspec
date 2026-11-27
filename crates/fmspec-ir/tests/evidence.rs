@@ -265,3 +265,91 @@ fn duplicate_set_elements_in_evidence_states_are_format_errors() {
         other => panic!("形式の誤りとして拒否されるはず: {other:?}"),
     }
 }
+
+/// 証拠の各オブジェクトは、書けるキーが決まっている。書き間違いを黙って無視しないよう、未知のキーは形式の誤りとする。
+#[test]
+fn unknown_keys_in_evidence_are_format_errors() {
+    let m = model();
+    let step = json!({"action": "move", "args": {}, "choices": {}, "output": {"unit": true},
+                      "state": {"p": [1, 2], "n": 3}});
+    let mut good = trace_json(&m, Claim::Invariant(0));
+    good["steps"] = json!([step]);
+    assert!(read_back(&m, &good).is_ok());
+    let broken = |change: &dyn Fn(&mut Value)| {
+        let mut json = good.clone();
+        change(&mut json);
+        format_error(&m, &json)
+    };
+    // 初期状態が1つのモデルで initial を書き間違えても、初期状態から始めるトレースとして読まない。
+    let typo = broken(&|j| {
+        let initial = j.as_object_mut().unwrap().remove("initial").unwrap();
+        j["intial"] = initial;
+    });
+    assert_eq!(typo, "トレース: 未知のキー \"intial\"");
+    assert_eq!(
+        broken(&|j| j["steps"][0]["stat"] = json!(1)),
+        "steps[0]: 未知のキー \"stat\""
+    );
+    assert_eq!(broken(&|j| j["claim"]["note"] = json!(1)), "claim: 未知のキー \"note\"");
+    // violation と error の両方を持つ主張を、violation の主張として読まない。
+    let both = broken(&|j| {
+        j["claim"]["error"] = json!({"kind": "overflow"});
+        j["claim"]["site"] = json!("invariant");
+    });
+    assert!(both.starts_with("claim: 未知のキー"), "{both}");
+    assert_eq!(
+        broken(&|j| j["claim"] = json!({"violation": "deadlock", "name": "small"})),
+        "claim: 未知のキー \"name\""
+    );
+    let mut error = trace_json(&m, Claim::TerminalError(ErrKind::Overflow));
+    error["claim"]["error"]["value"] = json!(1);
+    assert_eq!(format_error(&m, &error), "claim.error: 未知のキー \"value\"");
+    // slot は update の主張にだけ書ける。
+    let mut guard = trace_json(&m, Claim::StepError(0, vec![], Site::Guard, ErrKind::Overflow));
+    assert!(read_back(&m, &guard).is_ok());
+    guard["claim"]["slot"] = json!("x");
+    assert_eq!(format_error(&m, &guard), "claim: 未知のキー \"slot\"");
+
+    let cert = Certificate {
+        conditions: default_conditions(&m, false),
+        states: vec![vec![0, 0, 0]],
+    };
+    let mut json = certificate_to_json(&m, &cert);
+    json["extra"] = json!(1);
+    match certificate_from_json(&m, &json.to_string()) {
+        Err(TraceError::Format(message)) => assert_eq!(message, "証明書: 未知のキー \"extra\""),
+        other => panic!("形式の誤りとして拒否されるはず: {other:?}"),
+    }
+}
+
+/// 名前は文字列である。文字列でない名前を空の名前として読まない。
+#[test]
+fn names_in_evidence_must_be_strings() {
+    let m = model();
+    let mut json = trace_json(&m, Claim::Invariant(0));
+    json["steps"] = json!([{"action": 1, "output": {"unit": true}, "state": {"p": [1, 2], "n": 3}}]);
+    assert_eq!(format_error(&m, &json), "steps[0].action は文字列です");
+    let mut json = trace_json(&m, Claim::Invariant(0));
+    json["claim"]["name"] = json!(0);
+    assert_eq!(format_error(&m, &json), "claim.name は文字列です");
+    let mut json = trace_json(&m, Claim::StepError(0, vec![], Site::Guard, ErrKind::Overflow));
+    json["claim"]["action"] = Value::Null;
+    assert_eq!(format_error(&m, &json), "claim.action は文字列です");
+    let mut json = trace_json(&m, Claim::StepError(0, vec![], Site::Update(2), ErrKind::Overflow));
+    json["claim"]["target"] = json!(1);
+    assert_eq!(format_error(&m, &json), "claim.target は文字列です");
+}
+
+/// ステップと主張の args と choices は省略でき、省略すると {} とする。
+#[test]
+fn args_and_choices_may_be_omitted() {
+    let m = model();
+    let mut json = trace_json(&m, Claim::StepError(0, vec![], Site::Guard, ErrKind::Overflow));
+    json["steps"] = json!([{"action": "move", "output": {"unit": true}, "state": {"p": [1, 2], "n": 3}}]);
+    let claim = json["claim"].as_object_mut().unwrap();
+    claim.remove("args");
+    claim.remove("choices");
+    let trace = read_back(&m, &json).unwrap();
+    assert_eq!(trace.steps[0].state, vec![1, 2, 3]);
+    assert_eq!(trace.claim, Claim::StepError(0, vec![], Site::Guard, ErrKind::Overflow));
+}

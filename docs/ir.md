@@ -459,6 +459,9 @@ fmspec-api の `coverage` と `test_paths` も受け付ける。
 
 証明書とトレースは、`certificate_version` または `trace_version`、`model_digest`（文字列）、`conditions` を必須とし、欠けていれば形式の誤りとする。
 `engine_version` は記録のためのもので、読み込み時には使わない。
+証明書が持てるキーは、`certificate_version`、`model_digest`、`engine_version`、`conditions`、`states` で、トレースが持てるキーは、`trace_version`、`model_digest`、`engine_version`、`seed`、`conditions`、`initial`、`steps`、`claim` である。
+証拠の中のオブジェクト（証明書、トレース、検査条件、ステップ、`claim`、`claim.error`）は、書けるキーが決まっており、未知のキーは、書き間違いを黙って無視しないよう、形式の誤りとする。
+名前（操作、状態変数、不変条件、遷移契約）を書くキーに文字列でない値があれば、形式の誤りとする。
 形式の誤りの証拠と、`model_digest` が違う証拠は、判定ゲートにかけずに読めない証拠として拒否する（「検査の結果」を参照）。
 
 ## トレース
@@ -489,6 +492,8 @@ seedは再生には使わない。
 判定ゲートは、開始状態がモデルの初期状態の1つであることを確かめる。
 そうでないトレースは、理由 `bad_start` で拒否する。
 
+ステップが持てるキーは、`action`、`args`、`choices`、`output`、`state` で、`action`、`output`、`state` は必須である。
+`args`（公開引数）と `choices`（内部選択）は、名前から値へのオブジェクトで、省略すると `{}` とする（引数や内部選択のない操作では省略できる）。
 出力は、無出力なら `{"unit": true}`、出力があれば `{"value": ...}` である。
 `claim` は、トレースの末尾で起きる事象の主張である。
 
@@ -502,11 +507,16 @@ seedは再生には使わない。
 | `{"error", "site": "terminal"}` | 有効な遷移のない末尾の状態で、終端条件の評価が失敗 |
 | `{"error", "site": "guard" \| "update" \| "output", "action", "args", "choices"}` | 末尾の状態で、操作と引数の適用が指定の箇所で失敗。`update` では `target` に状態変数名を書く |
 
+`claim` が持てるキーは、表の各行に書いたキーだけである（`update` では `target` と `slot` も持てる）。
+`violation` の主張と `error` の主張は排他で、`violation` と `error` や `site` を両方持つ主張は、未知のキーを持つ形式の誤りとする。
+`args` と `choices` は、ステップと同じく省略すると `{}` とする。
 `error` は `{"kind": 種類}` で、種類は「評価の順序と失敗」の表のとおりである。
+`error` が持てるキーは、`kind` と、範囲外更新の `value` と `type`、番号で書いた失敗（`{"kind": "failed", "code": 番号}`）の `code` である。
 範囲外更新は `{"kind": "out_of_range", "value": 5, "type": {...}}` で、範囲外の値と、その値を置こうとした整数の型を持つ。
 `type` は表示用で、読み込み時には使わない。
 複数のスロットを持つ状態変数の範囲外更新では、`claim` の `slot` に、範囲外の整数のスロットの位置（状態変数の中で0から数える）を書く。
 `slot` を省略すると、状態変数の最初のスロットとする。0以上の整数でない値は形式の誤りとする。
+`slot` は `site` が `update` の主張にだけ書ける。
 
 `replay` は、トレースに記録された検査条件で、各ステップの出力と状態、末尾の主張を検査する。
 
