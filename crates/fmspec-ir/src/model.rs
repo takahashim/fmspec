@@ -295,7 +295,7 @@ fn parse_action(v: &Value, path: &str, a: usize, base: &Ctx, state_names: &[Stri
             invalid(
                 InvalidModel::Guard(a),
                 format!(
-                    "操作 {name:?} のの引数 {:?} のドメインが不正です（{d}）",
+                    "操作 {name:?} の引数 {:?} のドメインが不正です（{d}）",
                     arg_names_at(&params, &choices, i)
                 ),
             )

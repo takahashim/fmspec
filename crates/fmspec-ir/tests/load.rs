@@ -182,6 +182,15 @@ fn type_errors_are_rejected() {
         .unwrap()
         .to_string();
     assert!(message.contains("\"inc\""), "{message}");
+    // ドメインの式は、それより後の引数を参照できない。
+    let message = with(|ir| ir["actions"][0]["params"][0]["in"] = json!({"choice": 0}))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("操作 \"inc\" の引数 \"d\" のドメインが不正です"),
+        "{message}"
+    );
 }
 
 #[test]
