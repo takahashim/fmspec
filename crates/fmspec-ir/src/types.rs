@@ -21,7 +21,7 @@
 //! Setの要素とMapのキーには、この順で番号（rank）を付ける。
 
 use crate::model::EnumNames;
-use fmspec_core::model::{Type, Value as CoreValue};
+use fmspec_core::model::Type;
 use fmspec_core::ranking::{rank_digits_exec, rank_interval_code, rank_option_code};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
@@ -61,10 +61,6 @@ pub enum XType {
 }
 
 impl SType {
-    pub fn is_scalar(&self) -> bool {
-        matches!(self, SType::Bool | SType::Int(_, _) | SType::Enum(_))
-    }
-
     /// 中核の型。スカラー型でなければ `None`。
     pub fn core(&self) -> Option<Type> {
         match self {
@@ -208,18 +204,6 @@ impl XType {
         matches!(self, XType::Bool | XType::Int | XType::Enum(_))
     }
 
-    pub fn width(&self, enums: &[EnumNames]) -> usize {
-        match self {
-            XType::Bool | XType::Int | XType::Enum(_) => 1,
-            XType::Tuple(ts) => ts.iter().fold(0usize, |n, t| n.saturating_add(t.width(enums))),
-            XType::Record(fs) => fs.iter().fold(0usize, |n, (_, t)| n.saturating_add(t.width(enums))),
-            XType::Option(t) => t.width(enums).saturating_add(1),
-            XType::Set(t) => SType::Set(t.clone()).width(enums),
-            XType::Map(k, v) => SType::Map(k.clone(), v.clone()).width(enums),
-            XType::List(t, n) => SType::List(t.clone(), *n).width(enums),
-        }
-    }
-
     /// 値を型 `st` の場所に置けるか。整数の範囲は問わない（値ごとに検査する）。
     pub fn fits(&self, st: &SType) -> bool {
         match (self, st) {
@@ -286,23 +270,5 @@ pub fn default_code(ty: &Type) -> i64 {
     match ty {
         Type::Bool | Type::Enum(_) => 0,
         Type::Int(lo, _) => *lo,
-    }
-}
-
-/// 中核の型の符号を、中核の値にする。
-pub fn core_value(ty: &Type, x: i64) -> CoreValue {
-    match ty {
-        Type::Bool => CoreValue::Bool(x != 0),
-        Type::Int(_, _) => CoreValue::Int(x),
-        Type::Enum(id) => CoreValue::Enum(*id, x),
-    }
-}
-
-/// 中核の値の符号。
-pub fn core_code(v: &CoreValue) -> i64 {
-    match v {
-        CoreValue::Bool(b) => i64::from(*b),
-        CoreValue::Int(x) => *x,
-        CoreValue::Enum(_, k) => *k,
     }
 }

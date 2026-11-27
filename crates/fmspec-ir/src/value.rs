@@ -51,11 +51,16 @@ pub fn type_to_json(names: &Names, ty: &SType) -> Value {
     }
 }
 
-fn parts<'s>(enums: &[EnumNames], tys: impl Iterator<Item = &'s SType>, slots: &[i64]) -> Vec<(&'s SType, Vec<i64>)> {
+/// 要素の型ごとに、スロットの列を分ける。足りなければ空の列にする。
+fn parts<'s, 'v>(
+    enums: &[EnumNames],
+    tys: impl Iterator<Item = &'s SType>,
+    slots: &'v [i64],
+) -> Vec<(&'s SType, &'v [i64])> {
     let mut at = 0;
     tys.map(|t| {
         let w = t.width(enums);
-        let part = slots.get(at..at + w).map(<[i64]>::to_vec).unwrap_or_default();
+        let part = slots.get(at..at + w).unwrap_or(&[]);
         at += w;
         (t, part)
     })
@@ -87,7 +92,7 @@ pub fn value_to_json(names: &Names, ty: &SType, slots: &[i64]) -> Value {
         SType::Record(fs) => {
             let values = parts(enums, fs.iter().map(|(_, t)| t), slots);
             let mut map = Map::new();
-            for ((name, _), (t, s)) in fs.iter().zip(&values) {
+            for ((name, _), (t, s)) in fs.iter().zip(values) {
                 map.insert(name.clone(), value_to_json(names, t, s));
             }
             Value::Object(map)
