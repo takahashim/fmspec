@@ -12,8 +12,8 @@ module Fmspec
   #
   # command と observe のブロックは実装を操作する普通の Ruby で、仕様の記号式とは別のものである。
   class Binding
-    # `worker` は、プロセスのステップなら [プロセス名, インスタンスの番号]。
-    Handler = Struct.new(:name, :callable, :source, :inject, :worker)
+    # `worker` は、プロセスのステップなら [プロセス名, インスタンスの番号]。`crash` は、プロセスのクラッシュのハンドラか。
+    Handler = Struct.new(:name, :callable, :source, :inject, :worker, :crash)
 
     # プロセスの実装。setup と teardown は、インスタンスのスレッドで実行する。
     ProcessSpec = Struct.new(:name, :setup, :teardown, :timeout)
@@ -90,29 +90,33 @@ module Fmspec
       raise BuildError, "process #{name} の登録が重複しています" if @processes.key?(name)
       raise BuildError, "process #{name} の timeout: は正の数です: #{timeout.inspect}" unless timeout.is_a?(Numeric) && timeout.positive?
 
-      body = Process.new(name, declared[:steps])
+      body = Process.new(name, declared[:steps], declared[:crash])
       body.instance_eval(&block)
       @processes[name] = ProcessSpec.new(name, body.setup_block, body.teardown_block, timeout).freeze
-      body.steps.each do |step, (callable, source, inject)|
+      handlers = body.steps.to_a
+      handlers << [:crash, body.crash_handler] if body.crash_handler
+      handlers.each do |step, (callable, source, inject)|
         declared[:count].times do |id|
           action = :"#{name}[#{id}].#{step}"
           raise BuildError, "command #{action} の登録が重複しています" if @commands.key?(action)
 
-          @commands[action] = Handler.new(action, callable, source, inject, [name, id].freeze)
+          @commands[action] = Handler.new(action, callable, source, inject, [name, id].freeze, step == :crash)
         end
       end
     end
 
     # `process` のブロックの中の語彙。
     class Process
-      attr_reader :steps, :setup_block, :teardown_block
+      attr_reader :steps, :setup_block, :teardown_block, :crash_handler
 
-      def initialize(name, declared)
+      def initialize(name, declared, crash)
         @name = name
         @declared = declared
+        @crash = crash
         @steps = {}
         @setup_block = nil
         @teardown_block = nil
+        @crash_handler = nil
       end
 
       # インスタンスのスレッドで最初に呼ばれる。ブロックはテストケースのコンテキストとインスタンスの番号を受け取り、
@@ -137,12 +141,29 @@ module Fmspec
         name = name.to_sym
         raise BuildError, "プロセス #{@name} にステップ #{name} はありません" unless @declared.include?(name)
         raise BuildError, "process #{@name} の step #{name} の登録が重複しています" if @steps.key?(name)
-        raise BuildError, "step #{name} には、ブロックか method: のどちらか一方を渡します" unless method.nil? ^ block.nil?
 
-        location = caller_locations(1, 1)&.first
+        @steps[name] = handler("step #{name}", method, inject, block)
+      end
+
+      # クラッシュのハンドラ（仕様の process の crash:）。インスタンスのスレッドで実行し、そのあとスレッドを終える。
+      # ブロックは、接続を閉じる、メモリ上の状態を捨てるなど、実装でインスタンスを落とす。teardown は呼ばない。
+      # crash: :restart なら、そのあと新しいスレッドで setup をもう一度呼ぶ。
+      def crash(method: nil, inject: [], &block)
+        raise BuildError, "仕様のプロセス #{@name} は crash: を持ちません" unless @crash
+        raise BuildError, "process #{@name} の crash の登録が重複しています" if @crash_handler
+
+        @crash_handler = handler("crash", method, inject, block)
+      end
+
+      private
+
+      def handler(what, method, inject, block)
+        raise BuildError, "#{what} には、ブロックか method: のどちらか一方を渡します" unless method.nil? ^ block.nil?
+
+        location = caller_locations(2, 1)&.first
         source = block ? block.source_location&.join(":") : location && "#{location.path}:#{location.lineno}"
         callable = block || ->(local, **args) { args.empty? ? local.public_send(method) : local.public_send(method, **args) }
-        @steps[name] = [callable, source, Array(inject).map(&:to_sym).freeze]
+        [callable, source, Array(inject).map(&:to_sym).freeze]
       end
     end
 

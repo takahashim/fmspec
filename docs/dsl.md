@@ -394,7 +394,7 @@ DBの分離レベル、ロック、制約は、ステップのguardと更新で�
 ### クラッシュ
 
 `process` に `crash:` を書くと、ステップの境界でインスタンスがクラッシュする操作を自動で加える（設計は [crash_design.md](crash_design.md)）。
-試験的な機能で、実装との適合性検査にはまだ対応していない。
+試験的な機能である。
 
 ```ruby
 Checkout = Fmspec.define(:checkout) do
@@ -462,7 +462,7 @@ end
 クラッシュの操作は普通の操作なので、検査条件 `actions:` で検査の対象から外せる。
 有界応答性と組み合わせると、`:abort` で義務を残したまま終わることを違反として見つけられる。
 `Fmspec.compose` では接頭辞が付き、`sync` には使えない。
-`bind` は、クラッシュの操作を結合する語彙をまだ持たないので、`crash:` のある仕様の `bind` は `Fmspec::BuildError` になる。
+実装との適合性検査では、bindingの `process` の `crash` でクラッシュを結合する（「並行するプロセスの実装」）。
 
 ## 有界応答性
 
@@ -704,6 +704,7 @@ end
 | `setup { \|context, id\| ... }` | インスタンスのコンテキスト（DBの接続など）を返す。省略すると、テストケースのコンテキストを使う |
 | `teardown { \|instance\| ... }` | インスタンスの終わりに呼ばれる。失敗したケースでも呼ばれる |
 | `step(:ステップ) { \|instance\| ... }` | ステップのハンドラ。`method:` と `inject:` は `command` と同じ |
+| `crash { \|instance\| ... }` | クラッシュのハンドラ（仕様の `process` に `crash:` があるとき）。`method:` と `inject:` は `command` と同じ |
 
 テストは、ケースごとにインスタンスごとの専用のスレッドを立て、そのスレッドで `setup`、各ステップ、`teardown` を実行する。
 ステップは、テストが選んだ順に1つずつ実行する。
@@ -716,6 +717,27 @@ end
 実装のロックで待たされたステップが典型である。
 待たされているスレッドは、他のスレッドの `teardown` がロックを解放すれば終わることがあるので、最後に終える。
 それでも終わらなければ、スレッドを止める。
+
+クラッシュの操作を選ぶと、テストはインスタンスのスレッドで `crash` のハンドラを実行し、そのスレッドを終える。
+落ちたインスタンスのコンテキストに `teardown` は呼ばないので、接続を閉じるなどの資源の解放はハンドラで行う。
+仕様が `crash: :restart` で再試行が残っていれば、新しいスレッドで `setup` を同じ番号でもう一度呼び、以後のステップをそのスレッドで実行する。
+`:abort` と、`retries:` が尽きたあとは、`setup` を呼ばない。
+再起動の `setup` が例外を上げれば `:execution_error` になる。
+
+```ruby
+binding = Checkout.bind do
+  setup { Store.new(FakeGateway.new) }
+
+  process :job do
+    setup { |store, id| CheckoutJob.new(store, id) }
+    step(:charge, method: :charge)
+    step(:save, method: :save)
+    crash(method: :abandon!) # メモリ上の状態を捨て、接続を閉じる
+  end
+
+  observe(:charges) { |store| store.gateway.charges }
+end
+```
 
 モデル検査の反例のトレースを `replay:` に渡すと、反例のスケジュールを実装で再現する。
 

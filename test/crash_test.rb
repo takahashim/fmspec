@@ -243,20 +243,6 @@ class CrashTest < Minitest::Test
     end
   end
 
-  # 実装との適合性検査は、まだクラッシュの操作を結合できない。
-  def test_binding_a_model_with_crashes_is_rejected
-    error = assert_raises(Fmspec::BuildError) do
-      checkout.bind do
-        setup { Object.new }
-        process(:job) do
-          step(:charge) { |_job| nil }
-          step(:save) { |_job| nil }
-        end
-      end
-    end
-    assert_match(/job\[0\]\.crash/, error.message)
-  end
-
   def test_a_lost_job_is_found_by_bounded_response
     model = Fmspec.define(:mail) do
       state :saved, bool, initial: false
