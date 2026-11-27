@@ -6,7 +6,7 @@ Rubyで書く実行可能な形式仕様と、Rust製の検証エンジンによ
 現在の実装は、ロードマップの段階1〜8である。
 Rubyで仕様を書いて、モデル検査、シミュレーション、実装との適合性検査（Model-Based Testing）ができる。
 状態と引数には、Bool、有界Int、Enumのほか、Tuple、Record、Option、有限Set、有限Map、有界Listを使える。
-複数の仕様の合成（`Fmspec.compose`）、並行するプロセス（`process`）、有界応答性（`responds`）、移行の段階（`migration`）も書ける。
+複数の仕様の合成（`Fmspec.compose`）、並行するプロセス（`process`）とそのクラッシュ（`crash:`、試験的）、有界応答性（`responds`）、移行の段階（`migration`）も書ける。
 Railsアプリケーションとの結合は、別gemの `fmspec-rails` にある。
 仕様書§12.1の `requires` と `modifies`、段階9（性能改善、記号的検証）はまだない。
 

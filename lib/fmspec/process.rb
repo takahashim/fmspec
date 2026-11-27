@@ -12,29 +12,49 @@ module Fmspec
   # - ステップ `プロセス[i].名前` は、プログラムカウンタがそのステップのときだけ有効になる。
   #   実行すると、プログラムカウンタは次のステップ（最後のステップなら `:done`）に進む。`goto` で行き先を変えられる。
   module Process
+    # ステップとローカル変数に使えない名前。
+    RESERVED_STEPS = %i[done crash crashed crashes].freeze
+    RESERVED_LOCALS = %i[pc done crash crashed crashes].freeze
+
     # 仕様の定義の `process` のブロックの中の語彙。インスタンスごとに、インスタンスの番号を渡して実行する。
     class Body
       include Functions
 
-      attr_reader :locals, :steps
+      attr_reader :locals, :steps, :crash, :durable
 
       def initialize(model, name)
         @model = model
         @name = name
         @locals = []
         @steps = []
+        @crash = nil
+        @durable = []
       end
 
       # ローカル変数。`state` と同じく、initial か initial_in のどちらか一方を書く。
-      def local(name, type, **initial)
+      # `durable: true` のローカル変数は、`crash: :restart` のクラッシュで初期値に戻らない。
+      def local(name, type, durable: false, **initial)
         name = name.to_sym
-        raise BuildError, "プロセス #{@name}: ローカル変数の名前 #{name} は予約されています" if %i[pc done].include?(name)
+        raise BuildError, "プロセス #{@name}: ローカル変数の名前 #{name} は予約されています" if RESERVED_LOCALS.include?(name)
+        raise BuildError, "プロセス #{@name}: ローカル変数 #{name} の durable: は true か false です" unless [true, false].include?(durable)
         raise BuildError, "プロセス #{@name}: ローカル変数 #{name} は定義済みです" if @locals.any? { |l| l[0] == name }
         if @model.defined?(name)
           raise BuildError, "プロセス #{@name}: ローカル変数 #{name} は、状態変数または定数と同じ名前です"
         end
 
         @locals << [name, type, initial, caller_locations(1, 1)]
+        @durable << name if durable
+        nil
+      end
+
+      # クラッシュの遷移の中身。`process` に `crash:` を書いたときだけ使える。ブロックは記号的な状態を受け取り、
+      # `update`、`unchanged`、`choose`、`guard`、`ensures`、`preserves` で、クラッシュで環境に起きることを書く。
+      def on_crash(&block)
+        raise BuildError, "プロセス #{@name} の on_crash にはブロックが必要です" unless block
+        raise BuildError, "プロセス #{@name}: on_crash は1つだけ書けます" if @crash
+
+        Lint.check!(block, "プロセス #{@name} の on_crash")
+        @crash = [block, caller_locations(1, 1)&.first]
         nil
       end
 
@@ -44,7 +64,7 @@ module Fmspec
         raise BuildError, "プロセス #{@name} のステップ #{name} にはブロックが必要です" unless block
 
         name = name.to_sym
-        raise BuildError, "プロセス #{@name}: ステップの名前 done は予約されています" if name == :done
+        raise BuildError, "プロセス #{@name}: ステップの名前 #{name} は予約されています" if RESERVED_STEPS.include?(name)
         raise BuildError, "プロセス #{@name}: ステップ #{name} は定義済みです" if @steps.any? { |s| s[0] == name }
 
         Lint.check!(block, "プロセス #{@name} のステップ #{name}")
@@ -150,13 +170,97 @@ module Fmspec
       end
     end
 
+    # クラッシュの遷移の語彙。`on_crash` のブロックを、`action` の語彙のうち update、unchanged、choose、guard、
+    # ensures、preserves で書く。プログラムカウンタとローカル変数は、クラッシュの方式に従って展開が更新する。
+    #
+    # - `:abort` なら、プログラムカウンタを `:crashed` にする。
+    # - `:restart` なら、プログラムカウンタを最初のステップに、`durable: true` でないローカル変数を初期値に戻し、
+    #   クラッシュの回数を1増やす。初期値の候補が複数あるローカル変数は、同じ名前の内部選択で選ぶ。
+    #
+    # guard は、プログラムカウンタが `crash_at:` のどれかであること（`:restart` なら、回数が上限未満であること）と、
+    # on_crash の guard の連言である。
+    class CrashBuilder < ActionBuilder
+      # plan は、:mode、:pc（index と type）、:at（ラベルの配列）、:first、:locals（[名前, index, durable] の配列）、
+      # :crashes（回数の状態変数の index）、:max_crashes。
+      def initialize(scope, name, source, plan)
+        super(scope, name, {}, source)
+        @plan = plan
+      end
+
+      %i[returns accept_if on_accept on_reject goto].each do |word|
+        define_method(word) { |*| raise BuildError, "操作 #{@name}: on_crash では #{word} を使えません" }
+      end
+
+      def build(&block)
+        block ||= proc { |_s| nil }
+        unless block.arity.negative? || block.arity == 1
+          raise BuildError, "操作 #{@name}: on_crash のブロックは |s| を受け取ります"
+        end
+
+        plan = @plan
+        action, contracts = super() do |s|
+          instance_exec(s, &block)
+          reset(plan)
+        end
+        guards = [crash_point.node]
+        guards << (counter < plan[:max_crashes]).node if plan[:mode] == :restart
+        guards << action["guard"] unless action["guard"] == { "bool" => true }
+        action["guard"] = guards.length == 1 ? guards[0] : { "all" => guards }
+        [action, contracts.map { |c| c.merge("name" => @model.qualify(c["name"])) }]
+      end
+
+      private
+
+      def pc = Expr.new({ "var" => @plan[:pc][:index] }, @plan[:pc][:type])
+      def counter = Expr.new({ "var" => @plan[:crashes] }, :int)
+
+      def crash_point
+        points = @plan[:at].map { |label| pc.eq(@plan[:pc][:type][label]) }
+        points.length == 1 ? points[0] : Expr.new({ "any" => points.map(&:node) }, :bool)
+      end
+
+      # プログラムカウンタ、ローカル変数、回数の更新を加える。on_crash がそれらを更新していれば拒否する。
+      def reset(plan)
+        updates = @always.updates
+        plan[:locals].each do |name, index, _|
+          raise BuildError, "操作 #{@name}: ローカル変数 #{name} は on_crash で更新できません" if updates.key?(index)
+        end
+        if plan[:mode] == :abort
+          updates[plan[:pc][:index]] = plan[:pc][:type][:crashed]
+          return
+        end
+
+        updates[plan[:pc][:index]] = plan[:pc][:type][plan[:first]]
+        plan[:locals].each do |name, index, durable|
+          next if durable
+
+          updates[index] = initial_value(name, index)
+        end
+        updates[plan[:crashes]] = counter + 1
+      end
+
+      def initial_value(name, index)
+        entry = @model.states[index]
+        kind = entry[:type].kind
+        return Expr.new(entry[:initial], kind) if entry.key?(:initial)
+
+        candidates = entry[:initial_in].map { |node| Expr.new(node, kind) }
+        return candidates[0] if candidates.length == 1
+
+        value = choose(name, entry[:type])
+        guard Expr.new({ "any" => candidates.map { |c| value.eq(c).node } }, :bool)
+        value
+      end
+    end
+
     # 記号的な状態の `s.プロセス`。`s.プロセス[i]` でインスタンスの状態を参照する。
     class Ref
-      def initialize(model, name, count, ref)
+      def initialize(model, name, count, ref, crash = nil)
         @model = model
         @name = name
         @count = count
         @ref = ref
+        @crash = crash
       end
 
       def [](id)
@@ -164,21 +268,31 @@ module Fmspec
           raise BuildError, "プロセス #{@name} のインスタンスの番号は 0..#{@count - 1} です: #{id.inspect}"
         end
 
-        StateRef.new(Instance.new(@model, "#{@name}[#{id}]"), @ref)
+        StateRef.new(Instance.new(@model, "#{@name}[#{id}]", @crash), @ref)
       end
 
       def inspect = "#<Fmspec::Process::Ref #{@name}>"
     end
 
-    # 1つのインスタンスの、プログラムカウンタとローカル変数。`done` は、プロセスを終えたこと。
+    # 1つのインスタンスの、プログラムカウンタとローカル変数。`done` は、最後のステップまで実行してプロセスを終えたこと。
+    # `crashed` は `crash: :abort` でクラッシュして終えたこと、`crashes` は `crash: :restart` でクラッシュした回数。
     class Instance
-      def initialize(model, prefix)
+      def initialize(model, prefix, crash = nil)
         @model = model
         @prefix = prefix
+        @crash = crash
       end
 
       def reference(name, ref)
         return @model.reference(:"#{@prefix}.pc", ref).eq(:done) if name == :done
+        if name == :crashed
+          raise BuildError, "#{@prefix}.crashed は crash: :abort のプロセスで使えます" unless @crash == :abort
+
+          return @model.reference(:"#{@prefix}.pc", ref).eq(:crashed)
+        end
+        if name == :crashes && @crash != :restart
+          raise BuildError, "#{@prefix}.crashes は crash: :restart のプロセスで使えます"
+        end
 
         @model.reference(:"#{@prefix}.#{name}", ref)
       end

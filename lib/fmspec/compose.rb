@@ -72,6 +72,9 @@ module Fmspec
         part = part!(prefix)
         found = Array(part.ir["actions"]).find { |a| a["name"] == action.to_s }
         raise BuildError, "sync #{name}: #{prefix} に操作 #{action} がありません" unless found
+        if crash_action?(part, found["name"])
+          raise BuildError, "sync #{name}: #{prefix}.#{action} はプロセスのクラッシュなので、同期できません"
+        end
 
         key = [part.prefix, found["name"]]
         raise BuildError, "sync #{name}: #{key.join('.')} は sync #{@synced[key]} で同期済みです" if @synced.key?(key)
@@ -145,6 +148,13 @@ module Fmspec
       raise BuildError, "#{what} #{name}: 合成のブロックで定義する名前に . は使えません" if name.include?(".")
 
       name
+    end
+
+    # 操作が、モデルのプロセスのクラッシュの操作か。
+    def crash_action?(part, action)
+      part.processes.any? do |name, p|
+        p[:crash] && Array.new(p[:count]) { |id| "#{name}[#{id}].crash" }.include?(action)
+      end
     end
 
     def part!(prefix)

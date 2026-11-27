@@ -391,6 +391,72 @@ end
 read、write、commit などのどこでステップを区切るかは、仕様を書く人が決める。
 DBの分離レベル、ロック、制約は、ステップのguardと更新で表す仕様の仮定であり、エンジンがDBの意味を保証するものではない。
 
+### クラッシュ
+
+`process` に `crash:` を書くと、ステップの境界でインスタンスがクラッシュする操作を自動で加える（設計は [crash_design.md](crash_design.md)）。
+試験的な機能で、実装との適合性検査にはまだ対応していない。
+
+```ruby
+Checkout = Fmspec.define(:checkout) do
+  state :charges, int(0..2), initial: 0 # 決済サービス側の決済の回数
+  state :paid, bool, initial: false     # DBの注文の支払い済みフラグ
+
+  process :job, crash: :restart do
+    step(:charge) { |s| update charges: min(s.charges + 1, 2) }
+    step(:save) { |_s| update paid: true }
+  end
+
+  invariant(:charged_at_most_once) { |s| s.charges <= 1 }
+end
+
+Checkout.check.trace.steps.map(&:action)
+# => [:"job[0].charge", :"job[0].crash", :"job[0].charge"]
+```
+
+| オプション | 内容 |
+|---|---|
+| `crash: :abort` | クラッシュしたインスタンスは、そこで終わる。再試行のないWebリクエストにあたる |
+| `crash: :restart` | クラッシュしたインスタンスは、最初のステップからやり直す。Active Jobの再試行にあたる |
+| `crash_at: [ステップ, ...]` | クラッシュしうる位置。プログラムカウンタがそのステップのとき（そのステップを実行する前）に落ちうる。既定は、最初のステップを除くすべてのステップ |
+| `max_crashes: n` | `:restart` のとき、インスタンスごとのクラッシュの回数の上限。既定は1 |
+
+`process` のブロックでは、次の語彙も使える。
+
+| 語彙 | 内容 |
+|---|---|
+| `local(名前, 型, initial: 値, durable: true)` | `:restart` のクラッシュで初期値に戻らないローカル変数。ジョブの引数のように、永続化された値にあたる |
+| `on_crash { \|s\| ... }` | クラッシュで環境に起きること。`update`、`unchanged`、`choose`、`guard`、`ensures`、`preserves` を使える。`returns`、`accept_if`、`goto` は使えず、ローカル変数は更新できない |
+
+```ruby
+process :worker, count: 2, crash: :abort do |id|
+  step(:lock) { |s| guard s.holder.eq(-1); update holder: id }
+  step(:work) { |s| update count: s.count + 1 }
+  step(:unlock) { |_s| update holder: -1 }
+  # 接続が切れると、DBはロックを解放する。
+  on_crash { |s| update holder: ite(s.holder.eq(id), -1, s.holder) }
+end
+```
+
+仕様は、基本のIRに次のように展開する。
+
+- インスタンスごとに、操作 `worker[0].crash` を加える。guard は「プログラムカウンタが `crash_at:` のどれか」と、`on_crash` のguardの連言である。
+- `:abort` では、プログラムカウンタの列挙型にラベル `:crashed` を加え、クラッシュでプログラムカウンタを `:crashed` にする。`terminal` を書かなければ、終端条件は「すべてのインスタンスが `:done` か `:crashed`」になる。
+- `:restart` では、状態変数 `job[0].crashes`（`int(0..max_crashes)`）を加え、guard に「回数が上限未満」を加える。クラッシュで、プログラムカウンタを最初のステップに、`durable: true` でないローカル変数を初期値に戻し、回数を1増やす。初期値の候補が複数あるローカル変数は、同じ名前の内部選択で選び直す。
+- `on_crash` の更新は、そのままクラッシュの操作の更新になる。`on_crash` を書かなければ、共有の状態変数は変わらない。
+
+記号ブロックからは、`s.worker[0].crashed`（`:abort` でクラッシュして終えた）と `s.job[0].crashes`（`:restart` でクラッシュした回数）を参照できる。
+`s.worker[0].done` は、最後のステップまで実行して終えたときだけ真である。
+`crash`、`crashed`、`crashes` は、ステップとローカル変数の名前に使えない。
+
+クラッシュはステップの間でだけ起きる。
+ステップはatomicなので、ステップの途中で落ちることは、そのステップが起きなかったことと同じとみなす。
+トランザクションの外の副作用（外部APIの呼び出し、ジョブの投入）の前後で落ちる場合を見たければ、そこでステップを分ける。
+
+クラッシュの操作は普通の操作なので、検査条件 `actions:` で検査の対象から外せる。
+有界応答性と組み合わせると、`:abort` で義務を残したまま終わることを違反として見つけられる。
+`Fmspec.compose` では接頭辞が付き、`sync` には使えない。
+`bind` は、クラッシュの操作を結合する語彙をまだ持たないので、`crash:` のある仕様の `bind` は `Fmspec::BuildError` になる。
+
 ## 有界応答性
 
 `responds` は、「トリガーが起きたら、数えるステップで `within` 以内に応答が起きる」という性質を書く（仕様書 §12.5）。
