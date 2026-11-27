@@ -286,7 +286,7 @@ pub fn copy_vec(v: &Vec<i64>) -> (r: Vec<i64>)
     ensures
         r@ == v@,
 {
-    let mut r: Vec<i64> = Vec::new();
+    let mut r: Vec<i64> = Vec::with_capacity(v.len());
     let mut i: usize = 0;
     while i < v.len()
         invariant
@@ -327,12 +327,25 @@ pub fn vec_eq(a: &Vec<i64>, b: &Vec<i64>) -> (r: bool)
 }
 
 /// 1つの具体的な遷移を計算する。結果は `step_spec` と一致する。
-#[verifier::loop_isolation(false)]
 pub(crate) fn step(m: &RawModel, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r: StepR)
     requires
         a < m.actions@.len(),
     ensures
         r@ == step_spec(*m, a as int, args@, s@),
+{
+    let mut ls: Vec<Value> = Vec::new();
+    step_with(m, a, args, s, &mut ls)
+}
+
+/// `step` に、式の評価に使う作業用の局所変数の列 `ls` を渡すもの。`ls` は空で渡し、空に戻る。
+#[verifier::loop_isolation(false)]
+fn step_with(m: &RawModel, a: usize, args: &Vec<i64>, s: &Vec<i64>, ls: &mut Vec<Value>) -> (r: StepR)
+    requires
+        a < m.actions@.len(),
+        old(ls)@.len() == 0,
+    ensures
+        r@ == step_spec(*m, a as int, args@, s@),
+        final(ls)@.len() == 0,
 {
     let act = &m.actions[a];
     let empty: Vec<i64> = Vec::new();
@@ -341,7 +354,7 @@ pub(crate) fn step(m: &RawModel, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r:
     assert(ctx@ == env) by {
         assert(empty@ =~= Seq::<i64>::empty());
     }
-    match eval_prop(&act.guard, &ctx) {
+    match eval_prop_with(&act.guard, &ctx, ls) {
         Err(e) => StepR::Fail(Site::Guard, e),
         Ok(false) => StepR::Disabled,
         Ok(true) => {
@@ -352,12 +365,13 @@ pub(crate) fn step(m: &RawModel, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r:
                     a < m.actions@.len(),
                     act == m.actions@[a as int],
                     ctx@ == env,
+                    ls@.len() == 0,
                     k <= act.updates@.len(),
                     apply_updates(*m, a as int, env, k as nat, t@) == apply_updates(*m, a as int, env, 0, s@),
                 decreases act.updates@.len() - k,
             {
                 let u = &act.updates[k];
-                match eval(&u.expr, &ctx) {
+                match eval_with(&u.expr, &ctx, ls) {
                     Err(e) => {
                         return StepR::Fail(Site::Update(k), e);
                     },
@@ -380,7 +394,7 @@ pub(crate) fn step(m: &RawModel, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r:
             }
             match &act.output {
                 None => StepR::To(t, None),
-                Some(o) => match eval(&o.expr, &ctx) {
+                Some(o) => match eval_with(&o.expr, &ctx, ls) {
                     Err(e) => StepR::Fail(Site::Output, e),
                     Ok(v) => match encode(&m.enums, &o.ty, &v) {
                         Err(e) => StepR::Fail(Site::Output, e),
@@ -487,14 +501,22 @@ proof fn lemma_covered_grows(
 
 /// 接頭辞 `prefix` に続く引数を辞書順に列挙し、有効な遷移を `ts` に追加する。
 #[verifier::loop_isolation(false)]
-fn enum_rec(m: &RawModel, a: usize, s: &Vec<i64>, prefix: &mut Vec<i64>, ts: &mut Vec<Transition>) -> (r:
-    Option<(Vec<i64>, Site, ErrKind)>)
+fn enum_rec(
+    m: &RawModel,
+    a: usize,
+    s: &Vec<i64>,
+    prefix: &mut Vec<i64>,
+    ts: &mut Vec<Transition>,
+    ls: &mut Vec<Value>,
+) -> (r: Option<(Vec<i64>, Site, ErrKind)>)
     requires
         a < m.actions@.len(),
+        old(ls)@.len() == 0,
         prefix_ok(*m, a as int, old(prefix)@),
         all_sound(*m, a as int, s@, old(ts)@),
     ensures
         final(prefix)@ == old(prefix)@,
+        final(ls)@.len() == 0,
         match r {
             None => {
                 &&& all_sound(*m, a as int, s@, final(ts)@)
@@ -513,7 +535,7 @@ fn enum_rec(m: &RawModel, a: usize, s: &Vec<i64>, prefix: &mut Vec<i64>, ts: &mu
     let i = prefix.len();
     if i == doms.len() {
         assert(args_ok(*m, ai, p0));
-        match step(m, a, prefix, s) {
+        match step_with(m, a, prefix, s, ls) {
             StepR::Disabled => {},
             StepR::Fail(site, k) => {
                 return Some((copy_vec(prefix), site, k));
@@ -548,6 +570,7 @@ fn enum_rec(m: &RawModel, a: usize, s: &Vec<i64>, prefix: &mut Vec<i64>, ts: &mu
             i == p0.len(),
             i < doms@.len(),
             prefix@ == p0,
+            ls@.len() == 0,
             prefix_ok(*m, ai, p0),
             lo == type_range(m.enums@, doms@[i as int]).0,
             hi == type_range(m.enums@, doms@[i as int]).1,
@@ -567,7 +590,7 @@ fn enum_rec(m: &RawModel, a: usize, s: &Vec<i64>, prefix: &mut Vec<i64>, ts: &mu
         assert(prefix_ok(*m, ai, p1)) by {
             assert(in_type(m.enums@, doms@[i as int], x));
         }
-        let r = enum_rec(m, a, s, prefix, ts);
+        let r = enum_rec(m, a, s, prefix, ts, ls);
         prefix.pop();
         assert(prefix@ =~= p0);
         if r.is_some() {
@@ -614,7 +637,8 @@ pub(crate) fn enumerate(m: &RawModel, a: usize, s: &Vec<i64>) -> (r: Enumerated)
 {
     let mut prefix: Vec<i64> = Vec::new();
     let mut ts: Vec<Transition> = Vec::new();
-    match enum_rec(m, a, s, &mut prefix, &mut ts) {
+    let mut ls: Vec<Value> = Vec::new();
+    match enum_rec(m, a, s, &mut prefix, &mut ts, &mut ls) {
         None => Enumerated::Ok(ts),
         Some((args, site, k)) => Enumerated::Fail(args, site, k),
     }

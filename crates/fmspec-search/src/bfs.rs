@@ -8,7 +8,10 @@ use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
-use std::collections::{HashMap, VecDeque};
+use hashbrown::HashTable;
+use rustc_hash::FxBuildHasher;
+use std::collections::VecDeque;
+use std::hash::BuildHasher;
 
 #[derive(Default)]
 pub struct BfsOptions<'a> {
@@ -40,6 +43,33 @@ struct Node {
     state: Vec<i64>,
     /// 親の添字と、親からの遷移。
     parent: Option<(usize, usize, Vec<i64>, Option<i64>)>,
+}
+
+fn hash_state(s: &[i64]) -> u64 {
+    FxBuildHasher.hash_one(s)
+}
+
+/// 訪問済みの状態の集合。状態は節点の列 `nodes` にだけ置き、表には節点の添字を入れる。
+/// 同じハッシュ値の状態は、符号化列の一致で確かめる。ハッシュ値だけで状態を同一視しない。
+#[derive(Default)]
+struct Visited {
+    table: HashTable<usize>,
+}
+
+impl Visited {
+    fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    fn contains(&self, nodes: &[Node], s: &[i64]) -> bool {
+        self.table.find(hash_state(s), |&id| nodes[id].state == s).is_some()
+    }
+
+    /// 節点 `id` の状態を加える。呼び出し元は、その状態が未訪問であることを確かめておく。
+    fn insert(&mut self, nodes: &[Node], id: usize) {
+        self.table
+            .insert_unique(hash_state(&nodes[id].state), id, |&j| hash_state(&nodes[j].state));
+    }
 }
 
 /// 初期状態から `id` の状態までのトレースを復元し、主張を付けて証拠にする。
@@ -81,30 +111,31 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
     let n_actions = model.raw().actions.len();
     let mut stats = Stats::default();
     let mut nodes: Vec<Node> = Vec::new();
-    let mut visited: HashMap<Vec<i64>, usize> = HashMap::new();
+    let mut visited = Visited::default();
     let mut queue: VecDeque<usize> = VecDeque::new();
 
     let finish = |evidence: Evidence, stats: Stats| SearchResult { evidence, stats };
 
     // 初期状態は、与えられた順に探索の起点にする。
     for init in model.initials() {
-        if visited.contains_key(init) {
+        if visited.contains(&nodes, init) {
             continue;
         }
         if opts.max_states.is_some_and(|max| visited.len() >= max) {
             return finish(Evidence::Unavailable(Limit::MaxStates), stats);
         }
-        visited.insert(init.clone(), nodes.len());
+        let id = nodes.len();
+        nodes.push(Node {
+            state: init.clone(),
+            parent: None,
+        });
+        visited.insert(&nodes, id);
         stats.visited_states = visited.len();
         if let Some((i, v)) = model.invariants(cond, init) {
             let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
             return finish(Evidence::Trace(init.clone(), Vec::new(), claim), stats);
         }
-        queue.push_back(nodes.len());
-        nodes.push(Node {
-            state: init.clone(),
-            parent: None,
-        });
+        queue.push_back(id);
     }
 
     while let Some(cur) = queue.pop_front() {
@@ -139,20 +170,20 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
                     let claim = property_claim(k, v, Claim::Contract, Claim::ContractError);
                     return finish(Evidence::Trace(start, steps, claim), stats);
                 }
-                if visited.contains_key(&t.state) {
+                if visited.contains(&nodes, &t.state) {
                     continue;
                 }
                 if opts.max_states.is_some_and(|max| visited.len() >= max) {
                     return finish(Evidence::Unavailable(Limit::MaxStates), stats);
                 }
                 let id = nodes.len();
-                visited.insert(t.state.clone(), id);
-                stats.visited_states = visited.len();
                 let violation = model.invariants(cond, &t.state);
                 nodes.push(Node {
                     state: t.state,
                     parent: Some((cur, a, t.args, t.output)),
                 });
+                visited.insert(&nodes, id);
+                stats.visited_states = visited.len();
                 if let Some((i, v)) = violation {
                     let claim = property_claim(i, v, Claim::Invariant, Claim::InvariantError);
                     return finish(trace(&nodes, id, claim), stats);
