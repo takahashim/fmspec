@@ -165,3 +165,18 @@ fn values_that_do_not_fit_the_type_are_rejected() {
     let m = color_map();
     assert!(from(&m, json!([["red"]])).unwrap_err().contains("[キー, 値]"));
 }
+
+/// 公開の `value_from_json` には、読み込みで拒否する型（キー型でない要素の型のSetやMap）も渡せる。
+/// そのときは panic せず、誤りを返す。
+#[test]
+fn sets_and_maps_of_non_key_types_are_errors_not_panics() {
+    let wide = SType::Int(0, 1 << 20);
+    let set = SType::Set(Box::new(wide.clone()));
+    assert!(value_from_json(&[], &set, &json!([5])).unwrap_err().contains("キー型"));
+    let map = SType::Map(Box::new(wide), Box::new(SType::Bool));
+    assert!(value_from_json(&[], &map, &json!([[5, true]]))
+        .unwrap_err()
+        .contains("キー型"));
+    let nested = SType::Set(Box::new(SType::Set(Box::new(SType::Bool))));
+    assert!(value_from_json(&[], &nested, &json!([[true]])).is_err());
+}

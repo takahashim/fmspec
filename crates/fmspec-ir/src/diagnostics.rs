@@ -47,13 +47,15 @@ pub(crate) fn lower_error(
             match f {
                 Fault::Lower => internal(path),
                 Fault::Depth => too_deep(path),
-                Fault::Eval(ErrKind::OutOfRange(x)) => invalid(
-                    InvalidModel::Initial(j),
-                    format!(
-                        "{path}: 状態変数 {:?} の初期値 {x} が型の範囲外です",
+                // 中核の InvalidModel::Initial は初期状態の添字だが、ここでは初期状態をまだ作っていない
+                // （j は状態変数の中の候補の添字である）ので、定数と同じく、値の位置を示す形式の誤りとする。
+                Fault::Eval(ErrKind::OutOfRange(x)) => LoadError::Schema {
+                    message: format!(
+                        "状態変数 {:?} の初期値 {x} が型の範囲外です",
                         names.states.get(i).map(String::as_str).unwrap_or("?")
                     ),
-                ),
+                    path: path.clone(),
+                },
                 Fault::Eval(k) => eval(path, k),
             }
         }
