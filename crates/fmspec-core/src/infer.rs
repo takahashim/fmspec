@@ -5,8 +5,9 @@
 //! Setの要素、Mapのキーと値、Listの要素になる式の型は、格納の型の式の型 [`to_xty`] と等しくなければならない。
 //! 要素の型の注釈は、実際の型と一致しなければならない。
 //!
-//! [`check`] は型検査器で、型を返したら、それが [`type_of`] の値であることを証明してある。
-//! 型が付く式を拒否しないことは証明していない（拒否はモデルの読み込みの誤りになるので、テストで検査する）。
+//! [`check`] は型検査器で、その結果が [`type_of`] の値と一致することを証明してある（型が付く式を拒否しない）。
+//! 下ろしの前に、[`crate::model_total::check_model`] がモデル全体の式でこれと大きさの条件を確かめる。
+//! 型が付く式の下ろしが型の誤りで失敗しないこと（全域性）は [`crate::total`] の仕様で述べる。
 
 use crate::encoding::STy;
 use crate::encoding::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, to_xtype};
@@ -220,7 +221,7 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
             _ => None,
         },
         TExpr::Field(a, name, i) => match type_of(*a, c, lt) {
-            Some(XTy::Record(names, ts)) => if i < ts.len() && names[i as int] == name {
+            Some(XTy::Record(names, ts)) => if i < ts.len() && i < names.len() && names[i as int] == name {
                 Some(ts[i as int])
             } else {
                 None
@@ -477,6 +478,7 @@ pub open spec fn scope_view(s: &Scope) -> SCtx {
 fn lit_type_exec(v: &Value, enums: &Vec<i64>) -> (r: Option<XType>)
     ensures
         r matches Some(x) ==> lit_type(*v, enums@) == Some(xty(x)),
+        r is None ==> lit_type(*v, enums@) is None,
 {
     match v {
         Value::Bool(_) => Some(XType::Bool),
@@ -492,6 +494,7 @@ fn lit_type_exec(v: &Value, enums: &Vec<i64>) -> (r: Option<XType>)
 fn element_exec(t: &SType, enums: &Vec<i64>) -> (r: Option<XType>)
     ensures
         r matches Some(x) ==> element(sty(*t), enums@) == Some(xty(x)),
+        r is None ==> element(sty(*t), enums@) is None,
 {
     if wf_stype_exec(t, enums) {
         Some(to_xtype(t))
@@ -504,50 +507,72 @@ fn element_exec(t: &SType, enums: &Vec<i64>) -> (r: Option<XType>)
 fn slot_type(ts: &Vec<SType>, i: usize) -> (r: Option<XType>)
     ensures
         r matches Some(x) ==> i < ts@.len() && stys(ts@).len() == ts@.len() && xty(x) == to_xty(stys(ts@)[i as int]),
+        r is None ==> i >= ts@.len() && stys(ts@).len() == ts@.len(),
 {
+    proof {
+        lemma_stys(ts@);
+    }
     if i < ts.len() {
-        proof {
-            lemma_stys(ts@);
-        }
         Some(to_xtype(&ts[i]))
     } else {
         None
     }
 }
 
-/// 型検査器。型を返したら、それは [`type_of`] の値である。`lt` は局所変数の型で、検査の後に元に戻る。
+/// 型検査の結果が型付け規則の値と一致する。
+pub open spec fn agrees(r: Option<XType>, t: Option<XTy>) -> bool {
+    match r {
+        Some(x) => t == Some(xty(x)),
+        None => t is None,
+    }
+}
+
+/// 型検査器。結果は [`type_of`] の値と一致する。`lt` は局所変数の型で、検査の後に元に戻る。
 pub fn check(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
     ensures
         final(lt)@ == old(lt)@,
-        r matches Some(x) ==> type_of(*e, scope_view(s), xtys(old(lt)@)) == Some(xty(x)),
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 2nat,
 {
     match e {
-        TExpr::Lit(_) | TExpr::Var(_) | TExpr::Next(_) | TExpr::Arg(_) | TExpr::Out | TExpr::Local(_) | TExpr::Const(_)
-        | TExpr::Bin(_, _, _) | TExpr::Eq(_, _, _) | TExpr::Not(_) | TExpr::Fold(_, _) | TExpr::Implies(_, _)
-        | TExpr::Ite(_, _, _) | TExpr::Let(_, _) => check_core(e, s, lt),
-        TExpr::Quant(_, _, _) | TExpr::Tuple(_) | TExpr::Record(_, _) | TExpr::Nth(_, _) | TExpr::Field(_, _, _)
-        | TExpr::None(_) | TExpr::Some(_) | TExpr::IsSome(_) | TExpr::IsNone(_) | TExpr::Unwrap(_) => check_struct(
+        TExpr::Lit(_) | TExpr::Var(_) | TExpr::Next(_) | TExpr::Arg(_) | TExpr::Out | TExpr::Local(_)
+        | TExpr::Const(_) => check_leaf(e, s, lt),
+        TExpr::Bin(_, _, _) => check_bin(e, s, lt),
+        TExpr::Eq(_, _, _) | TExpr::Not(_) | TExpr::Implies(_, _) => check_logic(e, s, lt),
+        TExpr::Fold(_, _) => check_fold(e, s, lt),
+        TExpr::Ite(_, _, _) => check_ite(e, s, lt),
+        TExpr::Let(_, _) => check_let(e, s, lt),
+        TExpr::Quant(_, _, _) => check_quant(e, s, lt),
+        TExpr::Tuple(_) | TExpr::Record(_, _) => check_tuple(e, s, lt),
+        TExpr::Nth(_, _) | TExpr::Field(_, _, _) => check_proj(e, s, lt),
+        TExpr::None(_) | TExpr::Some(_) | TExpr::IsSome(_) | TExpr::IsNone(_) | TExpr::Unwrap(_) => check_opt(e, s, lt),
+        TExpr::SetLit(_, _) | TExpr::MapLit(_, _, _) | TExpr::ListLit(_, _, _) => check_coll_lit(e, s, lt),
+        TExpr::SetContains(_, _, _) | TExpr::Insert(_, _, _) | TExpr::Remove(_, _, _) | TExpr::SetBin(_, _, _) => check_set(
             e,
             s,
             lt,
         ),
-        TExpr::SetLit(_, _) | TExpr::MapLit(_, _, _) | TExpr::ListLit(_, _, _) | TExpr::SetContains(_, _, _)
-        | TExpr::ListContains(_, _) | TExpr::Insert(_, _, _) | TExpr::Remove(_, _, _) | TExpr::SetBin(_, _, _)
-        | TExpr::Size(_) | TExpr::IsEmpty(_) => check_coll(e, s, lt),
-        _ => check_access(e, s, lt),
+        TExpr::ListContains(_, _) | TExpr::Size(_) | TExpr::IsEmpty(_) => check_size(e, s, lt),
+        TExpr::HasKey(_, _, _) | TExpr::Get(_, _, _) | TExpr::Put(_, _, _, _, _) | TExpr::Delete(_, _, _)
+        | TExpr::Keys(_) => check_map(e, s, lt),
+        TExpr::At(_, _) | TExpr::First(_) | TExpr::Last(_) | TExpr::Push(_, _, _, _) | TExpr::Pop(_) | TExpr::Shift(
+            _,
+        ) => check_list(e, s, lt),
     }
 }
 
-/// リテラル、参照、スカラーの演算、短絡する演算、`let` の型検査。
-fn check_core(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+/// リテラルと参照。
+fn check_leaf(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Lit || e is Var || e is Next || e is Arg || e is Out || e is Local || e is Const,
     ensures
         final(lt)@ == old(lt)@,
-        r matches Some(x) ==> type_of(*e, scope_view(s), xtys(old(lt)@)) == Some(xty(x)),
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
-    let ghost c = scope_view(s);
-    let ghost l = xtys(lt@);
+    proof {
+        lemma_xtys(lt@);
+    }
     match e {
         TExpr::Lit(v) => lit_type_exec(v, &s.enums),
         TExpr::Var(i) => match &s.states {
@@ -572,14 +597,25 @@ fn check_core(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
             None => None,
         },
         TExpr::Local(i) => if *i < lt.len() {
-            proof {
-                lemma_xtys(lt@);
-            }
             Some(copy_xtype(&lt[*i]))
         } else {
             None
         },
         TExpr::Const(i) => slot_type(&s.consts, *i),
+        _ => None,
+    }
+}
+
+/// 整数の演算と比較。
+fn check_bin(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Bin,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::Bin(op, a, b) => {
             let ta = check(a, s, lt);
             let tb = check(b, s, lt);
@@ -592,6 +628,20 @@ fn check_core(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
                 _ => None,
             }
         },
+        _ => None,
+    }
+}
+
+/// 等価比較、否定、含意。
+fn check_logic(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Eq || e is Not || e is Implies,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::Eq(_, a, b) => match (check(a, s, lt), check(b, s, lt)) {
             (Some(x), Some(y)) => if xtype_eq(&x, &y) {
                 Some(XType::Bool)
@@ -604,23 +654,54 @@ fn check_core(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
             Some(XType::Bool) => Some(XType::Bool),
             _ => None,
         },
+        TExpr::Implies(a, b) => match (check(a, s, lt), check(b, s, lt)) {
+            (Some(XType::Bool), Some(XType::Bool)) => Some(XType::Bool),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `all` と `any`。
+fn check_fold(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Fold,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::Fold(_, es) => {
+            let ghost c = scope_view(s);
+            let ghost l = xtys(lt@);
             proof {
                 assert(decreases_to!(*e => *es));
             }
-            if check_all(e, es, &XType::Bool, s, lt) {
-                proof {
-                    lemma_all_typed_bool(es@, c, l);
-                }
+            let ok = check_all(e, es, &XType::Bool, s, lt);
+            proof {
+                lemma_all_typed_bool(es@, c, l);
+            }
+            if ok {
                 Some(XType::Bool)
             } else {
                 None
             }
         },
-        TExpr::Implies(a, b) => match (check(a, s, lt), check(b, s, lt)) {
-            (Some(XType::Bool), Some(XType::Bool)) => Some(XType::Bool),
-            _ => None,
-        },
+        _ => None,
+    }
+}
+
+/// 条件式。
+fn check_ite(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Ite,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::Ite(p, a, b) => match check(p, s, lt) {
             Some(XType::Bool) => match (check(a, s, lt), check(b, s, lt)) {
                 (Some(x), Some(y)) => if xtype_eq(&x, &y) {
@@ -632,6 +713,20 @@ fn check_core(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
             },
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// `let`。
+fn check_let(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Let,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::Let(a, b) => match check(a, s, lt) {
             Some(x) => {
                 let ghost before = lt@;
@@ -652,101 +747,14 @@ fn check_core(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
     }
 }
 
-/// 量化、Tuple、Record、Optionの型検査。
-fn check_struct(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
-    ensures
-        final(lt)@ == old(lt)@,
-        r matches Some(x) ==> type_of(*e, scope_view(s), xtys(old(lt)@)) == Some(xty(x)),
-    decreases e, 1nat,
-{
-    let ghost c = scope_view(s);
-    let ghost l = xtys(lt@);
-    match e {
-        TExpr::Quant(_, _, _) => check_quant(e, s, lt),
-        TExpr::Tuple(es) => {
-            proof {
-                assert(decreases_to!(*e => *es));
-            }
-            match check_seq(e, es, s, lt) {
-                Some(ts) => if ts.len() >= 1 {
-                    proof {
-                        lemma_xtys(ts@);
-                    }
-                    Some(XType::Tuple(ts))
-                } else {
-                    None
-                },
-                None => None,
-            }
-        },
-        TExpr::Record(names, es) => {
-            proof {
-                assert(decreases_to!(*e => *es));
-            }
-            match check_seq(e, es, s, lt) {
-                Some(ts) => if ts.len() >= 1 && names.len() == ts.len() && distinct_names(names) {
-                    proof {
-                        lemma_xtys(ts@);
-                    }
-                    Some(XType::Record(names.clone(), ts))
-                } else {
-                    None
-                },
-                None => None,
-            }
-        },
-        TExpr::Nth(a, i) => match check(a, s, lt) {
-            Some(XType::Tuple(ts)) => if *i < ts.len() {
-                proof {
-                    lemma_xtys(ts@);
-                }
-                Some(copy_xtype(&ts[*i]))
-            } else {
-                None
-            },
-            _ => None,
-        },
-        TExpr::Field(a, name, i) => match check(a, s, lt) {
-            Some(XType::Record(names, ts)) => if *i < ts.len() && *i < names.len() && names[*i] == *name {
-                proof {
-                    lemma_xtys(ts@);
-                }
-                Some(copy_xtype(&ts[*i]))
-            } else {
-                None
-            },
-            _ => None,
-        },
-        TExpr::None(t) => match element_exec(t, &s.enums) {
-            Some(x) => Some(XType::Option(Box::new(x))),
-            None => None,
-        },
-        TExpr::Some(a) => match check(a, s, lt) {
-            Some(x) => Some(XType::Option(Box::new(x))),
-            None => None,
-        },
-        TExpr::IsSome(a) => match check(a, s, lt) {
-            Some(XType::Option(_)) => Some(XType::Bool),
-            _ => None,
-        },
-        TExpr::IsNone(a) => match check(a, s, lt) {
-            Some(XType::Option(_)) => Some(XType::Bool),
-            _ => None,
-        },
-        TExpr::Unwrap(a) => match check(a, s, lt) {
-            Some(XType::Option(x)) => Some(*x),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// 量化の型検査。
+/// 量化。
 fn check_quant(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Quant,
     ensures
         final(lt)@ == old(lt)@,
-        r matches Some(x) ==> type_of(*e, scope_view(s), xtys(old(lt)@)) == Some(xty(x)),
-    decreases e, 0nat,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
 {
     match e {
         TExpr::Quant(_, over, body) => {
@@ -801,15 +809,139 @@ fn check_quant(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
     }
 }
 
-/// Set、Map、Listのリテラルと、Setの演算と大きさの型検査。
-fn check_coll(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+/// TupleとRecord。
+fn check_tuple(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Tuple || e is Record,
     ensures
         final(lt)@ == old(lt)@,
-        r matches Some(x) ==> type_of(*e, scope_view(s), xtys(old(lt)@)) == Some(xty(x)),
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
-    let ghost c = scope_view(s);
-    let ghost l = xtys(lt@);
+    match e {
+        TExpr::Tuple(es) => {
+            proof {
+                assert(decreases_to!(*e => *es));
+            }
+            match check_seq(e, es, s, lt) {
+                Some(ts) => {
+                    proof {
+                        lemma_xtys(ts@);
+                    }
+                    if ts.len() >= 1 {
+                        Some(XType::Tuple(ts))
+                    } else {
+                        None
+                    }
+                },
+                None => None,
+            }
+        },
+        TExpr::Record(names, es) => {
+            proof {
+                assert(decreases_to!(*e => *es));
+            }
+            match check_seq(e, es, s, lt) {
+                Some(ts) => {
+                    proof {
+                        lemma_xtys(ts@);
+                    }
+                    if ts.len() >= 1 && names.len() == ts.len() && distinct_names(names) {
+                        Some(XType::Record(names.clone(), ts))
+                    } else {
+                        None
+                    }
+                },
+                None => None,
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Tupleの要素とRecordのフィールド。
+fn check_proj(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is Nth || e is Field,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
+        TExpr::Nth(a, i) => match check(a, s, lt) {
+            Some(XType::Tuple(ts)) => {
+                proof {
+                    lemma_xtys(ts@);
+                }
+                if *i < ts.len() {
+                    Some(copy_xtype(&ts[*i]))
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        },
+        TExpr::Field(a, name, i) => match check(a, s, lt) {
+            Some(XType::Record(names, ts)) => {
+                proof {
+                    lemma_xtys(ts@);
+                }
+                if *i < ts.len() && *i < names.len() && names[*i] == *name {
+                    Some(copy_xtype(&ts[*i]))
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Option。
+fn check_opt(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is None || e is Some || e is IsSome || e is IsNone || e is Unwrap,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
+        TExpr::None(t) => match element_exec(t, &s.enums) {
+            Some(x) => Some(XType::Option(Box::new(x))),
+            None => None,
+        },
+        TExpr::Some(a) => match check(a, s, lt) {
+            Some(x) => Some(XType::Option(Box::new(x))),
+            None => None,
+        },
+        TExpr::IsSome(a) => match check(a, s, lt) {
+            Some(XType::Option(_)) => Some(XType::Bool),
+            _ => None,
+        },
+        TExpr::IsNone(a) => match check(a, s, lt) {
+            Some(XType::Option(_)) => Some(XType::Bool),
+            _ => None,
+        },
+        TExpr::Unwrap(a) => match check(a, s, lt) {
+            Some(XType::Option(x)) => Some(*x),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Set、Map、Listのリテラル。
+fn check_coll_lit(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is SetLit || e is MapLit || e is ListLit,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
     match e {
         TExpr::SetLit(t, es) => {
             proof {
@@ -844,16 +976,22 @@ fn check_coll(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
                 None
             }
         },
+        _ => None,
+    }
+}
+
+/// Setの要素の検査と演算。
+fn check_set(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is SetContains || e is Insert || e is Remove || e is SetBin,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::SetContains(t, a, x) => match (check(a, s, lt), check(x, s, lt)) {
             (Some(XType::Set(u)), Some(y)) => if stype_eq(&u, t) && xtype_eq(&y, &to_xtype(t)) {
-                Some(XType::Bool)
-            } else {
-                None
-            },
-            _ => None,
-        },
-        TExpr::ListContains(a, x) => match (check(a, s, lt), check(x, s, lt)) {
-            (Some(XType::List(u, _)), Some(y)) => if xtype_eq(&y, &to_xtype(&u)) {
                 Some(XType::Bool)
             } else {
                 None
@@ -879,6 +1017,28 @@ fn check_coll(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
             },
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// Listの要素の検査と、大きさ。
+fn check_size(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is ListContains || e is Size || e is IsEmpty,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
+        TExpr::ListContains(a, x) => match (check(a, s, lt), check(x, s, lt)) {
+            (Some(XType::List(u, _)), Some(y)) => if xtype_eq(&y, &to_xtype(&u)) {
+                Some(XType::Bool)
+            } else {
+                None
+            },
+            _ => None,
+        },
         TExpr::Size(a) => match check(a, s, lt) {
             Some(XType::Set(_)) | Some(XType::Map(_, _)) | Some(XType::List(_, _)) => Some(XType::Int),
             _ => None,
@@ -891,15 +1051,15 @@ fn check_coll(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
     }
 }
 
-/// Mapの参照と更新、Listの参照と更新の型検査。
-fn check_access(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+/// Mapの参照と更新。
+fn check_map(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is HasKey || e is Get || e is Put || e is Delete || e is Keys,
     ensures
         final(lt)@ == old(lt)@,
-        r matches Some(x) ==> type_of(*e, scope_view(s), xtys(old(lt)@)) == Some(xty(x)),
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
-    let ghost c = scope_view(s);
-    let ghost l = xtys(lt@);
     match e {
         TExpr::HasKey(t, a, x) => match (check(a, s, lt), check(x, s, lt)) {
             (Some(XType::Map(k, _)), Some(y)) => if stype_eq(&k, t) && xtype_eq(&y, &to_xtype(&k)) {
@@ -945,6 +1105,20 @@ fn check_access(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
             Some(XType::Map(k, _)) => Some(XType::Set(k)),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// Listの参照と更新。
+fn check_list(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
+    requires
+        e is At || e is First || e is Last || e is Push || e is Pop || e is Shift,
+    ensures
+        final(lt)@ == old(lt)@,
+        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+    decreases e, 1nat,
+{
+    match e {
         TExpr::At(a, i) => match (check(a, s, lt), check(i, s, lt)) {
             (Some(XType::List(u, _)), Some(XType::Int)) => Some(to_xtype(&u)),
             _ => None,
@@ -964,19 +1138,101 @@ fn check_access(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         TExpr::Pop(a) | TExpr::Shift(a) => match check(a, s, lt) {
             Some(XType::List(u, n)) => Some(XType::List(u, n)),
             _ => None,
-        },        _ => None,
+        },
+        _ => None,
     }
 }
 
-proof fn lemma_all_typed_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
-    requires
-        all_typed(es, XTy::Bool, c, lt),
+pub proof fn lemma_all_typed_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
     ensures
-        all_bool(es, c, lt),
+        all_bool(es, c, lt) == all_typed(es, XTy::Bool, c, lt),
     decreases es.len(),
 {
     if es.len() > 0 {
         lemma_all_typed_bool(es.drop_last(), c, lt);
+    }
+}
+
+/// 列の型付けは、要素ごとの型付けと同じである。
+pub proof fn lemma_all_typed_iff(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>)
+    ensures
+        all_typed(es, x, c, lt) == forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) == Some(x),
+    decreases es.len(),
+{
+    if es.len() > 0 {
+        let p = es.drop_last();
+        lemma_all_typed_iff(p, x, c, lt);
+        assert(es.last() == es[es.len() - 1]);
+        if forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) == Some(x) {
+            assert forall|j: int| 0 <= j < p.len() implies type_of(#[trigger] p[j], c, lt) == Some(x) by {
+                assert(p[j] == es[j]);
+            }
+        }
+        if all_typed(es, x, c, lt) {
+            assert forall|j: int| 0 <= j < es.len() implies type_of(#[trigger] es[j], c, lt) == Some(x) by {
+                if j < p.len() {
+                    assert(p[j] == es[j]);
+                }
+            }
+        }
+    }
+}
+
+pub proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
+    ensures
+        types_of(es, c, lt) is Some == forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) is Some,
+        types_of(es, c, lt) matches Some(ts) ==> ts.len() == es.len(),
+    decreases es.len(),
+{
+    if es.len() > 0 {
+        let p = es.drop_last();
+        lemma_types_of_iff(p, c, lt);
+        assert(es.last() == es[es.len() - 1]);
+        if forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) is Some {
+            assert forall|j: int| 0 <= j < p.len() implies type_of(#[trigger] p[j], c, lt) is Some by {
+                assert(p[j] == es[j]);
+            }
+        }
+        if types_of(es, c, lt) is Some {
+            assert forall|j: int| 0 <= j < es.len() implies type_of(#[trigger] es[j], c, lt) is Some by {
+                if j < p.len() {
+                    assert(p[j] == es[j]);
+                }
+            }
+        }
+    }
+}
+
+pub proof fn lemma_items_typed_iff(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt: Seq<XTy>)
+    ensures
+        items_typed(items, k, v, c, lt) == forall|j: int|
+            0 <= j < items.len() ==> type_of((#[trigger] items[j]).key, c, lt) == Some(k) && type_of(items[j].value, c, lt)
+                == Some(v),
+    decreases items.len(),
+{
+    if items.len() > 0 {
+        let p = items.drop_last();
+        lemma_items_typed_iff(p, k, v, c, lt);
+        assert(items.last() == items[items.len() - 1]);
+        if forall|j: int|
+            0 <= j < items.len() ==> type_of((#[trigger] items[j]).key, c, lt) == Some(k) && type_of(items[j].value, c, lt)
+                == Some(v) {
+            assert forall|j: int| 0 <= j < p.len() implies type_of((#[trigger] p[j]).key, c, lt) == Some(k) && type_of(
+                p[j].value,
+                c,
+                lt,
+            ) == Some(v) by {
+                assert(p[j] == items[j]);
+            }
+        }
+        if items_typed(items, k, v, c, lt) {
+            assert forall|j: int| 0 <= j < items.len() implies type_of((#[trigger] items[j]).key, c, lt) == Some(k)
+                && type_of(items[j].value, c, lt) == Some(v) by {
+                if j < p.len() {
+                    assert(p[j] == items[j]);
+                }
+            }
+        }
     }
 }
 
@@ -986,7 +1242,7 @@ fn check_all(_parent: &TExpr, es: &Vec<TExpr>, x: &XType, s: &Scope, lt: &mut Ve
         decreases_to!(*_parent => *es),
     ensures
         final(lt)@ == old(lt)@,
-        r ==> all_typed(es@, xty(*x), scope_view(s), xtys(old(lt)@)),
+        r == all_typed(es@, xty(*x), scope_view(s), xtys(old(lt)@)),
     decreases _parent, 0nat,
 {
     let ghost l = xtys(lt@);
@@ -1009,9 +1265,17 @@ fn check_all(_parent: &TExpr, es: &Vec<TExpr>, x: &XType, s: &Scope, lt: &mut Ve
         }
         match check(&es[i], s, lt) {
             Some(y) => if !xtype_eq(&y, x) {
+                proof {
+                    lemma_all_typed_iff(es@, xty(*x), scope_view(s), l);
+                }
                 return false;
             },
-            None => return false,
+            None => {
+                proof {
+                    lemma_all_typed_iff(es@, xty(*x), scope_view(s), l);
+                }
+                return false;
+            },
         }
         i += 1;
     }
@@ -1028,6 +1292,7 @@ fn check_seq(_parent: &TExpr, es: &Vec<TExpr>, s: &Scope, lt: &mut Vec<XType>) -
     ensures
         final(lt)@ == old(lt)@,
         r matches Some(ts) ==> types_of(es@, scope_view(s), xtys(old(lt)@)) == Some(xtys(ts@)),
+        r is None ==> types_of(es@, scope_view(s), xtys(old(lt)@)) is None,
     decreases _parent, 0nat,
 {
     let ghost l = xtys(lt@);
@@ -1057,7 +1322,12 @@ fn check_seq(_parent: &TExpr, es: &Vec<TExpr>, s: &Scope, lt: &mut Vec<XType>) -
                     assert(out@.drop_last() == before);
                 }
             },
-            None => return None,
+            None => {
+                proof {
+                    lemma_types_of_iff(es@, scope_view(s), l);
+                }
+                return None;
+            },
         }
         i += 1;
     }
@@ -1074,7 +1344,7 @@ fn check_items(_parent: &TExpr, items: &Vec<Item>, k: &XType, v: &XType, s: &Sco
         decreases_to!(*_parent => *items),
     ensures
         final(lt)@ == old(lt)@,
-        r ==> items_typed(items@, xty(*k), xty(*v), scope_view(s), xtys(old(lt)@)),
+        r == items_typed(items@, xty(*k), xty(*v), scope_view(s), xtys(old(lt)@)),
     decreases _parent, 0nat,
 {
     let ghost l = xtys(lt@);
@@ -1104,9 +1374,17 @@ fn check_items(_parent: &TExpr, items: &Vec<Item>, k: &XType, v: &XType, s: &Sco
         let tv = check(&item.value, s, lt);
         match (tk, tv) {
             (Some(a), Some(b)) => if !(xtype_eq(&a, k) && xtype_eq(&b, v)) {
+                proof {
+                    lemma_items_typed_iff(items@, xty(*k), xty(*v), scope_view(s), l);
+                }
                 return false;
             },
-            _ => return false,
+            _ => {
+                proof {
+                    lemma_items_typed_iff(items@, xty(*k), xty(*v), scope_view(s), l);
+                }
+                return false;
+            },
         }
         i += 1;
     }

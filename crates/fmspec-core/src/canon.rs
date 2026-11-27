@@ -29,6 +29,8 @@ use crate::equality::{small, smalls};
 use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
+use crate::limits::*;
+#[cfg(verus_keep_ghost)]
 use crate::lists::{flat, lemma_list_join, lemma_list_parts, pad, pad_vals, parts_ok, row_at, rows_at, rows_view};
 #[cfg(verus_keep_ghost)]
 use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, mparts_ok, mrow_at, row_vals};
@@ -1730,6 +1732,7 @@ proof fn lemma_canon_tuple_eval(
 pub fn canonical(st: &SType, slots: &Vec<Expr>, enums: &Vec<i64>) -> (r: Option<Expr>)
     ensures
         r matches Some(c) ==> canon_wf(sty(*st), slots@, enums@, c),
+        slots@.len() == width(sty(*st), enums@) && lim_s(sty(*st), enums@) ==> r is Some,
     decreases st, 1nat,
 {
     match st {
@@ -1785,6 +1788,7 @@ fn canonical_option(_parent: &SType, t: &SType, slots: &Vec<Expr>, enums: &Vec<i
         decreases_to!(*_parent => *t),
     ensures
         r matches Some(c) ==> canon_wf(STy::Option(Box::new(sty(*t))), slots@, enums@, c),
+        slots@.len() == 1 + width(sty(*t), enums@) && lim_s(sty(*t), enums@) ==> r is Some,
     decreases _parent, 0nat,
 {
     if slots.len() == 0 {
@@ -1813,10 +1817,27 @@ fn canonical_map(_parent: &SType, k: &SType, v: &SType, slots: &Vec<Expr>, enums
         decreases_to!(*_parent => *v),
     ensures
         r matches Some(c) ==> canon_wf(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), slots@, enums@, c),
+        lim_s(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@) && slots@.len() == width(
+            STy::Map(Box::new(sty(*k)), Box::new(sty(*v))),
+            enums@,
+        ) ==> r is Some,
     decreases _parent, 0nat,
 {
+    let ghost pre = lim_s(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@) && slots@.len() == width(
+        STy::Map(Box::new(sty(*k)), Box::new(sty(*v))),
+        enums@,
+    );
     let rows = map_rows(k, v, slots, enums)?;
     let defs = defaults(v, enums);
+    proof {
+        if pre {
+            assert(lim_s(sty(*v), enums@));
+            assert forall|p: int| 0 <= p < rows@.len() implies (#[trigger] rows@[p])@.len() == 1 + width(sty(*v), enums@) by {
+                assert(rows_view(rows@)[p] == rows@[p]@);
+                assert(mrow_at(rows_view(rows@)[p], slots@, p, (1 + width(sty(*v), enums@)) as nat));
+            }
+        }
+    }
     let mut items: Vec<Expr> = Vec::new();
     let ghost mut cs: Seq<Expr> = Seq::empty();
     let mut i = 0;
@@ -1828,6 +1849,12 @@ fn canonical_map(_parent: &SType, k: &SType, v: &SType, slots: &Vec<Expr>, enums
             items@.len() == i,
             cs.len() == i,
             forall|p: int| 0 <= p < i ==> #[trigger] map_item_ok(items@[p], cs[p], rows@[p]@, sty(*v), enums@),
+            pre == (lim_s(STy::Map(Box::new(sty(*k)), Box::new(sty(*v))), enums@) && slots@.len() == width(
+                STy::Map(Box::new(sty(*k)), Box::new(sty(*v))),
+                enums@,
+            )),
+            pre ==> lim_s(sty(*v), enums@) && forall|p: int| 0 <= p < rows@.len() ==> (#[trigger] rows@[p])@.len() == 1
+                + width(sty(*v), enums@),
         decreases rows.len() - i,
     {
         let row = &rows[i];
@@ -1871,14 +1898,27 @@ fn canonical_list(_parent: &SType, t: &SType, max: usize, slots: &Vec<Expr>, enu
         decreases_to!(*_parent => *t),
     ensures
         r matches Some(c) ==> canon_wf(STy::List(Box::new(sty(*t)), max), slots@, enums@, c),
+        lim_s(STy::List(Box::new(sty(*t)), max), enums@) && slots@.len() == width(STy::List(Box::new(sty(*t)), max), enums@)
+            ==> r is Some,
     decreases _parent, 0nat,
 {
+    let ghost pre = lim_s(STy::List(Box::new(sty(*t)), max), enums@) && slots@.len() == width(
+        STy::List(Box::new(sty(*t)), max),
+        enums@,
+    );
     if max > 0x7fff_ffffusize {
         return None;
     }
     let (len, rows) = list_parts(t, max, slots, enums)?;
     proof {
         assert(rows_view(rows@).len() == rows@.len());
+        if pre {
+            assert(lim_s(sty(*t), enums@));
+            assert forall|q: int| 0 <= q < rows@.len() implies (#[trigger] rows@[q])@.len() == width(sty(*t), enums@) by {
+                assert(rows_view(rows@)[q] == rows@[q]@);
+                assert(row_at(rows_view(rows@)[q], slots@, q, width(sty(*t), enums@)));
+            }
+        }
     }
     let defs = defaults(t, enums);
     let mut items: Vec<Expr> = Vec::new();
@@ -1894,6 +1934,14 @@ fn canonical_list(_parent: &SType, t: &SType, max: usize, slots: &Vec<Expr>, enu
             items@.len() == p,
             cs.len() == p,
             forall|q: int| 0 <= q < p ==> #[trigger] list_item_ok(items@[q], cs[q], rows@[q]@, len, q, sty(*t), enums@),
+            pre == (lim_s(STy::List(Box::new(sty(*t)), max), enums@) && slots@.len() == width(
+                STy::List(Box::new(sty(*t)), max),
+                enums@,
+            )),
+            pre ==> lim_s(sty(*t), enums@) && forall|q: int| 0 <= q < rows@.len() ==> (#[trigger] rows@[q])@.len() == width(
+                sty(*t),
+                enums@,
+            ),
         decreases rows.len() - p,
     {
         let c = canonical(t, &rows[p], enums)?;
@@ -1938,8 +1986,14 @@ fn canonical_parts(_parent: &SType, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &
             enums@,
             c,
         )),
+        lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim() && slots@.len() == width_sum(stys(ts@), enums@)
+            ==> r is Some,
     decreases _parent, 0nat,
 {
+    let ghost pre = lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim() && slots@.len() == width_sum(
+        stys(ts@),
+        enums@,
+    );
     let mut xs: Vec<XType> = Vec::new();
     let mut i = 0;
     while i < ts.len()
@@ -1951,6 +2005,19 @@ fn canonical_parts(_parent: &SType, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &
     {
         xs.push(to_xtype(&ts[i]));
         i += 1;
+    }
+    proof {
+        lemma_xtys(xs@);
+        lemma_stys(ts@);
+        lemma_to_xtys(stys(ts@));
+        assert(xtys(xs@) =~= to_xtys(stys(ts@))) by {
+            assert forall|j: int| 0 <= j < xs@.len() implies #[trigger] xtys(xs@)[j] == to_xtys(stys(ts@))[j] by {
+                assert(xty(xs@[j]) == to_xty(sty(ts@[j])));
+            }
+        }
+        if pre {
+            lemma_lim_to_xs(stys(ts@), enums@);
+        }
     }
     let parts = split(&xs, slots, enums)?;
     proof {
@@ -1968,8 +2035,24 @@ fn canonical_parts(_parent: &SType, ts: &Vec<SType>, slots: &Vec<Expr>, enums: &
             i <= ts@.len(),
             items@.len() == i,
             forall|j: int| 0 <= j < i ==> #[trigger] canon_wf(sty(ts@[j]), parts@[j]@, enums@, items@[j]),
+            pre == (lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim() && slots@.len() == width_sum(
+                stys(ts@),
+                enums@,
+            )),
+            xtys(xs@) == to_xtys(stys(ts@)),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] split_ok(parts@[j]@, slots@, xtys(xs@), j, enums@),
         decreases ts.len() - i,
     {
+        proof {
+            lemma_stys(ts@);
+            lemma_to_xtys(stys(ts@));
+            if pre {
+                assert(split_ok(parts@[i as int]@, slots@, xtys(xs@), i as int, enums@));
+                lemma_lim_ss_at(stys(ts@), enums@, i as int);
+                lemma_xwidth_of(sty(ts@[i as int]), enums@);
+                assert(xtys(xs@)[i as int] == to_xty(sty(ts@[i as int])));
+            }
+        }
         proof {
             vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
         }

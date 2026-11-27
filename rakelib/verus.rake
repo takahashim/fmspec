@@ -53,6 +53,11 @@ end
 VERUS_MUTANTS = [
   ["infer.rs", "BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(XType::Bool),",
    "BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(XType::Int),", "比較の型を整数にする"],
+  ["infer.rs", "                    if ts.len() >= 1 {\n                        Some(XType::Tuple(ts))", "                    if ts.len() >= 2 {\n                        Some(XType::Tuple(ts))",
+   "要素が1つのTupleを拒否する"],
+  ["infer.rs", "        TExpr::Local(i) => if *i < lt.len() {\n            Some(copy_xtype(&lt[*i]))", "        TExpr::Local(i) => if *i + 1 < lt.len() {\n            Some(copy_xtype(&lt[*i]))",
+   "最も内側の局所変数を拒否する"],
+  ["encoding.rs", "        (XType::Bool, XType::Bool) => true,", "        (XType::Bool, XType::Bool) => false,", "Boolの型を等しくないとする"],
   ["encoding.rs", "(SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2 && *h1 == *h2,",
    "(SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2,", "整数の型の上端を比べない"],
   ["encoding.rs", "        SType::Option(x) => match keys_exec(x, enums) {\n            Some(k) => Some(k + 1),",
@@ -199,7 +204,7 @@ VERUS_MUTANTS = [
   ["mbt.rs", "        while i < self.cands.states.len()\n", "        while i < self.cands.states.len() && i < 1\n", "2番目以降の候補を更新に使わない"],
   ["mbt.rs", "                Absorbed::TooMany => {\n                    return Update::TooMany;", "                Absorbed::TooMany => {\n                    return Update::Failure;", "候補数の上限超過を不適合とする"],
   ["mbt.rs", "                Absorbed::Disabled => {\n                    assert(s0.possible(s@));\n                    return Update::InvalidInput;\n                },", "                Absorbed::Disabled => {},", "入力が無効な候補を無視する"],
-  ["lowering.rs", "let (t, out) = layout_slots(&cx.args[*i], 2, enums)?;", "let (t, out) = layout_slots(&cx.args[*i], 0, enums)?;", "引数を状態変数として参照する"],
+  ["lowering.rs", "let (t, out) = need(layout_slots(&cx.args[*i], 2, enums))?;", "let (t, out) = need(layout_slots(&cx.args[*i], 0, enums))?;", "引数を状態変数として参照する"],
   ["lowering.rs", "*k < enums[*id]) {", "*k <= enums[*id]) {", "範囲外の列挙型のラベルを受け入れる"],
   ["lowering.rs", "let x = wrap(&blk.binds, copy_expr(&slots[0]));", "let x = copy_expr(&slots[0]);", "スカラーの下ろしで束縛を捨てる"],
   ["slots.rs", "let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(-1));", "let e = ite(copy_expr(&in_dom), copy_expr(&r), ci(0));", "型に属さないキーの番号を0にする"],
@@ -210,23 +215,23 @@ VERUS_MUTANTS = [
   ["lowering.rs", "out.push(not(x));", "out.push(x);", "否定を落とす"],
   ["lowering.rs", "out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);", "out.push(bind(blk, Expr::Or(Box::new(p), Box::new(q)))?);", "含意を論理和にする"],
   ["lowering.rs", "if all { Join::RawAnd } else { Join::RawOr }", "if all { Join::RawOr } else { Join::RawAnd }", "allとanyのたたみ方を入れ替える"],
-  ["lowering.rs", "let out = ite_slots(&c, &xs, &ys, d)?;", "let out = ite_slots(&c, &ys, &xs, d)?;", "条件式の枝を入れ替える"],
+  ["lowering.rs", "let out = need(ite_slots(&c, &xs, &ys, d))?;", "let out = need(ite_slots(&c, &ys, &xs, d))?;", "条件式の枝を入れ替える"],
   ["quant.rs", "out.push(bin(BinOp::Add, copy_expr(r), ci(*lo)));", "out.push(bin(BinOp::Sub, copy_expr(r), ci(*lo)));", "整数の番号に下端を足さない"],
   ["quant.rs", "acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, k)), acc);", "acc = ite(eq(copy_expr(r), ci(k)), Expr::Const(Value::Enum(id, 0)), acc);", "列挙型の番号をラベルに対応させない"],
   ["quant.rs", "payload.push(ite(eq(copy_expr(r), ci(0)), copy_expr(&ds[j]), copy_expr(&us[j])));", "payload.push(ite(eq(copy_expr(r), ci(0)), copy_expr(&us[j]), copy_expr(&ds[j])));", "Optionの番号0で中身を作る"],
   ["quant.rs", "let pre = unrank_seq(_parent, ts, n - 1, &q, enums)?;", "let pre = unrank_seq(_parent, ts, n - 1, &m, enums)?;", "組の先頭の番号に剰余を使う"],
   ["quant.rs", "let x = ite(c, a, b);", "let x = ite(c, b, a);", "印を選ぶ木の枝を入れ替える"],
   ["lowering.rs", "Expr::Implies(Box::new(guard), Box::new(e))", "Expr::And(Box::new(guard), Box::new(e))", "forallのガードを論理積にする"],
-  ["lowering.rs", "let at = j.checked_mul(stride)?;", "let at = j.checked_mul(w)?;", "Mapの有無の位置を値の幅で数える"],
+  ["lowering.rs", "let at = need(j.checked_mul(stride))?;", "let at = need(j.checked_mul(w))?;", "Mapの有無の位置を値の幅で数える"],
   ["lowering.rs", "let hi = n as i64 - 1;", "let hi = n as i64 - 2;", "量化で最後の値をたどらない"],
   ["lowering.rs", "(copy_stype(t), cb(true), n as usize, us)", "(copy_stype(t), cb(false), n as usize, us)", "型の全体をたどる量化で値を選ばない"],
   ["lowering.rs", "let g = bin(BinOp::Lt, Expr::Local(d), copy_expr(&cs[0]));", "let g = bin(BinOp::Le, Expr::Local(d), copy_expr(&cs[0]));", "Listの長さの位置まで要素とみなす"],
-  ["lowering.rs", "let at = k.checked_mul(w)?.checked_add(1)?.checked_add(j)?;", "let at = k.checked_mul(w)?.checked_add(j)?;", "Listの長さのスロットを要素のスロットとみなす"],
+  ["lowering.rs", "let at = need(need(need(k.checked_mul(w))?.checked_add(1))?.checked_add(j))?;", "let at = need(need(k.checked_mul(w))?.checked_add(j))?;", "Listの長さのスロットを要素のスロットとみなす"],
   ["lowering.rs", "bits = mark(&bits, &r, true);", "bits = mark(&bits, &r, false);", "Setのリテラルの要素に印を付けない"],
   ["lowering.rs", "out.push(and(bin(BinOp::Ge, r, ci(0)), hit));", "out.push(hit);", "型に属さない要素の番号でSetのスロットを選ぶ"],
   ["lowering.rs", "let out = mark(&bits, &r, true);", "let out = mark(&bits, &r, false);", "Setに要素を加えずに除く"],
   ["lowering.rs", "let out = mark(&bits, &r, false);", "let out = mark(&bits, &r, true);", "Setから要素を除かずに加える"],
-  ["lowering.rs", "let pos = j.checked_mul(stride)?;", "let pos = j.checked_mul(w)?;", "Mapの大きさで有無の位置を値の幅で数える"],
+  ["lowering.rs", "let pos = need(j.checked_mul(stride))?;", "let pos = need(j.checked_mul(w))?;", "Mapの大きさで有無の位置を値の幅で数える"],
   ["lowering.rs", "out.push(not(any_of(&flags)));", "out.push(any_of(&flags));", "空かの判定を反転する"],
   ["lowering.rs", "out.push(eq(len, ci(0)));", "out.push(eq(len, ci(1)));", "Listが空かを長さ1と比べる"],
   ["lowering.rs", "                if *positive {", "                if !*positive {", "等しさと等しくなさを入れ替える"],
@@ -240,7 +245,7 @@ VERUS_MUTANTS = [
   ["lowering.rs", "let i = bind(blk, bin(BinOp::Sub, len, ci(1)))?;", "let i = bind(blk, bin(BinOp::Sub, len, ci(0)))?;", "Listの末尾の添字を長さにする"],
   ["lowering.rs", "check(blk, bin(BinOp::Lt, copy_expr(&len), ci(max as i64)), FAIL_FULL)?;", "check(blk, bin(BinOp::Le, copy_expr(&len), ci(max as i64)), FAIL_FULL)?;", "満杯のListに要素を加える"],
   ["lowering.rs", "let new_len = bind(blk, bin(BinOp::Add, copy_expr(&len), ci(1)))?;", "let new_len = bind(blk, bin(BinOp::Add, copy_expr(&len), ci(0)))?;", "要素を加えても長さを増やさない"],
-  ["lowering.rs", "let out = ite_rows(&rows, &new_len, &defs)?;", "let out = ite_rows(&rows, &ci(0), &defs)?;", "末尾でなく先頭の行を既定値にする"],
+  ["lowering.rs", "let out = need(ite_rows(&rows, &new_len, &defs))?;", "let out = need(ite_rows(&rows, &ci(0), &defs))?;", "末尾でなく先頭の行を既定値にする"],
   ["lowering.rs", "let mut p = 1;", "let mut p = 0;", "Listの先頭を除かずに詰める"],
   ["lowering.rs", "hits.push(and(bin(BinOp::Gt, copy_expr(&len), ci(p as i64)), same));", "hits.push(same);", "Listの長さより後ろの行も比べる"],
   ["lowering.rs", "if !xtype_eq(&tx, &et) {", "if !xtype_eq(&tx, &tx) {", "Listの要素と値の型を確かめずに比べる"],
@@ -275,13 +280,18 @@ VERUS_MUTANTS = [
   ["model_lower.rs", "Some(o) => Some(copy_stype(&o.ty)),", "Some(_) => None,", "遷移契約から出力を参照できなくする"],
   ["model_lower.rs", "ls.push(Layout { ty: copy_stype(&ts[i]), offset: off });", "ls.push(Layout { ty: copy_stype(&ts[i]), offset: 0 });", "どの位置も0にする"],
   ["model_lower.rs", "if !(wf_stype_exec(&ts[i], enums) && small_stype(&ts[i])) {", "if !wf_stype_exec(&ts[i], enums) {", "Listの長さの上限を確かめない"],
-  ["canon.rs", "out.push(Type::Int(0, *max as i64));", "out.push(Type::Int(1, *max as i64));", "スロットの型の実装でListの長さから0を除く"]
+  ["canon.rs", "out.push(Type::Int(0, *max as i64));", "out.push(Type::Int(1, *max as i64));", "スロットの型の実装でListの長さから0を除く"],
+  ["model_lower.rs", "    if !check_model(sm) {\n        return Err(LowerError::Type);", "    if false {\n        return Err(LowerError::Type);", "下ろしの前にモデルの型を確かめない"],
+  ["model_lower.rs", "        Err(Fail::Depth) => return Err(Fault::Depth),", "        Err(Fail::Depth) => return Err(Fault::Lower),", "値の式の深さの上限を内部の誤りにする"],
+  ["smodel.rs", "        Err(Fail::Depth) => return Err(LowerError::Depth),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "        Err(Fail::Depth) => return Err(LowerError::Guard(a)),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "guardの深さの上限を内部の誤りにする"],
+  ["lowering.rs", "                    if rows.len() > 0 {\n                        out.push(defs);\n                    }", "                    out.push(defs);", "上限0のListの `shift` に既定の行を加える"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
 # 前提や不変条件が矛盾していて証明が空虚に通っているなら、ここの assert(false) も通ってしまう。
 VERUS_CANARIES = [
   ["infer.rs", "            assert(decreases_to!(*_parent => item.value));", "check_items のループ"],
+  ["infer.rs", "            let ok = check_all(e, es, &XType::Bool, s, lt);", "check_fold"],
   ["keys.rs", "        assert(pre.push(vs.last()) == vs);", "lemma_rank_seq_in_product の帰納"],
   ["keys.rs", "        assert(vs.drop_last() == p[q]);", "lemma_product_rank の帰納"],
   ["encoding.rs", "        assert(s.skip(prefix.len() as int) == last);", "lemma_models_enc_seq の帰納"],
@@ -326,7 +336,7 @@ VERUS_CANARIES = [
   ["lowering.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
   ["lowering.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
   ["lowering.rs", "            lemma_pad_eval(k, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
-  ["lowering.rs", "                lemma_pads_closed(**a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(tx), xa@);", "low_ite のスロットの束縛"],
+  ["lowering.rs", "                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(*tx), xa@);", "low_ite のスロットの束縛"],
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
   ["lowering.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
@@ -382,7 +392,9 @@ VERUS_CANARIES = [
   ["model_safe.rs", "        lemma_reach_core(sm, cv, m, st, cs, ks, sx, c, q, (n - 1) as nat);", "lemma_reach_core の帰納"],
   ["model_lower.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
   ["model_lower.rs", "        lemma_init_ok(*sm, cv, m, stg, sx, psg, cc);", "lower_model の結論"],
-  ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"]
+  ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"],
+  ["model_lower.rs", "            lemma_state_ctx(*sm, cv, cx, stys(sa.args@));\n            assert(out_sty(*sa)", "lower_model の遷移契約の文脈"],
+  ["smodel.rs", "                lemma_upd_pre(*sa, *cx, u as int);", "lower_action の代入の前提"]
 ].freeze
 
 def verus_replace_once(text, from, to, what)

@@ -178,6 +178,9 @@ Tuple、Record、Optionの式も、中の整数は範囲を持たない。
 
 値を型の決まった場所（状態変数、出力、Setの要素、Mapのキーと値、Listの要素）に置くときに、範囲を検査する。
 
+式の型付けの規則は、中核の `crates/fmspec-core/src/infer.rs` の `type_of` に仕様として書いてある。
+中核は、下ろしの前にモデルのすべての式がこの規則で型を持つことを確かめる（`model_total.rs` の `check_model`）。
+
 ### 基本の式
 
 | 式 | 型 | 評価 |

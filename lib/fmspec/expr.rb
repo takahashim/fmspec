@@ -475,3 +475,25 @@ module Fmspec
 
   extend Functions
 end
+
+module Fmspec
+  # Ruby の真偽値と nil の論理演算（`true & x`、`false | x`、`nil ^ x` など）に記号式を渡すと、
+  # Ruby は記号式を値として「真」と読み、結果は Ruby の真偽値になる。書いたつもりの条件は式に残らない。
+  # 記号ブロックの外のヘルパー（lambda やメソッド）でも起きるので、構文検査ではなく、実行時に拒否する。
+  # 記号式どうし、または記号式が左にある演算（`記号式 & true`）は Expr の演算子になるので、影響しない。
+  module RubyBooleanGuard
+    %i[& | ^].each do |op|
+      define_method(op) do |other|
+        if other.is_a?(Expr)
+          location = caller_locations(1, 1)&.first
+          where = location ? "#{location.path}:#{location.lineno}: " : ""
+          raise BuildError, "#{where}#{inspect} #{op} 記号式 は Ruby の真偽値の演算になり、記号式が式に残りません。" \
+                            "記号式を左に書くか、all(...) や any(...) を使います"
+        end
+        super(other)
+      end
+    end
+  end
+
+  [TrueClass, FalseClass, NilClass].each { |klass| klass.prepend(RubyBooleanGuard) }
+end

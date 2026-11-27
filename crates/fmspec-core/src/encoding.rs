@@ -1082,6 +1082,21 @@ pub proof fn lemma_xtys_ext(a: Seq<XType>, b: Seq<XType>)
     assert(xtys(a) =~= xtys(b));
 }
 
+/// 整形式の列の各要素は整形式である。
+pub proof fn lemma_wf_stypes_at(ts: Seq<STy>, enums: Seq<i64>, i: int)
+    requires
+        wf_stypes(ts, enums),
+        0 <= i < ts.len(),
+    ensures
+        wf_stype(ts[i], enums),
+    decreases ts.len(),
+{
+    if i < ts.len() - 1 {
+        assert(ts.drop_last()[i] == ts[i]);
+        lemma_wf_stypes_at(ts.drop_last(), enums, i);
+    }
+}
+
 /// 列の各要素が整形式なら、列は整形式である。
 pub proof fn lemma_wf_stypes(ts: Seq<STy>, enums: Seq<i64>)
     requires
@@ -1272,7 +1287,7 @@ fn copy_xtypes(_parent: &XType, ts: &Vec<XType>) -> (r: Vec<XType>)
 
 pub fn usizes_eq(a: &Vec<usize>, b: &Vec<usize>) -> (r: bool)
     ensures
-        r ==> a@ == b@,
+        r == (a@ == b@),
 {
     if a.len() != b.len() {
         return false;
@@ -1297,7 +1312,7 @@ pub fn usizes_eq(a: &Vec<usize>, b: &Vec<usize>) -> (r: bool)
 /// 2つの格納の型が等しいかを判定する。真なら仕様の型が等しい。
 pub fn stype_eq(a: &SType, b: &SType) -> (r: bool)
     ensures
-        r ==> sty(*a) == sty(*b),
+        r == (sty(*a) == sty(*b)),
     decreases a,
 {
     match (a, b) {
@@ -1328,9 +1343,13 @@ fn stypes_eq(_parent: &SType, xs: &Vec<SType>, ys: &Vec<SType>) -> (r: bool)
     requires
         decreases_to!(*_parent => *xs),
     ensures
-        r ==> stys(xs@) == stys(ys@),
+        r == (stys(xs@) == stys(ys@)),
     decreases _parent, 0nat,
 {
+    proof {
+        lemma_stys(xs@);
+        lemma_stys(ys@);
+    }
     if xs.len() != ys.len() {
         return false;
     }
@@ -1347,6 +1366,11 @@ fn stypes_eq(_parent: &SType, xs: &Vec<SType>, ys: &Vec<SType>) -> (r: bool)
             vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
         }
         if !stype_eq(&xs[i], &ys[i]) {
+            proof {
+                lemma_stys(xs@);
+                lemma_stys(ys@);
+                assert(stys(xs@)[i as int] != stys(ys@)[i as int]);
+            }
             return false;
         }
         i += 1;
@@ -1360,7 +1384,7 @@ fn stypes_eq(_parent: &SType, xs: &Vec<SType>, ys: &Vec<SType>) -> (r: bool)
 /// 2つの式の型が等しいかを判定する。真なら仕様の型が等しい。
 pub fn xtype_eq(a: &XType, b: &XType) -> (r: bool)
     ensures
-        r ==> xty(*a) == xty(*b),
+        r == (xty(*a) == xty(*b)),
     decreases a,
 {
     match (a, b) {
@@ -1391,9 +1415,13 @@ fn xtypes_eq(_parent: &XType, xs: &Vec<XType>, ys: &Vec<XType>) -> (r: bool)
     requires
         decreases_to!(*_parent => *xs),
     ensures
-        r ==> xtys(xs@) == xtys(ys@),
+        r == (xtys(xs@) == xtys(ys@)),
     decreases _parent, 0nat,
 {
+    proof {
+        lemma_xtys(xs@);
+        lemma_xtys(ys@);
+    }
     if xs.len() != ys.len() {
         return false;
     }
@@ -1410,6 +1438,11 @@ fn xtypes_eq(_parent: &XType, xs: &Vec<XType>, ys: &Vec<XType>) -> (r: bool)
             vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
         }
         if !xtype_eq(&xs[i], &ys[i]) {
+            proof {
+                lemma_xtys(xs@);
+                lemma_xtys(ys@);
+                assert(xtys(xs@)[i as int] != xtys(ys@)[i as int]);
+            }
             return false;
         }
         i += 1;
@@ -1540,7 +1573,7 @@ fn keys_product_exec(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: 
 /// 名前の番号に重複がないかを判定する。真なら重複がない。
 pub fn distinct_names(names: &Vec<usize>) -> (r: bool)
     ensures
-        r ==> names@.no_duplicates(),
+        r == names@.no_duplicates(),
 {
     let mut i = 0;
     while i < names.len()
@@ -1559,6 +1592,11 @@ pub fn distinct_names(names: &Vec<usize>) -> (r: bool)
             decreases i - j,
         {
             if names[j] == names[i] {
+                proof {
+                    assert(!names@.no_duplicates()) by {
+                        assert(names@[j as int] == names@[i as int] && j != i);
+                    }
+                }
                 return false;
             }
             j += 1;
@@ -1571,7 +1609,7 @@ pub fn distinct_names(names: &Vec<usize>) -> (r: bool)
 /// 格納の型が整形式かを判定する。真なら整形式である。
 pub fn wf_stype_exec(t: &SType, enums: &Vec<i64>) -> (r: bool)
     ensures
-        r ==> wf_stype(sty(*t), enums@),
+        r == wf_stype(sty(*t), enums@),
     decreases t,
 {
     match t {
@@ -1581,12 +1619,14 @@ pub fn wf_stype_exec(t: &SType, enums: &Vec<i64>) -> (r: bool)
         SType::Tuple(ts) => {
             proof {
                 assert(decreases_to!(*t => *ts));
+                lemma_stys(ts@);
             }
             ts.len() >= 1 && wf_stypes_exec(t, ts, enums)
         },
         SType::Record(names, ts) => {
             proof {
                 assert(decreases_to!(*t => *ts));
+                lemma_stys(ts@);
             }
             ts.len() >= 1 && names.len() == ts.len() && distinct_names(names) && wf_stypes_exec(t, ts, enums)
         },
@@ -1601,9 +1641,13 @@ fn wf_stypes_exec(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: boo
     requires
         decreases_to!(*_parent => *ts),
     ensures
-        r ==> wf_stypes(stys(ts@), enums@) && stys(ts@).len() == ts.len(),
+        r == wf_stypes(stys(ts@), enums@),
+        stys(ts@).len() == ts.len(),
     decreases _parent, 0nat,
 {
+    proof {
+        lemma_stys(ts@);
+    }
     let mut i = 0;
     while i < ts.len()
         invariant
@@ -1616,6 +1660,12 @@ fn wf_stypes_exec(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: boo
             vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
         }
         if !wf_stype_exec(&ts[i], enums) {
+            proof {
+                lemma_stys(ts@);
+                if wf_stypes(stys(ts@), enums@) {
+                    lemma_wf_stypes_at(stys(ts@), enums@, i as int);
+                }
+            }
             return false;
         }
         i += 1;

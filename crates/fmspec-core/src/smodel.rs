@@ -19,6 +19,8 @@ use crate::encoding::lemma_enc_len;
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, member, members, sty, stys, wf_stype, wf_stypes, width, width_sum};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{lemma_width_pos, to_xty};
 use crate::encoding::{STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::equality::smalls;
@@ -26,6 +28,8 @@ use crate::eval::ErrKind;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, code_of, decode, eval_l, eval_spec, lookup, prop_spec, Env};
 use crate::expr_copy::copy_expr;
+#[cfg(verus_keep_ghost)]
+use crate::limits::lim_s;
 use crate::lowering::{lower_prop, lower_stored, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::RawModel;
@@ -33,17 +37,21 @@ use crate::model::RawModel;
 use crate::model::Value;
 use crate::model::{Action, Expr, Output, Type, Update};
 #[cfg(verus_keep_ghost)]
+use crate::model_total::{sa_typed, styped};
+#[cfg(verus_keep_ghost)]
 use crate::preserve::{clean, layout_ok, layouts_ok, lemma_members, pure_below, slot_vals, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{env_rel, prop_result};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::Conditions;
-use crate::slots::stype_width;
+use crate::slots::{stype_width, Fail};
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, src_bool, SEnv};
 #[cfg(verus_keep_ghost)]
 use crate::step::{act_env, apply_updates, encode_spec, in_type, output_spec, step_spec, vals_ok, Step};
+#[cfg(verus_keep_ghost)]
+use crate::total::{cx_wf, layout_tys, layout_wf, sctx};
 use vstd::prelude::*;
 
 verus! {
@@ -712,6 +720,7 @@ pub proof fn lemma_canon_rel(la: Seq<Layout>, env: Env, ts: Seq<STy>, enums: Seq
 fn arg_exprs(l: &Layout, enums: &Vec<i64>) -> (r: Option<Vec<Expr>>)
     ensures
         r matches Some(xs) ==> xs@ == arg_slots(*l, enums@),
+        lim_s(sty(l.ty), enums@) && l.offset + width(sty(l.ty), enums@) <= usize::MAX ==> r is Some,
 {
     let w = stype_width(&l.ty, enums)?;
     let _ = l.offset.checked_add(w)?;
@@ -745,7 +754,9 @@ fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Expr, enums: &
         smalls(ts),
     ensures
         r matches Ok(g) ==> fold_ok(g, body, la@, 0, slot_tys_seq(ts, enums@), enums@),
+        (forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums@)) ==> r is Ok,
 {
+    let ghost lims = forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums@);
     let ghost doms = slot_tys_seq(ts, enums@);
     let ghost b = body;
     let mut g = body;
@@ -758,9 +769,17 @@ fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Expr, enums: &
             wf_stypes(ts, enums@),
             smalls(ts),
             fold_ok(g, b, la@, k as int, doms, enums@),
+            lims == forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums@),
         decreases k,
     {
         k -= 1;
+        proof {
+            if lims {
+                crate::model_total::lemma_layout_end(la@, ts, enums@, k as int);
+                assert(layout_at(la@[k as int], ts, k as int, enums@));
+                assert(lim_s(ts[k as int], enums@));
+            }
+        }
         let slots = match arg_exprs(&la[k], enums) {
             Some(s) => s,
             None => return Err(k),
@@ -1276,6 +1295,8 @@ pub enum Fault {
     Lower,
     /// 式の評価に失敗した。範囲外の値は `OutOfRange` である。
     Eval(ErrKind),
+    /// 局所変数の束縛の深さが上限に達した（式が大きすぎる）。
+    Depth,
 }
 
 /// 下ろしの失敗の場所。
@@ -1306,6 +1327,28 @@ pub enum LowerError {
     Contract(usize),
     /// 終端条件。
     Terminal,
+    /// モデルの式が型を持たないか、大きさの条件を満たさない（[`crate::model_total::model_typed`] が偽）。
+    Type,
+    /// 局所変数の束縛の深さが上限に達した（式が大きすぎる）。
+    Depth,
+}
+
+/// 型の誤り。`fmspec-ir` の型検査を通ったモデルでは起きない。
+pub open spec fn type_err(e: LowerError) -> bool {
+    e is Type || e is State || e is Args
+}
+
+/// 利用者の誤り（値の評価の失敗、初期状態の数、式の大きさ）。これ以外は内部の誤りである。
+pub open spec fn user_err(e: LowerError) -> bool {
+    match e {
+        LowerError::Const(_, f) => !(f is Lower),
+        LowerError::Init(_, _, f) => !(f is Lower),
+        LowerError::Constraint(f) => !(f is Lower),
+        LowerError::InitCount => true,
+        LowerError::NoInit => true,
+        LowerError::Depth => true,
+        _ => false,
+    }
 }
 
 /// 中核のguard `g` は、引数が正規形でなければ偽で、正規形なら値の上のguardと同じ真偽になる。
@@ -1332,6 +1375,7 @@ pub open spec fn act_ok(sa: SAction, cx: LowerCtx, m: Action) -> bool {
 /// 位置 `off` からのスロットへの更新を、`ups` の後ろに加える。
 fn push_block(ups: &mut Vec<Update>, off: usize, out: &Vec<Expr>) -> (r: bool)
     ensures
+        off + out@.len() <= usize::MAX ==> r,
         r ==> final(ups)@.len() == old(ups)@.len() + out@.len(),
         r ==> final(ups)@.subrange(0, old(ups)@.len() as int) == old(ups)@,
         r ==> forall|k: int|
@@ -1364,7 +1408,34 @@ fn push_block(ups: &mut Vec<Update>, off: usize, out: &Vec<Expr>) -> (r: bool)
     true
 }
 
+/// 型の付く操作の代入 `u` の代入先は状態変数で、式は代入先の型を持つ。
+proof fn lemma_upd_pre(sa: SAction, cx: LowerCtx, u: int)
+    requires
+        cx_wf(cx),
+        sa_typed(sa, sctx(cx)),
+        cx.states is Some,
+        0 <= u < sa.updates@.len(),
+    ensures
+        ({
+            let st = cx.states->Some_0@;
+            let su = sa.updates@[u];
+            &&& su.var < st.len()
+            &&& styped(su.expr, sctx(cx), to_xty(sty(st[su.var as int].ty)))
+            &&& crate::total::ok_s(sty(st[su.var as int].ty), cx.enums@)
+            &&& width(sty(st[su.var as int].ty), cx.enums@) >= 1
+            &&& st[su.var as int].offset + width(sty(st[su.var as int].ty), cx.enums@) <= usize::MAX
+        }),
+{
+    let st = cx.states->Some_0@;
+    let su = sa.updates@[u];
+    assert(layout_tys(st).len() == st.len());
+    assert(layout_tys(st)[su.var as int] == sty(st[su.var as int].ty));
+    assert(layout_wf(st[su.var as int], cx.enums@));
+    lemma_width_pos(sty(st[su.var as int].ty), cx.enums@);
+}
+
 /// 操作を下ろす。guardの前に引数の正規形の判定を置き、代入は値のスロットごとの更新にする。
+#[verifier::spinoff_prover]
 pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<Action, LowerError>)
     requires
         cx.states is Some,
@@ -1375,13 +1446,23 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
         smalls(stys(sa.args@)),
     ensures
         r matches Ok(m) ==> act_ok(*sa, *cx, m),
+        cx_wf(*cx) && sa_typed(*sa, sctx(*cx)) ==> (r matches Err(e) ==> e == LowerError::Depth),
 {
     let ghost enums = cx.enums@;
     let ghost doms = slot_tys_seq(stys(sa.args@), enums);
+    let ghost pre = cx_wf(*cx) && sa_typed(*sa, sctx(*cx));
     let body = match lower_prop(&sa.guard, cx) {
-        Some(g) => g,
-        None => return Err(LowerError::Guard(a)),
+        Ok(g) => g,
+        Err(Fail::Depth) => return Err(LowerError::Depth),
+        Err(Fail::Type) => return Err(LowerError::Guard(a)),
     };
+    proof {
+        if pre {
+            assert forall|i: int| 0 <= i < stys(sa.args@).len() implies lim_s(#[trigger] stys(sa.args@)[i], enums) by {
+                assert(crate::total::ok_s(stys(sa.args@)[i], enums));
+            }
+        }
+    }
     let ghost b = body;
     let guard = match guard_fold(Ghost(stys(sa.args@)), &cx.args, body, &cx.enums) {
         Ok(g) => g,
@@ -1402,6 +1483,7 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
         Some(st) => st,
         None => return Err(LowerError::Update(a, 0)),
     };
+    let ghost c = sctx(*cx);
     let mut ups: Vec<Update> = Vec::new();
     let ghost mut bs: Seq<Seq<Update>> = Seq::empty();
     let mut u = 0;
@@ -1412,16 +1494,24 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
             bs.len() == u,
             ups@ == flat_ups(bs),
             forall|k: int| 0 <= k < u ==> #[trigger] block_ok(sa.updates@[k], *cx, bs[k]),
+            pre == (cx_wf(*cx) && sa_typed(*sa, sctx(*cx))),
+            c == sctx(*cx),
         decreases sa.updates@.len() - u,
     {
         let su = &sa.updates[u];
+        proof {
+            if pre {
+                lemma_upd_pre(*sa, *cx, u as int);
+            }
+        }
         if su.var >= st.len() {
             return Err(LowerError::Update(a, u));
         }
         let l = &st[su.var];
         let out = match lower_stored(&su.expr, cx, &l.ty, 0) {
-            Some(o) => o,
-            None => return Err(LowerError::Update(a, u)),
+            Ok(o) => o,
+            Err(Fail::Depth) => return Err(LowerError::Depth),
+            Err(Fail::Type) => return Err(LowerError::Update(a, u)),
         };
         if out.len() == 0 {
             return Err(LowerError::Update(a, u));
@@ -1462,8 +1552,9 @@ pub(crate) fn lower_action(sa: &SAction, cx: &LowerCtx, a: usize) -> (r: Result<
                 _ => return Err(LowerError::Output(a)),
             };
             let mut out = match lower_stored(&so.expr, cx, &so.ty, 0) {
-                Some(o) => o,
-                None => return Err(LowerError::Output(a)),
+                Ok(o) => o,
+                Err(Fail::Depth) => return Err(LowerError::Depth),
+                Err(Fail::Type) => return Err(LowerError::Output(a)),
             };
             if out.len() != 1 {
                 return Err(LowerError::Output(a));
