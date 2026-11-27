@@ -617,6 +617,7 @@ CLIでは `fmspec refine 文書.json [--max-states N] [--max-depth N] [--max-tim
 | `search` | 探索器の報告。`complete`、`visited_states`、`transitions`、`time_ms`。検査済みの値ではない |
 | `gate` | 判定ゲートが証拠の検査にかけた時間 |
 | `certificate_states` | `verified` のとき、判定ゲートが受理した証明書の状態数 |
+| `certificate` | fmspec-api の `check` に `certificate` オプション（真偽値、省略時は偽）を真で渡し、`verified` になったとき、判定ゲートが受理した証明書（「証明書」の形式）。ほかの結果には付けない。対称性による削減を使う検査では、`certificate` は指定できない。CLI は証明書を `--certificate-out` のファイルにだけ書き、標準出力の結果には含めない |
 | `property`、`trace` | `violated`、`error` のとき、起きた事象と、判定ゲートが受理したトレース。`property` は `claim` と同じ形で、対象の定義のソース位置 `source`（なければ `null`）を加える |
 | `reason` | `inconclusive` のとき、`max_states`、`max_depth`、`max_time_ms`、`max_check_cost`、`interrupted` のいずれか |
 | `rejected` | 探索器が生成した証拠を判定ゲートが拒否した `internal_error` のとき、拒否した理由 |
