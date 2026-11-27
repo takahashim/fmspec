@@ -106,13 +106,33 @@ impl Session {
         Value::Object(map)
     }
 
+    /// モデル自身の誤り（`model_error`、`model_violation`）の応答。主張と、それが起きた状態を示す。
+    fn property_at(&self, status: &str, claim: &Claim, state: &[i64]) -> Value {
+        json!({
+            "status": status,
+            "property": claim_to_json(&self.model, claim),
+            "state": state_to_json(&self.model, state),
+        })
+    }
+
     fn model_error(&self, e: &ModelError) -> Value {
         let claim = Claim::StepError(e.action, e.args.clone(), e.site, e.kind);
+        self.property_at("model_error", &claim, &e.state)
+    }
+
+    /// 照合が続くことの応答。
+    fn continued(&self) -> Value {
         json!({
-            "status": "model_error",
-            "property": claim_to_json(&self.model, &claim),
-            "state": state_to_json(&self.model, &e.state),
+            "status": "continue",
+            "candidates": self.inner.candidates(),
+            "matched": self.inner.matched(),
+            "covered": self.covered(),
         })
+    }
+
+    /// 候補数が上限を超えたことの応答。
+    fn too_many_candidates(&self) -> Value {
+        json!({"status": "inconclusive", "reason": "max_candidates", "matched": self.inner.matched()})
     }
 
     /// 入力（`{"action", "args", "choices"}`）を読む。`choices` は注入する選択の値である。
@@ -204,14 +224,8 @@ impl Session {
         let seen = self.observation(observation)?;
         self.started = true;
         let possible: Vec<PossibleOutcome> = match self.inner.start(self.model.shared(), &seen) {
-            Observed::Continue => {
-                return Ok(
-                    json!({"status": "continue", "candidates": self.inner.candidates(), "matched": 0, "covered": self.covered()}),
-                );
-            }
-            Observed::TooManyCandidates => {
-                return Ok(json!({"status": "inconclusive", "reason": "max_candidates", "matched": 0}));
-            }
+            Observed::Continue => return Ok(self.continued()),
+            Observed::TooManyCandidates => return Ok(self.too_many_candidates()),
             Observed::Failure { possible } => possible,
             _ => return Err("初期観測の照合で想定しない結果になりました".to_string()),
         };
@@ -281,9 +295,7 @@ impl Session {
         let step = self.inner.matched() + 1;
         let before = self.inner.candidates();
         Ok(match self.inner.observe(action, &params, output, &seen) {
-            Observed::Continue => {
-                json!({"status": "continue", "candidates": self.inner.candidates(), "matched": self.inner.matched(), "covered": self.covered()})
-            }
+            Observed::Continue => self.continued(),
             Observed::Failure { possible } => {
                 let mut expected: Vec<Value> = Vec::new();
                 for p in &possible {
@@ -309,9 +321,7 @@ impl Session {
                 body
             }
             Observed::InvalidInput => json!({"status": "invalid_input"}),
-            Observed::TooManyCandidates => {
-                json!({"status": "inconclusive", "reason": "max_candidates", "matched": self.inner.matched()})
-            }
+            Observed::TooManyCandidates => self.too_many_candidates(),
             Observed::ModelError(e) => self.model_error(&e),
             Observed::ModelViolation {
                 invariant,
@@ -323,11 +333,7 @@ impl Session {
                 } else {
                     Claim::Contract(index)
                 };
-                json!({
-                    "status": "model_violation",
-                    "property": claim_to_json(&self.model, &claim),
-                    "state": state_to_json(&self.model, &state),
-                })
+                self.property_at("model_violation", &claim, &state)
             }
         })
     }
