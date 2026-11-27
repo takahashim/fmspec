@@ -411,8 +411,8 @@ fn simulations_follow_the_seed_like_an_independent_sampler() {
             "seed {seed}"
         );
         match (&expected, &result.evidence) {
-            (None, None) => {}
-            (Some((start, taken, claim)), Some(Evidence::Trace(s, steps, c))) => {
+            (None, Ok(None)) => {}
+            (Some((start, taken, claim)), Ok(Some(Evidence::Trace(s, steps, c)))) => {
                 assert_eq!((s, c), (&vec![*start], claim), "seed {seed}");
                 assert_eq!(
                     steps.iter().map(|st| st.action).collect::<Vec<_>>(),
@@ -460,7 +460,7 @@ fn an_interrupt_request_stops_a_simulation_without_steps() {
     let result = simulate(&m, &conditions(&m, false), &opts);
     assert!(matches!(
         result.evidence,
-        Some(Evidence::Unavailable(Limit::Interrupted))
+        Ok(Some(Evidence::Unavailable(Limit::Interrupted)))
     ));
     assert_eq!(result.stats.traces, 0);
 }
@@ -501,7 +501,7 @@ fn shrunk_traces_keep_the_claim_and_no_single_step_can_be_removed() {
             max_steps: 30,
             interrupt: None,
         };
-        let Some(Evidence::Trace(start, steps, claim)) = simulate(&m, &cond, &opts).evidence else {
+        let Ok(Some(Evidence::Trace(start, steps, claim))) = simulate(&m, &cond, &opts).evidence else {
             continue;
         };
         // 試す候補がなければ、元のトレースを返す。

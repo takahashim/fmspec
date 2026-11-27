@@ -4,6 +4,7 @@
 //! トレースで見つかり、同じ長さのトレースのうちでは、この列挙順で最初に見つかるものを返す。
 
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
+use crate::inconsistency::{successors, Inconsistency};
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
@@ -35,7 +36,8 @@ pub struct Stats {
 }
 
 pub struct SearchResult {
-    pub evidence: Evidence,
+    /// 生成した証拠。探索器の内部の不整合を見つけたら、証拠の代わりに不整合（`Err`）。
+    pub evidence: Result<Evidence, Inconsistency>,
     pub stats: Stats,
 }
 
@@ -108,13 +110,24 @@ fn path(nodes: &[Node], mut id: usize) -> (Vec<i64>, Vec<TraceStep>) {
 
 /// 幅優先探索で証拠を生成する。
 pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> SearchResult {
+    search(model, cond, opts, |a, s| successors(model, a, s))
+}
+
+/// `bfs` の本体。遷移の列挙 `successors` を引数に取るのは、列挙の不整合を探索が返すことをテストするためである。
+fn search<F>(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions, successors: F) -> SearchResult
+where
+    F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
+{
     let n_actions = model.raw().actions.len();
     let mut stats = Stats::default();
     let mut nodes: Vec<Node> = Vec::new();
     let mut visited = Visited::default();
     let mut queue: VecDeque<usize> = VecDeque::new();
 
-    let finish = |evidence: Evidence, stats: Stats| SearchResult { evidence, stats };
+    let finish = |evidence: Evidence, stats: Stats| SearchResult {
+        evidence: Ok(evidence),
+        stats,
+    };
     let full = |visited: &Visited| opts.max_states.is_some_and(|max| visited.len() >= max);
 
     // 初期状態は、与えられた順に探索の起点にする。
@@ -148,13 +161,19 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
             if !selected(&cond.actions, a) {
                 continue;
             }
-            let transitions = match model.successors(a, &state) {
-                // 訪問済みの状態は型に従い、操作の添字は範囲内なので、ここには来ない。
-                None => return finish(Evidence::Unavailable(Limit::Interrupted), stats),
-                Some(Enumerated::Fail(args, site, kind)) => {
+            let transitions = match successors(a, &state) {
+                // 訪問済みの状態は型に従い、操作の添字は範囲内なので、ここには来ないはずである。
+                // 来たら中断とは報告せず、不整合として返す。
+                Err(inconsistency) => {
+                    return SearchResult {
+                        evidence: Err(inconsistency),
+                        stats,
+                    }
+                }
+                Ok(Enumerated::Fail(args, site, kind)) => {
                     return finish(trace(&nodes, cur, Claim::StepError(a, args, site, kind)), stats);
                 }
-                Some(Enumerated::Ok(ts)) => ts,
+                Ok(Enumerated::Ok(ts)) => ts,
             };
             for t in transitions {
                 enabled = true;
@@ -212,4 +231,49 @@ pub fn bfs(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions) -> Search
         }),
         stats,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{bfs, search, BfsOptions};
+    use crate::inconsistency::tests::counter;
+    use crate::inconsistency::{successors, Inconsistency};
+    use fmspec_core::evidence::Evidence;
+    use fmspec_ir::default_conditions;
+
+    #[test]
+    fn an_inconsistent_enumeration_is_returned_instead_of_evidence() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        // 状態 x = 2 で、列挙が状態を受け付けなかったものとする。
+        let found = search(m.checked(), &cond, &BfsOptions::default(), |a, s| {
+            if s == &vec![2] {
+                Err(Inconsistency::Successors {
+                    action: a,
+                    state: s.clone(),
+                })
+            } else {
+                successors(m.checked(), a, s)
+            }
+        });
+        assert_eq!(
+            found.evidence.err(),
+            Some(Inconsistency::Successors {
+                action: 0,
+                state: vec![2]
+            })
+        );
+        assert!(!found.stats.complete);
+        assert_eq!(found.stats.visited_states, 3);
+    }
+
+    #[test]
+    fn a_consistent_search_returns_evidence() {
+        let m = counter();
+        let found = bfs(m.checked(), &default_conditions(&m, false), &BfsOptions::default());
+        assert!(matches!(found.evidence, Ok(Evidence::Certificate(_))));
+        assert!(found.stats.complete);
+    }
 }

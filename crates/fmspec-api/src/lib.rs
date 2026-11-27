@@ -73,7 +73,7 @@ pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value,
     let outcome = search_check(model.checked(), &cond, &opts);
     let mut body = report::check_report(model, &cond, &outcome);
     if let (true, Evidence::Certificate(cert), Status::Verified) =
-        (flag(map, "certificate")?, &outcome.evidence, outcome.status)
+        (flag(map, "certificate")?, &outcome.evidence, &outcome.status)
     {
         body["certificate"] = certificate_to_json(model, cert);
     }

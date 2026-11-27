@@ -12,7 +12,7 @@ use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Site;
 use fmspec_core::typing::InvalidModel;
 use fmspec_ir::{parse, Model};
-use fmspec_search::{check_evidence, Outcome, Stats, Status};
+use fmspec_search::{check_evidence, Internal, Outcome, Stats, Status};
 use serde_json::{json, Value};
 
 fn accepted_again(m: &Model, o: &Outcome, deadlock: bool) -> VerdictKind {
@@ -332,7 +332,7 @@ fn a_silently_truncated_search_is_an_internal_error() {
     assert_eq!(certificate_states(&o), vec![vec![0], vec![1], vec![2]]);
     assert!(matches!(
         o.status,
-        Status::InternalError(Reject::MissingSuccessor(_, _))
+        Status::InternalError(Internal::Rejected(Reject::MissingSuccessor(_, _)))
     ));
     assert_eq!(o.verdict.kind(), VerdictKind::Rejected);
 }
@@ -354,7 +354,10 @@ fn a_fabricated_counterexample_is_an_internal_error() {
         Evidence::Trace(vec![0], steps, Claim::Invariant(0)),
         Stats::default(),
     );
-    assert_eq!(o.status, Status::InternalError(Reject::StepMismatch(0)));
+    assert_eq!(
+        o.status,
+        Status::InternalError(Internal::Rejected(Reject::StepMismatch(0)))
+    );
 }
 
 #[test]
@@ -382,7 +385,10 @@ fn a_false_deadlock_report_is_an_internal_error() {
         Evidence::Trace(vec![0], steps, Claim::Deadlock),
         Stats::default(),
     );
-    assert_eq!(o.status, Status::InternalError(Reject::ClaimNotReproduced));
+    assert_eq!(
+        o.status,
+        Status::InternalError(Internal::Rejected(Reject::ClaimNotReproduced))
+    );
 }
 
 #[test]
