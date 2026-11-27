@@ -59,5 +59,6 @@ pub mod slots;
 pub mod smodel;
 pub mod source;
 pub mod step;
+pub mod total;
 pub mod trace;
 pub mod typing;

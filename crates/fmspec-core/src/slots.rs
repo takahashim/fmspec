@@ -590,7 +590,10 @@ pub fn wrap(binds: &Vec<Expr>, e: Expr) -> (r: Expr)
 
 // ---- 型の大きさ ----
 
-pub fn is_scalar(t: &XType) -> (r: bool) {
+pub fn is_scalar(t: &XType) -> (r: bool)
+    ensures
+        r == (xty(*t) is Bool || xty(*t) is Int || xty(*t) is Enum),
+{
     match t {
         XType::Bool | XType::Int | XType::Enum(_) => true,
         _ => false,
