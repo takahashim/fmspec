@@ -50,6 +50,10 @@ impl Files {
         serde_json::from_str(&text).unwrap()
     }
 
+    fn has(&self, path: &str) -> bool {
+        self.0.borrow().contains_key(path)
+    }
+
     fn put(&self, path: &str, body: &Value) {
         self.0.borrow_mut().insert(path.to_string(), body.to_string());
     }
@@ -78,13 +82,14 @@ fn validate() {
     let f = files();
     let (code, body) = f.json(&["validate", "tickets.json"]);
     assert_eq!((code, &body["status"]), (0, &json!("valid")));
-    for bad in ["broken.json", "untyped.json", "missing.json"] {
+    for (bad, status) in [
+        ("broken.json", "invalid_model"),
+        ("untyped.json", "invalid_model"),
+        ("missing.json", "input_error"),
+    ] {
         let (code, body) = f.json(&["validate", bad]);
-        assert_eq!(code, 2, "{bad}");
-        assert!(
-            ["invalid_model", "input_error"].contains(&body["status"].as_str().unwrap()),
-            "{body}"
-        );
+        assert_eq!((code, &body["status"]), (2, &json!(status)), "{bad}");
+        assert!(body["message"].as_str().unwrap().starts_with(bad), "{body}");
     }
     let (code, out, err) = f.run(&["validate", "untyped.json"]);
     assert_eq!((code, out.as_str()), (2, ""));
@@ -213,8 +218,14 @@ Violated: tickets / 不変条件 capacity_respected の違反
 #[test]
 fn usage_errors() {
     let f = files();
-    assert_eq!(f.run(&[]).0, 2);
-    assert_eq!(f.run(&["--help"]).0, 0);
+    let (code, out, err) = f.run(&[]);
+    assert_eq!((code, out.as_str()), (2, ""));
+    assert!(err.starts_with("使い方:"), "{err}");
+    let (code, out, _) = f.run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("使い方:"), "{out}");
+    let (code, out, _) = f.run(&["--version"]);
+    assert_eq!((code, out), (0, format!("fmspec {}\n", env!("CARGO_PKG_VERSION"))));
     for args in [
         vec!["frobnicate"],
         vec!["check"],
@@ -312,4 +323,129 @@ fn shrink_shortens_a_trace_and_keeps_the_violation() {
     f.put("forged.json", &forged);
     let (code, body) = f.json(&["shrink", "noguard.json", "forged.json"]);
     assert_eq!((code, &body["status"]), (1, &json!("rejected")));
+}
+
+#[test]
+fn commands_reject_options_they_do_not_use() {
+    let f = files();
+    for (args, flag) in [
+        (vec!["validate", "tickets.json", "--deadlock"], "--deadlock"),
+        (vec!["check", "tickets.json", "--seed", "1"], "--seed"),
+        (
+            vec!["simulate", "tickets.json", "--certificate-out", "out.json"],
+            "--certificate-out",
+        ),
+        (
+            vec![
+                "verify-certificate",
+                "tickets.json",
+                "c.json",
+                "--trace-out",
+                "out.json",
+            ],
+            "--trace-out",
+        ),
+        (
+            vec!["replay", "tickets.json", "t.json", "--actions", "purchase"],
+            "--actions",
+        ),
+        (
+            vec!["shrink", "tickets.json", "t.json", "--invariants", "capacity_respected"],
+            "--invariants",
+        ),
+    ] {
+        let (code, body) = f.json(&args);
+        assert_eq!((code, &body["status"]), (2, &json!("usage_error")), "{args:?}");
+        assert_eq!(
+            body["message"],
+            json!(format!("{} は {flag} を受け付けません", args[0])),
+            "{args:?}"
+        );
+    }
+    // 拒否したコマンドは実行しないので、何も書き出さない。
+    assert!(!f.has("out.json"));
+}
+
+#[test]
+fn usage_errors_go_to_stderr_without_json() {
+    let f = files();
+    for (args, message) in [
+        (
+            vec!["check", "tickets.json", "--trace-out"],
+            "--trace-out には値が必要です",
+        ),
+        (
+            vec!["check", "tickets.json", "--max-states", "-1"],
+            "--max-states は0以上の整数です（\"-1\"）",
+        ),
+        (
+            vec!["simulate", "tickets.json", "--seed", "x"],
+            "--seed は0以上の整数です（\"x\"）",
+        ),
+        (vec!["check", "tickets.json", "--bogus"], "未知のオプション --bogus"),
+    ] {
+        let (code, out, err) = f.run(&args);
+        assert_eq!((code, out.as_str()), (2, ""), "{args:?}");
+        assert_eq!(err, format!("usage_error: {message}\n"), "{args:?}");
+    }
+}
+
+#[test]
+fn only_accepted_evidence_is_written() {
+    let f = files();
+    // 証明書はファイルにだけ書き、標準出力の結果には含めない。
+    let (code, body) = f.json(&[
+        "check",
+        "tickets.json",
+        "--certificate-out",
+        "cert.json",
+        "--trace-out",
+        "t0.json",
+    ]);
+    assert_eq!(code, 0);
+    assert!(body.get("certificate").is_none(), "{body}");
+    assert!(f.has("cert.json"));
+    // 検証できたときは、書き出すトレースがない。
+    assert!(!f.has("t0.json"));
+    // 違反や探索未完了では、証明書を書き出さない。
+    let (code, _) = f.json(&["check", "noguard.json", "--certificate-out", "c1.json"]);
+    assert_eq!(code, 1);
+    let (code, _) = f.json(&[
+        "check",
+        "tickets.json",
+        "--max-states",
+        "2",
+        "--certificate-out",
+        "c3.json",
+    ]);
+    assert_eq!(code, 3);
+    assert!(!f.has("c1.json") && !f.has("c3.json"));
+    // 違反なしのシミュレーションは、トレースを書き出さない。
+    let (code, _) = f.json(&["simulate", "tickets.json", "--traces", "3", "--trace-out", "t1.json"]);
+    assert_eq!(code, 0);
+    assert!(!f.has("t1.json"));
+    // 判定ゲートが拒否したトレースは、縮小の結果として書き出さない。
+    f.json(&["check", "noguard.json", "--trace-out", "trace.json"]);
+    let mut forged = f.get("trace.json");
+    forged["steps"][0]["state"]["sold"] = json!(3);
+    f.put("forged.json", &forged);
+    let (code, _) = f.json(&["shrink", "noguard.json", "forged.json", "--trace-out", "t2.json"]);
+    assert_eq!(code, 1);
+    assert!(!f.has("t2.json"));
+}
+
+#[test]
+fn a_failed_write_is_an_error() {
+    let args: Vec<String> = ["check", "noguard.json", "--json", "--trace-out", "out.json"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let model = tickets_without_guard().to_string();
+    let read = |_: &str| Ok(model.clone());
+    let write = |_: &str, _: &str| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    let run = fmspec_cli::run(&args, &read, &write);
+    // 違反を見つけても、書き出せなければ終了コード2にする。
+    assert_eq!(run.code, 2);
+    let body: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert!(body["message"].as_str().unwrap().starts_with("out.json: "), "{body}");
 }
