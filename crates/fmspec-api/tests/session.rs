@@ -199,3 +199,35 @@ fn malformed_requests_are_errors_with_a_message() {
         .unwrap();
     assert_eq!(answer, json!({"status": "invalid_input"}));
 }
+
+/// Setの要素の重複は、値のJSONとして不正である。観測値なら、どの値とも一致しない値として不適合にし、
+/// 引数なら、要求の誤りにする。
+#[test]
+fn duplicate_set_elements_are_unrepresentable_observations_and_malformed_arguments() {
+    let bit = json!({"int": {"min": 0, "max": 1}});
+    let ir = json!({
+        "ir_version": 1,
+        "name": "bits",
+        "states": [{"name": "s", "type": {"set": bit}, "initial": {"set": {"of": bit, "items": []}}}],
+        "actions": [{"name": "replace", "params": [{"name": "x", "type": {"set": bit}}],
+                     "updates": [{"target": 0, "expr": {"param": 0}}]}]
+    });
+    let model = Arc::new(load(&ir.to_string()).unwrap());
+    let mut session = Session::new(model.clone(), &json!({})).unwrap();
+    let answer = session.start(&json!({"s": [0, 0]})).unwrap();
+    assert_eq!(answer["status"], "conformance_failure", "{answer}");
+
+    let mut session = Session::new(model, &json!({})).unwrap();
+    assert_eq!(session.start(&json!({"s": []})).unwrap()["status"], "continue");
+    assert_eq!(
+        session
+            .observe(&json!({"action": "replace", "args": {"x": [1, 1]}, "observation": {"s": [1]}}))
+            .unwrap_err(),
+        "引数 \"x\": 要素 1 が重複しています"
+    );
+    let answer = session
+        .observe(&json!({"action": "replace", "args": {"x": [1]}, "observation": {"s": [1, 1]}}))
+        .unwrap();
+    assert_eq!(answer["status"], "conformance_failure", "{answer}");
+    assert_eq!(answer["mismatch"], json!(["s"]), "{answer}");
+}

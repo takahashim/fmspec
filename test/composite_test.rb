@@ -276,4 +276,25 @@ class CompositeTest < Minitest::Test
     assert_equal [[:add, { x: :milk }]], result.inputs
     assert_match(/expected items: \["milk"\]\n  observed items: #{Regexp.escape(Set.new.inspect)}/, result.to_s)
   end
+
+  # set_of の観測値の Array は集合として扱う。重複は除いてエンジンに渡すので、重複があっても適合する。
+  def test_set_observations_given_as_arrays_with_duplicates_conform
+    model = cart_model
+    added = model.bind do
+      setup { [] }
+      command(:add) { |log, x:| log << x }
+      observe(:items) { |log| log.dup }
+      observe(:history) { |log| log.last(2) }
+    end
+    result = model.test(added, cases: 20, steps: 6, seed: 1)
+    assert_equal :passed, result.status, result.to_s
+  end
+
+  def test_set_wire_values_have_no_duplicates
+    type = Fmspec::Types::SetOf.new(Fmspec::Types::Int.new(0, 3))
+    assert_equal [2, 0], type.to_wire([2, 0, 2, 2])
+    assert_equal [1], type.to_wire(Set[1])
+    assert_nil type.problem([2, 2])
+    assert_equal Set[2], type.from_wire(type.to_wire([2, 2]))
+  end
 end

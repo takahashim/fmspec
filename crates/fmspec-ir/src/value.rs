@@ -8,12 +8,13 @@
 //! | Tuple | 要素の配列 |
 //! | Record | フィールド名をキーとするオブジェクト |
 //! | Option | 空なら `null`、そうでなければ `{"some": 値}` |
-//! | Set | 要素の配列。正規順に並べる |
+//! | Set | 要素の配列。正規順に並べ、重複を含めない |
 //! | Map | `[キー, 値]` の配列。キーの正規順に並べる |
 //! | List | 要素の配列 |
 //!
 //! 読み込みは宣言した型に従って行う。整数の範囲は検査しない（判定ゲートが状態の型を検査する）。
 //! ただし、Setの要素とMapのキーは番号に変換するので、型に属さなければ誤りとする。
+//! 読み込みでは順序を問わないが、番号に変換して同じになるSetの要素やMapのキーが重複していれば誤りとする。
 
 use crate::model::{EnumNames, Model, Names};
 use crate::types::SType;
@@ -213,6 +214,9 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
             let mut bits = vec![0i64; n];
             for x in items {
                 let r = key_rank(enums, t, x)?;
+                if bits[r] != 0 {
+                    return Err(format!("要素 {x} が重複しています"));
+                }
                 bits[r] = 1;
             }
             out.extend(bits);
