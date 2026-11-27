@@ -235,7 +235,8 @@ const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 /// 縮小器の報告（試した候補の数と、打ち切ったか）を `shrink` に記録する。
 /// オプションは `attempts`（試す候補の数の上限。削除と引数の変更で共有する）と
 /// `allow_other_model`（`verify_certificate` と同じ）。
-pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
+/// 中断要求があれば縮小を打ち切り、それまでに判定ゲートが受理した候補を返す（`shrink.limit` は `interrupted`）。
+pub fn shrink(model: &Model, trace: &str, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
     let map = keys(opts, &["attempts", ALLOW_OTHER_MODEL])?;
     let attempts = count(map, "attempts", 1)?.unwrap_or(DEFAULT_SHRINK_ATTEMPTS);
     let (trace, other) = match read_trace(model, trace, flag(map, ALLOW_OTHER_MODEL)?) {
@@ -257,7 +258,11 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
         &trace.start,
         &trace.steps,
         &trace.claim,
-        &ShrinkOptions::attempts(size(attempts)),
+        &ShrinkOptions {
+            attempts: size(attempts),
+            interrupt,
+            deadline: None,
+        },
     );
     let shrunk = Evidence::Trace(trace.start.clone(), result.steps, trace.claim.clone());
     let verdict = decide(model.checked(), cond, &shrunk);

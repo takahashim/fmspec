@@ -49,6 +49,43 @@ class NativeTest < Minitest::Test
     assert_equal [:inconclusive, :max_check_cost], [result.status, result.reason]
   end
 
+  # x を d（0..3）だけ増やすモデルと、d = 1 のステップを3000個並べた違反のトレース。
+  # どのステップを除いても、どの引数を小さくしても違反しないので、縮小を終えるまでに数秒以上かかる。
+  def long_shrink
+    model = Fmspec.define(:adder) do
+      state :x, int(0..3003), initial: 0
+      action :add, d: 0..3 do |s, d|
+        guard s.x < 3000
+        update x: s.x + d
+      end
+      invariant(:bound) { |s| s.x < 3000 }
+    end
+    trace = model.check.trace.to_h.merge(
+      "steps" => (1..3000).map do |x|
+        { "action" => "add", "args" => { "d" => 1 }, "choices" => {}, "output" => { "unit" => true }, "state" => { "x" => x } }
+      end
+    )
+    [model, trace]
+  end
+
+  def test_a_shrink_can_be_interrupted_by_timeout
+    model, trace = long_shrink
+    assert_equal :violated, model.replay(trace).status
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(Timeout::Error) { Timeout.timeout(0.3) { model.shrink(trace) } }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    assert_operator elapsed, :<, 3.0, "中断に時間がかかりすぎている"
+  end
+
+  def test_a_shrink_can_be_interrupted_from_another_thread
+    model, trace = long_shrink
+    worker = Thread.new { model.shrink(trace) }
+    sleep 0.2
+    worker.kill
+    assert_nil worker.join(3)&.value
+    refute_predicate worker, :alive?
+  end
+
   def test_a_check_can_be_interrupted_from_another_thread
     worker = Thread.new { huge.check }
     sleep 0.2

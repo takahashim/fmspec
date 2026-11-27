@@ -89,7 +89,7 @@ fn each_kind_of_result_has_its_own_set_of_keys() {
     assert_eq!(keys(&again), with(&judged, &["certificate_states"]));
     let replayed = replay(&m, &violated["trace"].to_string());
     assert_eq!(keys(&replayed), with(&judged, &["property", "trace"]));
-    let shrunk = shrink(&m, &violated["trace"].to_string(), &json!({})).unwrap();
+    let shrunk = shrink(&m, &violated["trace"].to_string(), &json!({}), None).unwrap();
     assert_eq!(
         keys(&shrunk),
         with(&judged, &["original_steps", "property", "shrink", "trace"])
@@ -99,7 +99,7 @@ fn each_kind_of_result_has_its_own_set_of_keys() {
     for unreadable in [
         replay(&m, "{}"),
         verify_certificate(&m, "[]", &json!({}), None).unwrap(),
-        shrink(&m, "not json", &json!({})).unwrap(),
+        shrink(&m, "not json", &json!({}), None).unwrap(),
     ] {
         assert_eq!(keys(&unreadable), with(&identity, &["rejected"]), "{unreadable}");
         assert_eq!(unreadable["status"], "rejected");
@@ -126,7 +126,7 @@ fn results_read_as_text() {
                  \x20 1. pay(id: 0) 内部選択 ok: true 出力 success → charges: 1, open: true\n\
                  \x20 2. pay(id: 0) 内部選択 ok: true 出力 success → charges: 2, open: true\n\
                  \x20 （2 ステップ）\n";
-    let shrunk = shrink(&m, &violated["trace"].to_string(), &json!({})).unwrap();
+    let shrunk = shrink(&m, &violated["trace"].to_string(), &json!({}), None).unwrap();
     assert_eq!(
         human(&shrunk),
         format!("Violated: orders / 不変条件 single の違反\n{trace}  縮小前は 2 ステップ\n")
@@ -226,11 +226,11 @@ fn replaying_or_shrinking_a_trace_keeps_its_seed() {
     let trace = found["trace"].to_string();
     // 再現の手がかり（seed、モデルの digest、操作列）は、再生しても縮小しても失わない。
     assert_eq!(replay(&m, &trace)["trace"]["seed"], 5);
-    assert_eq!(shrink(&m, &trace, &json!({})).unwrap()["trace"]["seed"], 5);
+    assert_eq!(shrink(&m, &trace, &json!({}), None).unwrap()["trace"]["seed"], 5);
     // 判定ゲートが受理しないトレースは縮小しないが、示すトレースの seed は同じである。
     let mut forged = found["trace"].clone();
     forged["claim"] = json!({"violation": "deadlock"});
-    let rejected = shrink(&m, &forged.to_string(), &json!({})).unwrap();
+    let rejected = shrink(&m, &forged.to_string(), &json!({}), None).unwrap();
     assert_eq!(rejected["status"], "rejected", "{rejected}");
     assert_eq!(rejected["trace"]["seed"], 5);
 }
@@ -246,7 +246,7 @@ fn shrinking_lowers_arguments_that_the_violation_does_not_need() {
         step["args"]["id"] = json!(1);
     }
     assert_eq!(replay(&m, &trace.to_string())["status"], "violated");
-    let shrunk = shrink(&m, &trace.to_string(), &json!({})).unwrap();
+    let shrunk = shrink(&m, &trace.to_string(), &json!({}), None).unwrap();
     assert_eq!(shrunk["status"], "violated", "{shrunk}");
     assert_eq!(shrunk["original_steps"], 2);
     assert_eq!(shrunk["trace"]["steps"], violated["trace"]["steps"]);
@@ -260,7 +260,7 @@ fn shrinking_lowers_arguments_that_the_violation_does_not_need() {
          \x20 縮小前は 2 ステップ\n"
     );
     // 試す候補の数の上限が1なら、最初の候補（1つ目のステップの削除）だけを試して、元のトレースを返す。
-    let limited = shrink(&m, &trace.to_string(), &json!({"attempts": 1})).unwrap();
+    let limited = shrink(&m, &trace.to_string(), &json!({"attempts": 1}), None).unwrap();
     assert_eq!(limited["trace"]["steps"], trace["steps"]);
     // 打ち切ったことを結果に残す。結果のトレースは判定ゲートが受理したもので、status は違反のままである。
     assert_eq!(limited["status"], "violated");
@@ -275,4 +275,12 @@ fn shrinking_lowers_arguments_that_the_violation_does_not_need() {
         human(&limited)
     );
     assert_eq!(shrunk["shrink"]["complete"], true);
+    // 中断要求があれば、最初の候補を試す前に打ち切る。
+    let interrupted = shrink(&m, &trace.to_string(), &json!({}), Some(&|| true)).unwrap();
+    assert_eq!(interrupted["status"], "violated");
+    assert_eq!(interrupted["trace"]["steps"], trace["steps"]);
+    assert_eq!(
+        interrupted["shrink"],
+        json!({"attempts": 0, "complete": false, "limit": "interrupted"})
+    );
 }

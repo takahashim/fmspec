@@ -340,7 +340,8 @@ fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
     };
     let model = load_model(io, model_path, a.json)?;
     let trace = read(io, trace_path, a.json)?;
-    let body = fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone())).map_err(|e| usage(a.json, e))?;
+    let body =
+        fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone()), None).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
     Ok(finish(a.json, body))
 }
