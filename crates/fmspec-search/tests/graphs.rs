@@ -70,6 +70,7 @@ fn run(m: &CheckedModel, deadlock: bool, max_states: Option<usize>) -> Outcome {
             max_states,
             interrupt: None,
             max_check_cost: None,
+            ..BfsOptions::default()
         },
     )
 }
@@ -268,6 +269,7 @@ fn an_interrupt_request_stops_the_search() {
             max_states: None,
             interrupt: Some(&|| true),
             max_check_cost: None,
+            ..BfsOptions::default()
         },
     );
     assert_eq!(o.status, Status::Inconclusive(Limit::Interrupted));
@@ -402,6 +404,7 @@ fn simulations_follow_the_seed_like_an_independent_sampler() {
             traces: 1 + (seed % 4) as usize,
             max_steps: (seed % 9) as usize,
             interrupt: None,
+            deadline: None,
         };
         let (expected, completed, total) = expected_simulation(&inits, &edges, &bad, deadlock, &opts);
         let result = simulate(&m, &cond, &opts);
@@ -440,6 +443,7 @@ fn an_interrupt_request_stops_the_simulation() {
         traces: 10,
         max_steps: 10,
         interrupt: Some(&|| true),
+        deadline: None,
     };
     let sampled = sample(&m, &conditions(&m, false), &opts);
     let o = sampled.found.unwrap();
@@ -456,6 +460,7 @@ fn an_interrupt_request_stops_a_simulation_without_steps() {
         traces: 10,
         max_steps: 0,
         interrupt: Some(&|| true),
+        deadline: None,
     };
     let result = simulate(&m, &conditions(&m, false), &opts);
     assert!(matches!(
@@ -500,6 +505,7 @@ fn shrunk_traces_keep_the_claim_and_no_single_step_can_be_removed() {
             traces: 20,
             max_steps: 30,
             interrupt: None,
+            deadline: None,
         };
         let Ok(Some(Evidence::Trace(start, steps, claim))) = simulate(&m, &cond, &opts).evidence else {
             continue;
@@ -543,7 +549,7 @@ fn the_explored_graph_matches_an_independent_enumeration() {
         let reachable: BTreeSet<i64> = (0..n).filter(|v| dist[*v as usize].is_some()).collect();
         let reachable_edges = edges.iter().filter(|(from, _)| reachable.contains(from)).count();
 
-        let g = explore(&m, &cond, None, None);
+        let g = explore(&m, &cond, None, None, None);
         assert!(g.complete, "seed {seed}");
         assert_eq!(g.states[0], vec![0], "seed {seed}");
         assert_eq!(
@@ -571,7 +577,7 @@ fn the_explored_graph_matches_an_independent_enumeration() {
         // 状態数の上限では、幅優先の訪問順の先頭だけを保持し、保持しない状態への辺は遷移先を持たない。
         if g.states.len() > 1 {
             let max = g.states.len() - 1;
-            let limited = explore(&m, &cond, Some(max), None);
+            let limited = explore(&m, &cond, Some(max), None, None);
             assert!(!limited.complete, "seed {seed}");
             assert_eq!(limited.states, g.states[..max], "seed {seed}");
             assert!(limited.edges.iter().any(|e| e.to.is_none()), "seed {seed}");
@@ -579,7 +585,7 @@ fn the_explored_graph_matches_an_independent_enumeration() {
 
         // テスト経路は、到達できるすべての状態と入力の組を覆う。各経路は実際の辺をたどる。
         let max_steps = n as usize + 2;
-        let p = test_paths(&m, &cond, &vec![vec![]; edges.len()], None, max_steps, None);
+        let p = test_paths(&m, &cond, &vec![vec![]; edges.len()], None, max_steps, None, None);
         assert_eq!(
             (p.targets, p.covered),
             (reachable_edges, reachable_edges),
@@ -592,7 +598,7 @@ fn the_explored_graph_matches_an_independent_enumeration() {
             assert!(walk(&edges, 0, &taken).is_some(), "seed {seed}: {taken:?}");
         }
         // 1入力の経路で覆えるのは、初期状態から出る辺だけである。
-        let p = test_paths(&m, &cond, &vec![vec![]; edges.len()], None, 1, None);
+        let p = test_paths(&m, &cond, &vec![vec![]; edges.len()], None, 1, None, None);
         assert_eq!(
             p.covered,
             edges.iter().filter(|(from, _)| *from == 0).count(),
@@ -604,7 +610,7 @@ fn the_explored_graph_matches_an_independent_enumeration() {
 #[test]
 fn an_interrupt_request_leaves_the_graph_incomplete() {
     let m = graph(3, &[(0, 1), (1, 2)], &[]);
-    let g = explore(&m, &conditions(&m, false), None, Some(&|| true));
+    let g = explore(&m, &conditions(&m, false), None, Some(&|| true), None);
     assert!(!g.complete);
     assert!(g.edges.is_empty());
 }

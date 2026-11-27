@@ -8,10 +8,12 @@
 
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use crate::inconsistency::{successors, Inconsistency};
-use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
+use crate::stop::stopped;
+use fmspec_core::evidence::{Claim, Evidence, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::{Enumerated, Transition};
+use std::time::Instant;
 
 /// 乱数のアルゴリズムの名前。結果に記録する。
 pub const PRNG_NAME: &str = "splitmix64";
@@ -51,6 +53,8 @@ pub struct SimOptions<'a> {
     pub max_steps: usize,
     /// 中断要求の問い合わせ。真を返したら打ち切る。
     pub interrupt: Option<&'a dyn Fn() -> bool>,
+    /// 時間の上限の時刻。中断要求と同じく、トレースごとと、ステップごとに確かめる。
+    pub deadline: Option<Instant>,
 }
 
 /// シミュレータの報告。検査済みの値ではない。
@@ -89,11 +93,11 @@ where
     // 有効な遷移の作業用の列。ステップごとに空にして使い回す。
     let mut enabled: Vec<(usize, Transition)> = Vec::new();
 
-    let interrupted = || opts.interrupt.is_some_and(|requested| requested());
+    let interrupted = || stopped(opts.interrupt, opts.deadline);
     for _ in 0..opts.traces {
         // 最大ステップ数が0で、ステップのないトレースが続いても打ち切れるように、トレースごとにも確かめる。
-        if interrupted() {
-            return found(Evidence::Unavailable(Limit::Interrupted), stats);
+        if let Some(limit) = interrupted() {
+            return found(Evidence::Unavailable(limit), stats);
         }
         // 初期状態が1つなら乱数を消費しない。同じシードで、初期状態が1つのモデルの結果を変えないためである。
         let inits = model.initials();
@@ -107,8 +111,8 @@ where
             return found(Evidence::Trace(start, steps, claim), stats);
         }
         for _ in 0..opts.max_steps {
-            if interrupted() {
-                return found(Evidence::Unavailable(Limit::Interrupted), stats);
+            if let Some(limit) = interrupted() {
+                return found(Evidence::Unavailable(limit), stats);
             }
             // 現在の状態は、最後のステップの遷移先である。状態を複製して別に持たない。
             let state = steps.last().map_or(&start, |step| &step.state);
@@ -182,6 +186,7 @@ mod tests {
             traces: 3,
             max_steps: 10,
             interrupt: None,
+            deadline: None,
         }
     }
 

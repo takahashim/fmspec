@@ -6,10 +6,12 @@
 
 use crate::claim::selected;
 use crate::inconsistency::{successors, Inconsistency};
+use crate::stop::stopped;
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// 有効な遷移。`to` は遷移先の状態の添字で、状態数の上限で保持しなかった状態なら `None`。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,20 +31,24 @@ pub struct Graph {
     pub parent: Vec<Option<usize>>,
     /// 遷移。遷移元の訪問順、操作の定義順、引数の辞書順に並ぶ。
     pub edges: Vec<Edge>,
-    /// 到達できるすべての状態と遷移を集めたか。状態数の上限、評価エラー、中断、内部の不整合で集めきれなければ偽。
+    /// 到達できるすべての状態と遷移を集めたか。状態数の上限、評価エラー、中断、時間の上限、内部の不整合で集めきれなければ偽。
     pub complete: bool,
     /// 探索器の内部の不整合。見つけたら探索をやめる。このグラフをカバレッジの分母やテスト経路に使ってはならない。
     pub inconsistency: Option<Inconsistency>,
 }
 
 /// 到達可能な状態と遷移を集める。評価エラーになる遷移は集めない。
+/// 中断要求と時間の上限（`deadline`）は、状態ごとに確かめる。
 pub fn explore(
     model: &CheckedModel,
     cond: &Conditions,
     max_states: Option<usize>,
     interrupt: Option<&dyn Fn() -> bool>,
+    deadline: Option<Instant>,
 ) -> Graph {
-    collect(model, cond, max_states, interrupt, |a, s| successors(model, a, s))
+    collect(model, cond, max_states, interrupt, deadline, |a, s| {
+        successors(model, a, s)
+    })
 }
 
 /// `explore` の本体。遷移の列挙 `successors` を引数に取るのは、列挙の不整合を記録することをテストするためである。
@@ -51,6 +57,7 @@ fn collect<F>(
     cond: &Conditions,
     max_states: Option<usize>,
     interrupt: Option<&dyn Fn() -> bool>,
+    deadline: Option<Instant>,
     successors: F,
 ) -> Graph
 where
@@ -77,7 +84,7 @@ where
     }
     let mut cur = 0;
     while cur < g.states.len() {
-        if interrupt.is_some_and(|requested| requested()) {
+        if stopped(interrupt, deadline).is_some() {
             g.complete = false;
             return g;
         }
@@ -204,8 +211,9 @@ pub fn test_paths(
     max_states: Option<usize>,
     max_steps: usize,
     interrupt: Option<&dyn Fn() -> bool>,
+    deadline: Option<Instant>,
 ) -> Paths {
-    let graph = explore(model, cond, max_states, interrupt);
+    let graph = explore(model, cond, max_states, interrupt, deadline);
     // 状態と入力の組ごとに、最初の遷移。`target_of` は、各遷移の組（`targets` の添字）である。
     let mut targets: Vec<Target> = Vec::new();
     let mut target_of: Vec<Option<usize>> = vec![None; graph.edges.len()];
@@ -281,7 +289,7 @@ mod tests {
     fn an_inconsistent_enumeration_is_recorded_and_stops_the_exploration() {
         let m = counter();
         let cond = default_conditions(&m, false);
-        let g = collect(m.checked(), &cond, None, None, |a, s| {
+        let g = collect(m.checked(), &cond, None, None, None, |a, s| {
             if s == &vec![1] {
                 Err(Inconsistency::Successors {
                     action: a,
@@ -305,7 +313,7 @@ mod tests {
     #[test]
     fn a_consistent_exploration_records_no_inconsistency() {
         let m = counter();
-        let g = explore(m.checked(), &default_conditions(&m, false), None, None);
+        let g = explore(m.checked(), &default_conditions(&m, false), None, None, None);
         assert!(g.complete);
         assert_eq!(g.inconsistency, None);
         assert_eq!(g.states.len(), 4);
