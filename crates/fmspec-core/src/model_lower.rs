@@ -22,6 +22,7 @@ use crate::equality::{small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{code_of, eval_l, eval_spec, prop_spec, Env, ErrKind};
 use crate::eval::{eval, eval_prop, Ctx};
+use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lemma_width_sum_prefix};
 use crate::lowering::{lower_prop, lower_stored, Constant, Layout, LowerCtx};
@@ -58,6 +59,13 @@ verus! {
 
 /// 初期値の候補の組み合わせのうち、調べる数の上限。
 pub const MAX_INITIAL_CANDIDATES: usize = 1 << 20;
+
+/// 写像の1つの式と、置く場所の型（詳細化の検査で、抽象モデルの状態変数の型）。
+/// 式は、このモデルの状態だけを参照する文脈（不変条件と同じ文脈）で下ろす。
+pub struct SMap {
+    pub expr: crate::source::TExpr,
+    pub ty: SType,
+}
 
 /// 中核のモデル `m` の安全性は、定数の値が `cv` のモデル `sm` の安全性と一致する。
 pub open spec fn lowers_model(sm: SModel, m: RawModel) -> bool {
@@ -951,6 +959,20 @@ pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
         r matches Ok(m) ==> lowers_model(*sm, m),
         r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)),
 {
+    let none: Vec<SMap> = Vec::new();
+    match lower_model_map(sm, &none) {
+        Ok((m, _)) => Ok(m),
+        Err(e) => Err(e),
+    }
+}
+
+/// モデル全体を中核のモデルに下ろし、写像 `maps` の各式をスロットごとの式に下ろして、つないだ列を返す。
+/// 写像の式の意味保存は、ここでは述べない。判定ゲートの定理は、下ろした中核の式について述べる。
+pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, Vec<Expr>), LowerError>)
+    ensures
+        r matches Ok((m, _)) ==> lowers_model(*sm, m),
+        r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)) || (e is Mapping && maps@.len() > 0),
+{
     // 状態変数と引数の型の誤りは、その位置を報告する。
     match check_types(&sm.states, &sm.enums) {
         Ok(()) => {},
@@ -1316,7 +1338,41 @@ pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
             lemma_safe(*sm, cv, m, stg, cs, ks, sx, c);
         }
     }
-    Ok(m)
+    assert(lowers_model(*sm, m));
+    // 写像。状態だけを参照する文脈で下ろす。
+    cx.args = Vec::new();
+    cx.next = false;
+    cx.out = None;
+    let mut slots: Vec<Expr> = Vec::new();
+    let mut q: usize = 0;
+    while q < maps.len()
+        invariant
+            q <= maps@.len(),
+            lowers_model(*sm, m),
+        decreases maps@.len() - q,
+    {
+        match lower_stored(&maps[q].expr, &cx, &maps[q].ty, 0) {
+            Ok(out) => {
+                let mut j: usize = 0;
+                while j < out.len()
+                    invariant
+                        j <= out@.len(),
+                    decreases out@.len() - j,
+                {
+                    slots.push(copy_expr(&out[j]));
+                    j += 1;
+                }
+            },
+            Err(Fail::Depth) => {
+                return Err(LowerError::Depth);
+            },
+            Err(Fail::Type) => {
+                return Err(LowerError::Mapping(q));
+            },
+        }
+        q += 1;
+    }
+    Ok((m, slots))
 }
 
 } // verus!

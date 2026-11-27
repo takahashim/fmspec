@@ -78,8 +78,21 @@ fn property_text(p: &Value) -> String {
     }
 }
 
+/// 詳細化の検査のトレースでは、写した抽象モデルの状態も示す。
+fn abstract_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        v => format!("（抽象 {}）", pairs(v)),
+    }
+}
+
 fn trace_text(out: &mut String, trace: &Value) {
-    let _ = writeln!(out, "  初期状態 {}", pairs(&trace["initial"]));
+    let _ = writeln!(
+        out,
+        "  初期状態 {}{}",
+        pairs(&trace["initial"]),
+        trace.get("initial_abstract").map(abstract_text).unwrap_or_default()
+    );
     let Some(steps) = trace["steps"].as_array() else {
         return;
     };
@@ -92,21 +105,51 @@ fn trace_text(out: &mut String, trace: &Value) {
         if let Some(v) = st["output"].get("value") {
             let _ = write!(line, " 出力 {}", plain(v));
         }
-        let _ = writeln!(out, "{line} → {}", pairs(&st["state"]));
+        let _ = writeln!(
+            out,
+            "{line} → {}{}",
+            pairs(&st["state"]),
+            st.get("abstract").map(abstract_text).unwrap_or_default()
+        );
     }
     let _ = writeln!(out, "  （{} ステップ）", steps.len());
+}
+
+/// 詳細化の検査の主張。具体モデルの評価エラーは、安全性の検査と同じ形で示す。
+fn refinement_property(p: &Value) -> String {
+    match p["violation"].as_str() {
+        Some("initial" | "step" | "mapping") => plain(&p["message"]),
+        _ => property_text(p),
+    }
 }
 
 pub fn human(body: &Value) -> String {
     let mut out = String::new();
     let status = body["status"].as_str().unwrap_or("?");
-    let model = plain(&body["model"]);
+    let refinement = body.get("refinement").is_some();
+    let model = if refinement {
+        format!(
+            "{}（{} → {}）",
+            plain(&body["refinement"]),
+            plain(&body["concrete"]),
+            plain(&body["abstract"])
+        )
+    } else {
+        plain(&body["model"])
+    };
+    let property = if refinement {
+        refinement_property(&body["property"])
+    } else {
+        property_text(&body["property"])
+    };
     let headline = match status {
+        "refines" => format!("Refines: {model}"),
+        "not_refines" => format!("NotRefines: {model} / {property}"),
         "valid" => format!("Valid: {model}"),
         "verified" => format!("Verified: {model}"),
         "sampled" => format!("Sampled: {model}（網羅性の主張なし）"),
-        "violated" => format!("Violated: {model} / {}", property_text(&body["property"])),
-        "error" => format!("Error: {model} / {}", property_text(&body["property"])),
+        "violated" => format!("Violated: {model} / {property}"),
+        "error" => format!("Error: {model} / {property}"),
         "inconclusive" => format!("Inconclusive: {model}（{}）", plain(&body["reason"])),
         "internal_error" => format!("InternalError: {model}"),
         "rejected" => format!("Rejected: {model}"),
@@ -120,7 +163,7 @@ pub fn human(body: &Value) -> String {
             plain(digest)
         );
     }
-    if status == "valid" {
+    if status == "valid" && !refinement {
         let _ = writeln!(
             out,
             "  状態変数 {}、操作 {}、不変条件 {}、遷移契約 {}",
@@ -156,7 +199,7 @@ pub fn human(body: &Value) -> String {
         let _ = writeln!(out, "  縮小前は {n} ステップ");
     }
     if let Some(n) = body.get("certificate_states") {
-        let checked = if status == "verified" {
+        let checked = if status == "verified" || status == "refines" {
             "（判定ゲートが受理）"
         } else {
             ""

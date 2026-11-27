@@ -49,7 +49,7 @@ pub open spec fn inductive(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>) -> b
     &&& forall|i: int| 0 <= i < cert.len() ==> state_closed(m, c, cert, (#[trigger] cert[i])@)
 }
 
-proof fn lemma_reach_in_cert(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s: Seq<i64>, n: nat)
+pub(crate) proof fn lemma_reach_in_cert(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s: Seq<i64>, n: nat)
     requires
         inductive(m, c, cert),
         reach(m, c, s, n),
@@ -126,7 +126,7 @@ pub(crate) fn cmp_state(a: &Vec<i64>, b: &Vec<i64>) -> (r: i8)
 /// 二分探索による所属判定。`true` を返すのは、状態が証明書に含まれるときだけである。
 /// 証明書が整列されていなければ、含まれる状態を見落として `false` を返すことがある。
 /// その場合は証明書を拒否するだけで、誤って受理することはない（仕様書 §7.3）。
-fn find(cert: &Vec<Vec<i64>>, t: &Vec<i64>) -> (r: bool)
+pub(crate) fn find(cert: &Vec<Vec<i64>>, t: &Vec<i64>) -> (r: bool)
     ensures
         r ==> in_cert(cert@, t@),
 {

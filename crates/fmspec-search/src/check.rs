@@ -65,17 +65,7 @@ pub fn check_evidence_with(
     let started = Instant::now();
     let (verdict, evidence) = judge(model, cond, evidence, gate);
     let gate_time = started.elapsed();
-    let status = match verdict.kind() {
-        VerdictKind::Verified => Status::Verified,
-        VerdictKind::Violated => Status::Violated,
-        VerdictKind::Error => Status::Error,
-        VerdictKind::Inconclusive => Status::Inconclusive(verdict.limit().unwrap_or(Limit::Interrupted)),
-        VerdictKind::Rejected => Status::InternalError(Internal::Rejected(
-            verdict.reject().unwrap_or(Reject::ClaimNotReproduced),
-        )),
-        // `decide` は検証済みのモデルに対して InvalidModel を返さない。
-        VerdictKind::InvalidModel => Status::InternalError(Internal::Rejected(Reject::ClaimNotReproduced)),
-    };
+    let status = status_of(&verdict);
     Outcome {
         status,
         verdict,
@@ -86,11 +76,31 @@ pub fn check_evidence_with(
     }
 }
 
+/// 判定ゲートの判定を、検査結果の分類にする。
+pub(crate) fn status_of(verdict: &Verdict) -> Status {
+    match verdict.kind() {
+        VerdictKind::Verified => Status::Verified,
+        VerdictKind::Violated => Status::Violated,
+        VerdictKind::Error => Status::Error,
+        VerdictKind::Inconclusive => Status::Inconclusive(verdict.limit().unwrap_or(Limit::Interrupted)),
+        VerdictKind::Rejected => Status::InternalError(Internal::Rejected(
+            verdict.reject().unwrap_or(Reject::ClaimNotReproduced),
+        )),
+        // 判定ゲートは検証済みのモデルに対して InvalidModel を返さない。
+        VerdictKind::InvalidModel => Status::InternalError(Internal::Rejected(Reject::ClaimNotReproduced)),
+    }
+}
+
 /// 探索器の内部の不整合を、検査結果にする。
 ///
 /// 判定ゲートには、証拠がないこと（`Unavailable`）を渡す。判定ゲートが返す判定は `Inconclusive` であり、
 /// `Verified`、`Violated`、`Error` にはならない。そのうえで、分類を中断ではなく `InternalError` にする。
-fn inconsistent(model: &CheckedModel, cond: &Conditions, inconsistency: Inconsistency, stats: Stats) -> Outcome {
+pub(crate) fn inconsistent(
+    model: &CheckedModel,
+    cond: &Conditions,
+    inconsistency: Inconsistency,
+    stats: Stats,
+) -> Outcome {
     let mut outcome = check_evidence(model, cond, Evidence::Unavailable(Limit::Interrupted), stats);
     outcome.status = Status::InternalError(Internal::Inconsistent(inconsistency));
     outcome

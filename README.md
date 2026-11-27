@@ -7,8 +7,9 @@ Rubyで書く実行可能な形式仕様と、Rust製の検証エンジンによ
 Rubyで仕様を書いて、モデル検査、シミュレーション、実装との適合性検査（Model-Based Testing）ができる。
 状態と引数には、Bool、有界Int、Enumのほか、Tuple、Record、Option、有限Set、有限Map、有界Listを使える。
 複数の仕様の合成（`Fmspec.compose`）、並行するプロセス（`process`）とそのクラッシュ（`crash:`、試験的）、有界応答性（`responds`）、移行の段階（`migration`）も書ける。
+定数の値を変えた繰り返し検査（`Model#with`、`Model#sweep`）、具体モデルが抽象モデルを詳細化するかの検査（`Fmspec.refinement`）、入れ替えても区別のない要素についての対称性による削減（`process(..., symmetric: true)`、`symmetric`）もある。
 Railsアプリケーションとの結合は、別gemの `fmspec-rails` にある。
-仕様書§12.1の `requires` と `modifies`、段階9（性能改善、記号的検証）はまだない。
+仕様書§12.1の `requires` と `modifies`、段階9のうち対称性による削減以外（記号的検証など）はまだない。
 
 ```ruby
 require "fmspec"
@@ -76,6 +77,7 @@ target/debug/fmspec verify-certificate MODEL.json CERT.json
 target/debug/fmspec replay MODEL.json TRACE.json
 target/debug/fmspec shrink MODEL.json TRACE.json --trace-out SHORT.json
 target/debug/fmspec replay NEW_MODEL.json OLD_TRACE.json --allow-other-model
+target/debug/fmspec refine REFINEMENT.json --max-states 100000
 ```
 
 証明書とトレースは、作ったモデルの digest を持ち、digest が違うモデルでは読めない証拠として拒否する。

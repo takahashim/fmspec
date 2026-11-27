@@ -91,6 +91,37 @@ constant :menu, set_of(item), Set[:apple, :bread]
 複合型の定数は、型を添えて `constant(名前, 型, 値)` と書く。
 IRには、参照した位置にリテラルとして埋め込まれる。
 
+### 定数を変えた検査
+
+`constant` は定数の値をRubyの値で返す。
+状態の型やプロセスの数を、定数で決められる。
+
+```ruby
+Tickets = Fmspec.define(:tickets) do
+  capacity = constant :capacity, 3
+  state :sold, int(0..capacity + 1), initial: 0
+  # ...
+end
+
+Tickets.with(capacity: 4).check.verified?
+Tickets.sweep(capacity: 2..4).each { |values, result| puts "#{values} #{result.status}" }
+Tickets.sweep(capacity: [2, 4]) { |model| model.check(deadlock: true) }
+```
+
+| 語彙 | 内容 |
+|---|---|
+| `Model#with(名前: 値, ...)` | `Fmspec.define` のブロックを、定数の値を上書きして実行し直し、新しいモデルを返す。これまでの上書きに重ねる |
+| `Model#overrides` | 上書きした定数の値（Symbol から値への Hash） |
+| `Model#sweep(名前: 候補, ...)` | 候補（範囲か配列）の直積の組み合わせごとに `with` で作り直して検査し、組み合わせと結果の対の配列を返す。ブロックを渡すと、作り直したモデルを受け取り、その戻り値を結果にする。既定は `check` |
+
+上書きの値は、宣言した定数の型に合わなければならない。
+宣言していない定数の上書きは `Fmspec::BuildError` になる。
+`Fmspec.compose` で合成した仕様は作り直せない。合成する前の仕様を `with` で作り直してから合成する。
+
+組み合わせごとにIRが違うので、`model_digest` も違う。
+ある値のモデルの証明書やトレースを別の値のモデルに渡すと、判定ゲートは拒否する。
+各結果は、その値のモデルについての判定であり、定数のほかの値については何も主張しない。
+
 初期値の候補を `initial_in:` に並べると、状態変数ごとの候補の組み合わせがすべて初期状態になる。
 候補は値の配列か範囲で書く。
 `bool`、`int`、`enum` の型を書くと、その型の値すべてが候補になる。
@@ -581,11 +612,106 @@ end
 
 これは移行の手順のモデルであり、実DBの移行全体の正しさを証明するものではない。
 
+## 詳細化の検査
+
+`Fmspec.refinement` は、実装寄りの**具体モデル**が、抽象的な**抽象モデル**の正しい実装になっているかを検査する。
+抽象モデルの状態変数ごとに、具体モデルの状態から値を求める式（写像）を書く。
+
+```ruby
+Atomic = Fmspec.define(:atomic) do
+  state :count, int(0..2), initial: 0
+  state :finished, int(0..2), initial: 0
+  action :incr do |s|
+    guard s.finished < 2
+    update count: s.count + 1, finished: s.finished + 1
+  end
+end
+
+R = Fmspec.refinement(:counter_refines_atomic, concrete: Counter, abstract: Atomic) do
+  map(:count) { |s| s.count }
+  map(:finished) { |s| ite(s.pc_a.eq(:done), 1, 0) + ite(s.pc_b.eq(:done), 1, 0) }
+end
+
+R.check.refines?
+```
+
+| 語彙 | 内容 |
+|---|---|
+| `Fmspec.refinement(名前, concrete:, abstract:) { ... }` | 詳細化の検査を定義する。抽象モデルのすべての状態変数に写像が要る |
+| `map(状態変数) { \|s\| 式 }` | 抽象モデルの状態変数の写像。`s` は具体モデルの記号的な状態で、式の型はその状態変数の型である |
+| `#check(max_states:, max_depth:, max_time_ms:, actions:)` | 検査する。上限は `Model#check` と同じ。`actions` は具体モデルの対象の操作 |
+| `#to_ir` | 詳細化の文書（[ir.md](ir.md) の「詳細化」） |
+
+検査は、次の3つを確かめる。
+
+- 具体モデルの初期状態は、写像で抽象モデルの初期状態に写る。
+- 具体モデルの到達可能な状態では、写像の評価が成功する（値が抽象モデルの状態の型に属する）。
+- 具体モデルの到達可能な状態からの有効な遷移は、抽象モデルの遷移か、写した状態の変わらないステップ（stutter）に写る。
+
+抽象モデルの操作は、すべてを照合に使う。
+具体モデルの不変条件と遷移契約は、この検査では評価しない。それぞれ `check` で検査する。
+活性と公平性の保存は扱わない。具体モデルが抽象モデルの操作をいつまでも先延ばしにしても、検出しない。
+出力と操作名の対応も照合しない（状態だけを照合する）。
+
+結果（`Fmspec::RefinementResult`）の `status` は次のどれかである。
+
+| `status` | 意味 |
+|---|---|
+| `:refines` | 判定ゲートが、具体モデルの証明書と、各遷移の照合を受理した |
+| `:not_refines` | 詳細化が破れるトレースを判定ゲートが受理した。`property["violation"]` は `"initial"`（初期状態）か `"step"`（最後の遷移） |
+| `:error` | 写像の評価の失敗（`property["violation"]` が `"mapping"`）か、具体モデルの評価エラーに至るトレースを受理した |
+| `:inconclusive` | 状態数、深さ、時間の上限（`:max_states`、`:max_depth`、`:max_time_ms`）、中断、または写した状態で抽象モデルの遷移列挙が評価エラーになった（`:abstract_failed`） |
+| `:internal_error` | 探索器の証拠を判定ゲートが拒否した。fmspec の不具合である |
+
+`trace` は具体モデルのトレースで、`abstract_states` は各状態を写した抽象モデルの状態（写像が失敗した状態は `nil`）である。
+2つのモデルは列挙型を名前で共有する。同じ名前の列挙型は、ラベルも同じでなければならない。
+記号ブロックから参照できるのは、具体モデルの状態変数だけである。プロセスの状態（`s.incr[0].pc`）と定数は、まだ参照できない。
+
+## 対称性による削減
+
+入れ替えても区別のない要素（プロセスのインスタンスなど）を宣言すると、検査は状態を入れ替えで代表元にまとめて探索する。
+状態数は要素数の階乗で効くので、扱えるモデルの大きさが大きく変わる。
+
+```ruby
+Workers = Fmspec.define(:workers) do
+  state :count, int(0..3), initial: 0
+  state :lock, bool, initial: false
+  process :w, count: 3, symmetric: true do
+    local :seen, int(0..3), initial: 0
+    step(:acquire) { |s| guard s.lock.not_; update lock: true }
+    # ...
+  end
+end
+
+Workers.check.verified?            # 代表元だけを探索する
+Workers.check(symmetry: false)     # 削減しない
+```
+
+| 語彙 | 内容 |
+|---|---|
+| `process(名前, count: n, symmetric: true)` | インスタンスごとのプログラムカウンタとローカル変数を、1つのブロックにする |
+| `symmetric([状態変数, ...], [状態変数, ...], ...)` | ブロックを明示して宣言する。同じ位置の状態変数は同じ型を持つ |
+| `check(symmetry: false)` | 宣言した対称性を使わずに検査する |
+
+判定ゲートは宣言を信用しない。隣り合うブロックを入れ替えても、下ろしたモデル（操作、不変条件、遷移契約、デッドロック検査をするときは終端条件）が変わらないことを確かめる。
+成り立たなければ、検査は `ArgumentError`（宣言した対称性が成り立ちません）になる。インスタンスの番号で中身を変えるプロセスは、対称ではない。
+判定の意味は削減しない検査と同じで、`Verified` はモデルが安全であることを述べる。
+違反は、代表元の経路から作った具体的なトレースで報告する。トレースは `replay` で再生できる。
+
+インスタンスをまたぐ不変条件は、入れ替えの像を同じ名前の不変条件として加えて検査する。
+違反した不変条件が像なら、トレースは入れ替えた要素について不変条件を破る。
+
+制限：
+
+- `certificate:` と `max_check_cost:` は、対称性を使う検査では指定できない。
+- プロセスの既定の終端条件は対称でないので、`deadlock: true` と同時には使えない。
+- `Fmspec.compose` で合成すると、対称性の宣言は引き継がれない（削減せずに検査する）。
+
 ## 検査
 
 | メソッド | 内容 |
 |---|---|
-| `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, **検査条件)` | 幅優先探索によるモデル検査 |
+| `check(max_states: nil, max_depth: nil, max_time_ms: nil, max_check_cost: nil, certificate: false, symmetry: nil, **検査条件)` | 幅優先探索によるモデル検査。`symmetry: false` で、宣言した対称性による削減を使わない |
 | `simulate(traces: 100, max_steps: 100, seed: nil, max_time_ms: nil, **検査条件)` | ランダムシミュレーション |
 | `verify_certificate(証明書, max_check_cost: nil, max_time_ms: nil, allow_other_model: false, **検査条件)` | 証明書の検査 |
 | `replay(トレース, allow_other_model: false)` | トレースの再生 |

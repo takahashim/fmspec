@@ -26,8 +26,11 @@ module Fmspec
 
     attr_reader :enums, :states
 
-    def initialize(name)
+    # `overrides` は、定数の名前から上書きする値への Hash（`Model#with` が渡す）。
+    def initialize(name, overrides = {})
       @name = name
+      @overrides = overrides.transform_keys(&:to_sym)
+      @overridden = []
       @enums = {}
       @states = []
       @constants = {}
@@ -40,6 +43,7 @@ module Fmspec
       @processes = {}
       @responses = []
       @migrations = {}
+      @symmetry = []
     end
 
     # ---- 型 ----
@@ -100,17 +104,27 @@ module Fmspec
 
     # 定数。記号的な状態から、状態変数と同じように名前で参照できる。
     # 複合型の値は、型を添えて書く（`constant :menu, set_of(item), Set[:apple, :bread]`）。
+    #
+    # 定数の値（`Model#with` で上書きしたなら、上書きした値）を Ruby の値で返す。
+    # 状態の型やプロセスの数を定数で決めるのに使える（`cap = constant :capacity, 3`、`int(0..cap + 1)`）。
     def constant(name, *args)
       claim(name, "定数")
-      case args.length
-      when 1 then @constants[name.to_sym] = Expr.lift(args[0], enums: declared_enums)
-      when 2
-        type = Types.coerce(args[0], "定数 #{name}")
-        type.check!(args[1], "定数 #{name} の値")
-        @constants[name.to_sym] = Expr.lift(args[1], type.kind, enums: declared_enums)
-      else raise BuildError, "constant は constant(名前, 値) か constant(名前, 型, 値) と書きます"
-      end
-      nil
+      raise BuildError, "constant は constant(名前, 値) か constant(名前, 型, 値) と書きます" unless [1, 2].include?(args.length)
+
+      key = name.to_sym
+      overridden = @overrides.key?(key)
+      @overridden << key if overridden
+      value = overridden ? @overrides[key] : args.last
+      @constants[key] =
+        if args.length == 1
+          declared = Expr.lift(args[0], enums: declared_enums)
+          overridden ? Expr.lift(value, declared.kind, enums: declared_enums).expect(declared.kind, "定数 #{name} の上書きの値") : declared
+        else
+          type = Types.coerce(args[0], "定数 #{name}")
+          type.check!(value, overridden ? "定数 #{name} の上書きの値" : "定数 #{name} の値")
+          Expr.lift(value, type.kind, enums: declared_enums)
+        end
+      value
     end
 
     # 操作。キーワードは公開引数で、値はそのドメイン（型、または整数の範囲）。
@@ -146,7 +160,8 @@ module Fmspec
     #   max_crashes  :restart のとき、インスタンスごとのクラッシュの回数の上限。既定は1
     #   retries      :restart のとき、実装が再試行する回数。尽きたあとのクラッシュでは、インスタンスは :crashed で終わる。
     #                max_crashes: とは一緒に書けない
-    def process(name, count: 1, crash: nil, crash_at: nil, max_crashes: nil, retries: nil, &body)
+    #   symmetric    真なら、インスタンスを入れ替えても区別がないと宣言する（`symmetric` を参照）
+    def process(name, count: 1, crash: nil, crash_at: nil, max_crashes: nil, retries: nil, symmetric: false, &body)
       raise BuildError, "プロセス #{name} にはブロックが必要です" unless body
 
       claim(name, "プロセス")
@@ -175,6 +190,26 @@ module Fmspec
         process_steps(name, id, b, pc)
         process_crash(name, id, b, pc, labels, crash, location) if crash
       end
+      if symmetric
+        raise BuildError, "プロセス #{name} の symmetric: には、2つ以上のインスタンスが必要です" if count < 2
+
+        @symmetry << bodies.each_with_index.map do |b, id|
+          crashes = crash && crash[:mode] == :restart ? ["#{name}[#{id}].crashes"] : []
+          ["#{name}[#{id}].pc", *b.locals.map { |local, *| "#{name}[#{id}].#{local}" }, *crashes]
+        end
+      end
+      nil
+    end
+
+    # 対称性による削減（docs/plans/refinement_symmetry_constants.md の3）。
+    # 入れ替えても区別のない要素を、状態変数のブロックの列で宣言する。各ブロックは状態変数の名前の配列で、
+    # 同じ位置の状態変数は同じ型を持つ。`symmetric [:pc_a, :seen_a], [:pc_b, :seen_b]`。
+    # 検査は、隣り合うブロックを入れ替えてもモデルが変わらないことを確かめてから、代表元だけを探索する。
+    def symmetric(*blocks)
+      blocks = blocks.map { |b| Array(b).map(&:to_s) }
+      raise BuildError, "symmetric には2つ以上のブロックが必要です" if blocks.length < 2
+
+      @symmetry << blocks
       nil
     end
 
@@ -295,9 +330,13 @@ module Fmspec
       claim(name, "遷移契約", :contract)
     end
 
-    def build
+    # `definition` は、上書きを受け取ってモデルを作り直す手続き（`Model#with` が使う）。
+    def build(definition: nil)
+      unknown = @overrides.keys - @overridden
+      raise BuildError, "宣言していない定数は上書きできません: #{unknown.join(', ')}" unless unknown.empty?
+
       Model.new(@name.to_sym, to_ir, ghosts: @states.select { |s| s[:ghost] }.map { |s| s[:name] },
-                                     processes: @processes)
+                                     processes: @processes, definition: definition, overrides: @overrides)
     end
 
     def declared_enums = @enums.values
@@ -349,6 +388,7 @@ module Fmspec
       terminal = @terminal || processes_done
       ir["terminal"] = terminal if terminal
       ir["initial_constraint"] = @initially if @initially
+      ir["symmetry"] = @symmetry unless @symmetry.empty?
       @responses.empty? ? ir : Response.expand(ir, @responses)
     end
 

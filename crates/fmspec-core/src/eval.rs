@@ -206,8 +206,8 @@ pub open spec fn eval_l(e: Expr, env: Env, ls: Seq<Value>) -> Result<Value, ErrK
             Err(k) => Err(k),
             Ok(v) => eval_l(*b, env, ls.push(v)),
         },
-        Expr::Forall(ty, lo, hi, body) => quant_l(true, ty, *body, env, ls, lo as int, hi as int),
-        Expr::Exists(ty, lo, hi, body) => quant_l(false, ty, *body, env, ls, lo as int, hi as int),
+        Expr::Forall(ty, lo, hi, body) => quant_l(true, ty, *body, env, ls, lo as int, hi as int, None),
+        Expr::Exists(ty, lo, hi, body) => quant_l(false, ty, *body, env, ls, lo as int, hi as int, None),
         Expr::Code(a) => match eval_l(*a, env, ls) {
             Err(k) => Err(k),
             Ok(v) => Ok(Value::Int(code_of(v))),
@@ -216,21 +216,33 @@ pub open spec fn eval_l(e: Expr, env: Env, ls: Seq<Value>) -> Result<Value, ErrK
     }
 }
 
-/// 量化の意味論。符号 `x..=hi` を昇順にたどる。`all` が真なら forall、偽なら exists で、
-/// 本体の値が `all` と異なった時点でその値を返す。たどり終えたら `all` を返す。
-pub open spec fn quant_l(all: bool, ty: Type, body: Expr, env: Env, ls: Seq<Value>, x: int, hi: int) -> Result<
-    Value,
-    ErrKind,
->
+/// 量化の意味論。符号 `x..=hi` を昇順にたどる。`all` が真なら forall、偽なら exists である。
+/// 本体の値が `all` と異なった時点で、その値を返す。
+/// 本体の評価が失敗したら、最初の失敗を `pend` に保留して、残りをたどる。
+/// たどり終えたら、保留した失敗があればそれを、なければ `all` を返す。
+/// したがって、失敗するかどうかと成功したときの値は、たどる順に依らない。
+pub open spec fn quant_l(
+    all: bool,
+    ty: Type,
+    body: Expr,
+    env: Env,
+    ls: Seq<Value>,
+    x: int,
+    hi: int,
+    pend: Option<ErrKind>,
+) -> Result<Value, ErrKind>
     decreases body, hi - x + 1,
 {
     if x > hi {
-        Ok(Value::Bool(all))
+        match pend {
+            Some(k) => Err(k),
+            None => Ok(Value::Bool(all)),
+        }
     } else {
         match as_bool(eval_l(body, env, ls.push(decode(ty, x as i64)))) {
-            Err(k) => Err(k),
+            Err(k) => quant_l(all, ty, body, env, ls, x + 1, hi, if pend is Some { pend } else { Some(k) }),
             Ok(b) => if b == all {
-                quant_l(all, ty, body, env, ls, x + 1, hi)
+                quant_l(all, ty, body, env, ls, x + 1, hi, pend)
             } else {
                 Ok(Value::Bool(b))
             },
@@ -587,7 +599,7 @@ fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &mut 
     ErrKind,
 >)
     ensures
-        r == quant_l(all, *ty, *body, c@, old(ls)@, lo as int, hi as int),
+        r == quant_l(all, *ty, *body, c@, old(ls)@, lo as int, hi as int, None),
         final(ls)@ == old(ls)@,
     decreases body, 1int,
 {
@@ -596,13 +608,14 @@ fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &mut 
     let n = ls.len();
     ls.push(Value::Bool(false));
     let mut x: i128 = lo as i128;
+    let mut pend: Option<ErrKind> = None;
     while x <= hi as i128
         invariant
             lo <= x,
             n == ls0.len(),
             ls@.len() == n + 1,
             ls@.subrange(0, n as int) == ls0,
-            quant_l(all, *ty, *body, c@, ls0, x as int, hi as int) == quant_l(
+            quant_l(all, *ty, *body, c@, ls0, x as int, hi as int, pend) == quant_l(
                 all,
                 *ty,
                 *body,
@@ -610,6 +623,7 @@ fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &mut 
                 ls0,
                 lo as int,
                 hi as int,
+                None,
             ),
         decreases hi - x + 1,
     {
@@ -617,9 +631,9 @@ fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &mut 
         assert(ls@ =~= ls0.push(decode(*ty, x as i64)));
         match to_bool(eval_in(body, c, ls)) {
             Err(k) => {
-                ls.pop();
-                assert(ls@ =~= ls0);
-                return Err(k);
+                if pend.is_none() {
+                    pend = Some(k);
+                }
             },
             Ok(b) => {
                 if b != all {
@@ -634,7 +648,10 @@ fn quant(all: bool, ty: &Type, lo: i64, hi: i64, body: &Expr, c: &Ctx, ls: &mut 
     }
     ls.pop();
     assert(ls@ =~= ls0);
-    Ok(Value::Bool(all))
+    match pend {
+        Some(k) => Err(k),
+        None => Ok(Value::Bool(all)),
+    }
 }
 
 

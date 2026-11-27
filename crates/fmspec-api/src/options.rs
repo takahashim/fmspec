@@ -58,6 +58,7 @@ pub(crate) fn conditions(model: &Model, map: &Map<String, Value>) -> Result<Cond
     select(&mut c.invariants, map.get("invariants"), "不変条件", |n| {
         model.names.invariant_index(n)
     })?;
+    model.names.spread_invariants(&mut c.invariants);
     select(&mut c.contracts, map.get("contracts"), "遷移契約", |n| {
         model.names.contract_index(n)
     })?;

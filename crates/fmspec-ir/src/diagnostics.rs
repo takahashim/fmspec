@@ -83,6 +83,7 @@ pub(crate) fn lower_error(
             message: "内部エラー: fmspec-ir と中核の型検査が食い違います".to_string(),
         },
         LowerError::Depth => too_deep("$"),
+        LowerError::Mapping(_) => internal("$"),
     }
 }
 

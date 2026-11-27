@@ -7,6 +7,7 @@
 //!
 //! [`eval_src`] は、値 [`SVal`] の上で直接評価する意味論で、参照実装（reference/fmspec_reference.rb）の
 //! `ev` に対応する。部分式は左から順に評価し、`all`、`any`、`implies`、`ite` と量化は打ち切る。
+//! 量化は、本体の評価の失敗を保留して残りをたどり、値を決める要素があればその値を返す。
 //! エラーは中核の [`ErrKind`] で表す。算術と比較は中核の [`binop_spec`] と同じ意味である。
 //! 高水準の演算の失敗は `ErrKind::Failed` で、番号は `FAIL_*` である。
 //!
@@ -325,7 +326,7 @@ pub open spec fn eval_src(e: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<SVal, Er
             };
             match values {
                 Err(k) => Err(k),
-                Ok(xs) => match eval_quant(all, xs, *body, env, ls) {
+                Ok(xs) => match qresult(all, eval_qstate(all, xs, *body, env, ls)) {
                     Err(k) => Err(k),
                     Ok(b) => Ok(SVal::Bool(b)),
                 },
@@ -720,26 +721,59 @@ pub open spec fn put_row(
     }
 }
 
-/// 量化。値の列 `xs` を順にたどり、値を局所変数に束縛して本体を評価する。
-/// 本体の値が `all` と異なった時点でその値を返す。たどり終えたら `all` を返す。
-pub open spec fn eval_quant(all: bool, xs: Seq<SVal>, body: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<
-    bool,
-    ErrKind,
->
+/// 量化の途中の状態。
+#[cfg(verus_keep_ghost)]
+pub enum QState {
+    /// まだ値が決まらず、本体の評価も失敗していない。
+    Open,
+    /// 本体の値が `all` と異なり、量化の値が決まった。
+    Decided(bool),
+    /// 値はまだ決まらないが、本体の評価が失敗した。最初の失敗を保留している。
+    Pending(ErrKind),
+}
+
+/// 量化。値の列 `xs` を順にたどり、値を局所変数に束縛して本体を評価したあとの状態。
+/// 本体の値が `all` と異なった時点で値が決まり、残りを評価しない。
+/// 本体の評価が失敗したら、最初の失敗を保留して、残りをたどる。
+pub open spec fn eval_qstate(all: bool, xs: Seq<SVal>, body: TExpr, env: SEnv, ls: Seq<SVal>) -> QState
     decreases body, xs.len() + 1,
 {
     if xs.len() == 0 {
-        Ok(all)
+        QState::Open
     } else {
-        match eval_quant(all, xs.drop_last(), body, env, ls) {
-            Err(k) => Err(k),
-            Ok(b) => if b != all {
-                Ok(b)
-            } else {
-                src_bool(eval_src(body, env, ls.push(xs.last())))
+        match eval_qstate(all, xs.drop_last(), body, env, ls) {
+            QState::Decided(b) => QState::Decided(b),
+            st => match src_bool(eval_src(body, env, ls.push(xs.last()))) {
+                Ok(b) => if b != all {
+                    QState::Decided(b)
+                } else {
+                    st
+                },
+                Err(k) => match st {
+                    QState::Open => QState::Pending(k),
+                    _ => st,
+                },
             },
         }
     }
+}
+
+/// たどり終えた量化の値。値が決まっていればその値、失敗を保留していればその失敗、どちらでもなければ `all` である。
+/// したがって、失敗するかどうかと成功したときの値は、たどる順に依らない。
+pub open spec fn qresult(all: bool, st: QState) -> Result<bool, ErrKind> {
+    match st {
+        QState::Open => Ok(all),
+        QState::Decided(b) => Ok(b),
+        QState::Pending(k) => Err(k),
+    }
+}
+
+/// 量化の値。
+pub open spec fn eval_quant(all: bool, xs: Seq<SVal>, body: TExpr, env: SEnv, ls: Seq<SVal>) -> Result<
+    bool,
+    ErrKind,
+> {
+    qresult(all, eval_qstate(all, xs, body, env, ls))
 }
 
 } // verus!

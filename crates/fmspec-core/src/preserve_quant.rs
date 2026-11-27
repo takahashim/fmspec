@@ -25,7 +25,7 @@ use crate::quant::{lemma_select_prefix, lemma_vals_weaken, picks, q_step_ok, qpr
 #[cfg(verus_keep_ghost)]
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_quant, eval_src, select_bits, src_bool, Over, SEnv, TExpr};
+use crate::source::{eval_quant, eval_src, select_bits, src_bool, Over, QState, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -818,7 +818,7 @@ pub proof fn lemma_quant(
             assert(q_step_ok(all, qb, env, l, bits, dom, body, se, sls));
             let ty = Type::Int(0, if n == 0 { 0 } else { (n - 1) as i64 });
             assert(bits.take(0) =~= Seq::<bool>::empty());
-            assert(qprefix(all, dom, bits, 0, body, se, sls) == Ok::<bool, ErrKind>(all));
+            assert(qprefix(all, dom, bits, 0, body, se, sls) == QState::Open);
             lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);
             assert(bits.take(bits.len() as int) =~= bits);
             let res = eval_quant(all, xs, body, se, sls);

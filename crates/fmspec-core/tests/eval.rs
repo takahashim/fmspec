@@ -258,6 +258,7 @@ fn quantifiers_visit_codes_in_ascending_order() {
     assert_eq!(run(&forall(int_ty, 1, 0, boolean(false))), Ok(Value::Bool(true)));
     assert_eq!(run(&exists(int_ty, 1, 0, boolean(true))), Ok(Value::Bool(false)));
     // 昇順にたどり、結果が決まった時点で止まる。後ろの値で起きるエラーは評価しない。
+    // 結果が決まる前のエラーは保留して残りをたどり、後ろで結果が決まればその値、決まらなければ保留したエラーになる。
     let fails_at = |k| {
         Expr::Ite(
             Box::new(bin(BinOp::Eq, x(), int(k))),
@@ -266,7 +267,8 @@ fn quantifiers_visit_codes_in_ascending_order() {
         )
     };
     assert_eq!(run(&forall(int_ty, 0, 2, fails_at(2))), Ok(Value::Bool(false)));
-    assert_eq!(run(&forall(int_ty, 0, 2, fails_at(1))), Err(ErrKind::Overflow));
+    assert_eq!(run(&forall(int_ty, 0, 2, fails_at(1))), Ok(Value::Bool(false)));
+    assert_eq!(run(&forall(int_ty, 0, 1, fails_at(1))), Err(ErrKind::Overflow));
     assert_eq!(run(&exists(int_ty, -1, 2, fails_at(1))), Ok(Value::Bool(true)));
     // 束縛する値は量化の型で復号する。
     assert_eq!(run(&exists(Type::Bool, 0, 1, x())), Ok(Value::Bool(true)));

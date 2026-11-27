@@ -346,6 +346,20 @@ fn evaluation_order_and_short_circuits_are_preserved() {
     let set = json!({"set": {"of": {"int": {"min": 0, "max": 3}}, "items": [{"int": 2}, {"int": 0}]}});
     let e = json!({"forall": {"name": "x", "in": set, "body": {"eq": [{"div": [{"int": 1}, {"sub": [{"local": "x"}, {"int": 2}]}]}, {"int": 0}]}}});
     assert_eq!(status(e).0, "violated");
+    // 本体の失敗は保留して残りをたどる。後ろで偽と決まれば偽、決まらなければ最初の失敗になる。
+    let quant = |items: &[i64], body: Value| {
+        let items: Vec<Value> = items.iter().map(|n| json!({"int": n})).collect();
+        let set = json!({"set": {"of": {"int": {"min": 0, "max": 3}}, "items": items}});
+        status(json!({"forall": {"name": "x", "in": set, "body": body}}))
+    };
+    let inverse = json!({"div": [{"int": 1}, {"sub": [{"local": "x"}, {"int": 2}]}]});
+    assert_eq!(quant(&[2, 3], json!({"eq": [inverse, {"int": 0}]})).0, "violated");
+    assert_eq!(
+        quant(&[2, 3], json!({"ne": [inverse, {"int": 0}]})),
+        ("error".to_string(), json!("division_by_zero"))
+    );
+    let first = json!({"ite": [{"eq": [{"local": "x"}, {"int": 2}]}, {"eq": [inverse, {"int": 0}]}, {"eq": [boom, {"int": 0}]}]});
+    assert_eq!(quant(&[2, 3], first), ("error".to_string(), json!("division_by_zero")));
 }
 
 #[test]

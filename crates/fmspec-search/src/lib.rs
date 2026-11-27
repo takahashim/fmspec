@@ -13,18 +13,22 @@ mod claim;
 pub mod gate;
 pub mod graph;
 pub mod inconsistency;
+pub mod refine;
 pub mod session;
 pub mod shrink;
 pub mod simulate;
 mod stop;
+pub mod sym;
 
 pub use bfs::{bfs, BfsOptions, SearchResult, Stats};
 pub use check::{check, check_evidence, check_evidence_with, sample, Internal, Outcome, Sampled, Status};
 pub use gate::{evidence_cost, judge, GateOptions};
 pub use graph::{explore, input_of, test_paths, Edge, Graph, Paths, TestPath};
 pub use inconsistency::Inconsistency;
+pub use refine::{ref_status, refine, RefOutcome, RefStatus};
 pub use session::{
     Covered, InputCheck, ModelError, NextInput, Observed, Outcome as PossibleOutcome, Seen, SeenOutput, Session,
 };
 pub use shrink::shrink;
 pub use simulate::{simulate, SimOptions, SimResult, SimStats, PRNG_NAME};
+pub use sym::{bfs_sym, check_sym};

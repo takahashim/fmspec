@@ -3,7 +3,7 @@
 //! 引数を fmspec-api のオプションに直して呼び出し、結果をJSONまたは人間向けの形で出力する。
 //! 終了コードは次のとおり。成功の種類は出力の `status` で区別する。
 //!
-//! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`）
+//! - `0`: 要求された検査の正常完了（`verified`、`sampled`、`valid`、`refines`）
 //! - `1`: 反例、または提示された証明書やトレースの拒否
 //! - `2`: 評価エラー、不正な入力、内部エラー
 //! - `3`: 探索未完了
@@ -48,6 +48,7 @@ const USAGE: &str = "\
   fmspec verify-certificate MODEL.json CERTIFICATE.json [--max-check-cost N] [--max-time-ms N] [検査条件] [--allow-other-model]
   fmspec replay MODEL.json TRACE.json [--allow-other-model]
   fmspec shrink MODEL.json TRACE.json [--trace-out FILE] [--allow-other-model]
+  fmspec refine REFINEMENT.json [--max-states N] [--max-depth N] [--max-time-ms N] [--actions A,B,...]
 
 検査条件（省略時は、すべての操作・不変条件・遷移契約が対象で、デッドロック検査は無効）:
   --actions A,B,...      対象の操作
@@ -175,8 +176,8 @@ fn usage(json: bool, message: impl Into<String>) -> Run {
 
 fn exit_code(body: &Value) -> i32 {
     match body["status"].as_str() {
-        Some("verified" | "sampled" | "valid") => EXIT_OK,
-        Some("violated" | "rejected") => EXIT_VIOLATED,
+        Some("verified" | "sampled" | "valid" | "refines") => EXIT_OK,
+        Some("violated" | "rejected" | "not_refines") => EXIT_VIOLATED,
         Some("inconclusive") => EXIT_INCONCLUSIVE,
         _ => EXIT_ERROR,
     }
@@ -211,7 +212,7 @@ const CONDITION_FLAGS: [&str; 4] = ["--actions", "--invariants", "--contracts", 
 type Command = fn(&Io, &Args) -> Result<Run, Run>;
 
 /// コマンドの一覧。[名前, 受け付けるオプション, 検査条件を受け付けるか, 実行する関数]。
-const COMMANDS: [(&str, &[&str], bool, Command); 6] = [
+const COMMANDS: [(&str, &[&str], bool, Command); 7] = [
     ("validate", &[], false, cmd_validate),
     (
         "check",
@@ -241,6 +242,12 @@ const COMMANDS: [(&str, &[&str], bool, Command); 6] = [
     ),
     ("replay", &["--allow-other-model"], false, cmd_replay),
     ("shrink", &["--trace-out", "--allow-other-model"], false, cmd_shrink),
+    (
+        "refine",
+        &["--max-states", "--max-depth", "--max-time-ms", "--actions"],
+        false,
+        cmd_refine,
+    ),
 ];
 
 /// コマンドが使わないオプションを拒否する。黙って無視すると、指定が効いたと誤解させる。
@@ -335,6 +342,16 @@ fn cmd_shrink(io: &Io, a: &Args) -> Result<Run, Run> {
     let trace = read(io, trace_path, a.json)?;
     let body = fmspec_api::shrink(&model, &trace, &Value::Object(a.options.clone())).map_err(|e| usage(a.json, e))?;
     save_trace(io, a, &body)?;
+    Ok(finish(a.json, body))
+}
+
+fn cmd_refine(io: &Io, a: &Args) -> Result<Run, Run> {
+    let [path] = a.positional.as_slice() else {
+        return Err(usage(a.json, "refine には詳細化の文書のファイルを1つ指定します"));
+    };
+    let text = read(io, path, a.json)?;
+    let r = fmspec_api::load_refinement(&text).map_err(|e| failure(a.json, "invalid_model", format!("{path}: {e}")))?;
+    let body = fmspec_api::refine(&r, &Value::Object(a.options.clone()), None).map_err(|e| usage(a.json, e))?;
     Ok(finish(a.json, body))
 }
 

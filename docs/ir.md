@@ -232,7 +232,16 @@ Tuple、Record、Optionの式も、中の整数は範囲を持たない。
 型はキー型に限る。
 
 `forall` は最初の偽で、`exists` は最初の真で打ち切る。
+本体の評価が失敗した値では打ち切らず、最初の失敗を保留して残りをたどる。
+後ろの値で打ち切れば、その値（`forall` では偽、`exists` では真）になる。
+たどり終えたとき、保留した失敗があれば、その失敗で量化が失敗する。
+なければ、`forall` は真、`exists` は偽である。
 たどる値がなければ、`forall` は真、`exists` は偽である。
+
+したがって、量化が失敗するかどうかと、成功したときの値は、たどる順に依らない。
+どの失敗を報告するかは、たどる順で最初の失敗である。
+例えば `forall x in {0, 1}: 10 / x < 5` は、`x = 0` での0による除算を保留し、`x = 1` で偽になる。
+`forall x in {0, 1}: 10 / x > 5` は、`x = 1` で真なので、保留した0による除算で失敗する。
 
 ### 複合型の値を作る式
 
@@ -273,6 +282,7 @@ Tuple、Record、Optionの式も、中の整数は範囲を持たない。
 
 演算子は、オペランドを記述順にすべて評価してから計算する。
 例外は、打ち切る演算（`all`、`any`、`implies`、`ite`）と量化で、これらは結果が決まったところで残りを評価しない。
+量化だけは、本体の失敗を保留して残りの評価を続ける（「量化」の節）。`all` と `any` は、オペランドの失敗をそのまま伝える。
 また、値を型の決まった場所に置く演算（Set、Map、Listのリテラル、`insert`、`put`、`push`）は、置く値を1つ評価するたびに、その値が型に属するかを検査する。
 `put` でキーが型に属さなければ、値の式は評価しない。
 複合型の値の `ite` も、選ばれた枝だけを評価する。
@@ -524,6 +534,48 @@ digest が違う証拠を指定により扱った結果には、証拠の `model
 結果の `model_digest` と、結果の `trace` の `model_digest` は今のモデルのものなので、`shrink --trace-out` で書き出したトレースは、指定なしで再生できる。
 digest が同じ証拠には、指定があっても `evidence_model_digest` を付けない。
 JSONとして読めない証拠と、版（`certificate_version`、`trace_version`）や `model_digest` の欠けた証拠は、digest を比べる前の誤りなので、指定があっても `evidence_model_digest` を付けない。
+
+## 対称性
+
+モデルの `symmetry` は、入れ替えても区別のない状態変数のブロックを宣言する。
+
+```json
+"symmetry": [[["w[0].pc", "w[0].seen"], ["w[1].pc", "w[1].seen"], ["w[2].pc", "w[2].seen"]]]
+```
+
+グループの配列で、グループはブロックの配列、ブロックは状態変数の名前の配列である。
+同じグループのブロックは同じ数の状態変数を持ち、同じ位置の状態変数は同じ型を持つ。1つの状態変数は1つのブロックにだけ現れる。
+読み込みは、隣り合うブロックの入れ替えごとに状態のスロットの置換を作り、各不変条件に、入れ替えの像を同じ名前の不変条件として加える。
+検査のオプション `symmetry`（既定は真）が真なら、判定ゲート `decide_symmetric` が、入れ替えがモデルの対称性であることを確かめてから、代表元の証明書を検査する。
+結果には `symmetry`（`groups` はグループごとのブロックの数、`swaps` は入れ替えの数）を加える。
+
+## 詳細化
+
+詳細化の検査（[dsl.md](dsl.md) の「詳細化の検査」）の文書は、2つのモデルと写像を持つ。
+
+```json
+{"ir_version": 1, "name": "counter_refines_atomic",
+ "concrete": {モデル}, "abstract": {モデル},
+ "mapping": [{"state": "count", "expr": 式}, {"state": "finished", "expr": 式}]}
+```
+
+`mapping` には、抽象モデルの状態変数ごとに1つ、`concrete` の状態の上の式を書く（不変条件と同じ文脈で、`var` だけを参照できる）。
+式の型は、その状態変数の型である。
+読み込むときは、両方のモデルの列挙型を、`concrete` の列挙型に `abstract` にしかないものを続けた列に揃える。
+同じ名前でラベルの違う列挙型は誤りである。
+
+CLIでは `fmspec refine 文書.json [--max-states N] [--max-depth N] [--max-time-ms N] [--actions A,B]` で検査する。
+結果は「検査の結果」と同じ形に、次のキーを加える。
+
+| キー | 内容 |
+|---|---|
+| `status` | `refines`、`not_refines`、`error`、`inconclusive`、`internal_error` |
+| `refinement`、`refinement_digest`、`concrete`、`abstract` | 文書と2つのモデルの名前 |
+| `property` | `not_refines` と `error` のとき。`violation` が `initial`、`step`（`action` は最後の遷移の操作）、`mapping`（`state` は失敗した抽象モデルの状態変数、`error` は失敗の種類）。具体モデルの評価エラーなら、トレースの主張と同じ形 |
+| `trace` | `initial`、`steps` は具体モデルのトレース。`initial_abstract` と各ステップの `abstract` は、写した抽象モデルの状態（写像が失敗すれば `null`） |
+| `reason` | `inconclusive` のとき。`max_states`、`max_depth`、`max_time_ms`、`interrupted`、`abstract_failed` |
+
+`max_check_cost` は、まだ詳細化の検査では使えない。
 
 ## 検査の結果
 

@@ -27,7 +27,7 @@ use crate::slots::{bin, cb, ci, defaults, eq, ite};
 #[cfg(verus_keep_ghost)]
 use crate::slots::{ite_s, lits};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_quant, eval_src, select_bits, src_bool, SEnv, TExpr};
+use crate::source::{eval_qstate, eval_src, qresult, select_bits, src_bool, QState, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
 use vstd::pervasive::arbitrary;
 use vstd::prelude::*;
@@ -702,28 +702,44 @@ pub proof fn lemma_select_prefix(dom: Seq<SVal>, m: nat, len: nat)
 
 // ---- 番号を順にたどる量化と、値を順にたどる量化 ----
 
-/// 正規順の列 `dom` のうち、`bits` の先頭 `n` 個で選んだ値をたどる量化の値。
-pub open spec fn qprefix(all: bool, dom: Seq<SVal>, bits: Seq<bool>, n: int, body: TExpr, se: SEnv, sls: Seq<SVal>) -> Result<
-    bool,
-    ErrKind,
-> {
-    eval_quant(all, select_bits(dom, bits.take(n)), body, se, sls)
+/// 正規順の列 `dom` のうち、`bits` の先頭 `n` 個で選んだ値をたどった量化の状態。
+pub open spec fn qprefix(all: bool, dom: Seq<SVal>, bits: Seq<bool>, n: int, body: TExpr, se: SEnv, sls: Seq<SVal>) -> QState {
+    eval_qstate(all, select_bits(dom, bits.take(n)), body, se, sls)
 }
 
-/// 1つ先の位置までの量化の値。選ばない位置では変わらず、選ぶ位置ではその値で本体を評価する。
+/// 状態に、本体を1つ評価した結果を加える。
+pub open spec fn qstep(all: bool, st: QState, r: Result<bool, ErrKind>) -> QState {
+    match st {
+        QState::Decided(b) => QState::Decided(b),
+        _ => match r {
+            Ok(b) => if b != all {
+                QState::Decided(b)
+            } else {
+                st
+            },
+            Err(k) => match st {
+                QState::Open => QState::Pending(k),
+                _ => st,
+            },
+        },
+    }
+}
+
+/// 値の決まっていない状態が保留している失敗。
+pub open spec fn qpend(st: QState) -> Option<ErrKind> {
+    match st {
+        QState::Pending(k) => Some(k),
+        _ => None,
+    }
+}
+
+/// 1つ先の位置までの量化の状態。選ばない位置では変わらず、選ぶ位置ではその値で本体を評価した結果を加える。
 proof fn lemma_qprefix_next(all: bool, dom: Seq<SVal>, bits: Seq<bool>, n: int, body: TExpr, se: SEnv, sls: Seq<SVal>)
     requires
         0 <= n < bits.len(),
     ensures
         qprefix(all, dom, bits, n + 1, body, se, sls) == if bits[n] {
-            match qprefix(all, dom, bits, n, body, se, sls) {
-                Err(k) => Err(k),
-                Ok(b) => if b != all {
-                    Ok(b)
-                } else {
-                    src_bool(eval_src(body, se, sls.push(dom[n])))
-                },
-            }
+            qstep(all, qprefix(all, dom, bits, n, body, se, sls), src_bool(eval_src(body, se, sls.push(dom[n]))))
         } else {
             qprefix(all, dom, bits, n, body, se, sls)
         },
@@ -753,7 +769,7 @@ proof fn lemma_qprefix_stuck(
 )
     requires
         0 <= n <= m <= bits.len(),
-        qprefix(all, dom, bits, n, body, se, sls) != Ok::<bool, ErrKind>(all),
+        qprefix(all, dom, bits, n, body, se, sls) is Decided,
     ensures
         qprefix(all, dom, bits, m, body, se, sls) == qprefix(all, dom, bits, n, body, se, sls),
     decreases m - n,
@@ -785,6 +801,7 @@ pub open spec fn q_step_ok(
 }
 
 /// 番号 `n..` をたどる量化の値は、先頭から選んだ値をたどる量化の値になる。
+/// 番号の量化が保留している失敗は、値の量化の状態が保留している失敗と同じである。
 pub proof fn lemma_qscan(
     all: bool,
     ty: Type,
@@ -802,11 +819,13 @@ pub proof fn lemma_qscan(
         ty is Int,
         0 <= n <= bits.len() <= 0x7fff_ffff,
         q_step_ok(all, qb, env, l, bits, dom, body, se, sls),
-        qprefix(all, dom, bits, n, body, se, sls) == Ok::<bool, ErrKind>(all),
+        !(qprefix(all, dom, bits, n, body, se, sls) is Decided),
     ensures
-        quant_l(all, ty, qb, env, l, n, bits.len() - 1) == lift_bool(qprefix(all, dom, bits, bits.len() as int, body, se, sls)),
+        quant_l(all, ty, qb, env, l, n, bits.len() - 1, qpend(qprefix(all, dom, bits, n, body, se, sls)))
+            == lift_bool(qresult(all, qprefix(all, dom, bits, bits.len() as int, body, se, sls))),
     decreases bits.len() - n,
 {
+    let st = qprefix(all, dom, bits, n, body, se, sls);
     if n < bits.len() {
         assert(decode(ty, n as i64) == Value::Int(n as i64));
         let s = as_bool(eval_l(qb, env, l.push(Value::Int(n as i64))));
@@ -816,12 +835,16 @@ pub proof fn lemma_qscan(
             Ok::<bool, ErrKind>(all)
         });
         lemma_qprefix_next(all, dom, bits, n, body, se, sls);
-        assert(qprefix(all, dom, bits, n + 1, body, se, sls) == s);
+        assert(qprefix(all, dom, bits, n + 1, body, se, sls) == qstep(all, st, s));
         if s == Ok::<bool, ErrKind>(all) {
+            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);
+        } else if s is Err {
             lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);
         } else {
             lemma_qprefix_stuck(all, dom, bits, n + 1, bits.len() as int, body, se, sls);
         }
+    } else {
+        assert(bits.take(n) =~= bits.take(bits.len() as int));
     }
 }
 

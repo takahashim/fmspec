@@ -53,6 +53,8 @@ pub enum Limit {
     MaxDepth,
     /// 時間の上限。
     MaxTime,
+    /// 詳細化の検査で、写した状態からの抽象モデルの遷移列挙が評価エラーになった。
+    AbstractFailed,
 }
 
 pub enum Evidence {
@@ -89,6 +91,16 @@ pub enum Reject {
     StepMismatch(usize),
     /// トレースは有効だが、末尾で主張どおりの事象が起きない。
     ClaimNotReproduced,
+    /// 証明書の状態（添字）か、その遷移先で、写像のスロット（添字）の評価が失敗する。
+    MappingFailed(usize, usize),
+    /// 証明書の状態（添字）からの操作（添字）の遷移が、抽象モデルの遷移にも、状態の変わらないステップにも写らない。
+    StepNotMapped(usize, usize),
+    /// 初期状態（添字）で、写像のスロット（添字）の評価が失敗する。
+    InitialMappingFailed(usize, usize),
+    /// 初期状態（添字）が、抽象モデルの初期状態に写らない。
+    InitialNotMapped(usize),
+    /// 宣言した入れ替え（添字）が、モデルと検査条件の対称性ではない。
+    NotSymmetric(usize),
 }
 
 } // verus!

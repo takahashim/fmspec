@@ -491,13 +491,19 @@ module ConcreteDsl
     yield values
   end
 
-  # forall は最初の偽で、exists は最初の真で打ち切る。本体の失敗はそのまま伝える。
+  # forall は最初の偽で、exists は最初の真で打ち切る。
+  # 本体の失敗は最初のものを保留して残りをたどり、打ち切る要素がなければその失敗を返す。
   def quantify(all, values)
+    pending = nil
     values.each do |x|
       r = lift(yield(x))
-      return r if r.err? || r.value != all
+      if r.err?
+        pending ||= r
+      elsif r.value != all
+        return r
+      end
     end
-    CVal.ok(T::BOOL, all)
+    pending || CVal.ok(T::BOOL, all)
   end
 
   # ---- 関数（仕様の定義と操作のブロックで使う） ----
