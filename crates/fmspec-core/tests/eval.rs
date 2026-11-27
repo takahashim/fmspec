@@ -185,3 +185,123 @@ fn ite_evaluates_only_the_chosen_branch() {
     assert_eq!(run(&ite(boolean(false), overflow(), int(2))), Ok(Value::Int(2)));
     assert_eq!(run(&ite(boolean(true), overflow(), int(2))), Err(ErrKind::Overflow));
 }
+
+#[test]
+fn division_rounds_toward_negative_infinity() {
+    let div = |a, b| run(&bin(BinOp::Div, int(a), int(b)));
+    let rem = |a, b| run(&bin(BinOp::Mod, int(a), int(b)));
+    // 商は負の無限大の方向に丸め、余りの符号は除数と同じになる（Ruby の `/` と `%`）。
+    for (a, b, q, r) in [
+        (7, 2, 3, 1),
+        (-7, 2, -4, 1),
+        (7, -2, -4, -1),
+        (-7, -2, 3, -1),
+        (-6, 3, -2, 0),
+        (0, -3, 0, 0),
+    ] {
+        assert_eq!(div(a, b), Ok(Value::Int(q)), "{a} / {b}");
+        assert_eq!(rem(a, b), Ok(Value::Int(r)), "{a} % {b}");
+    }
+    assert_eq!(div(1, 0), Err(ErrKind::DivByZero));
+    assert_eq!(rem(0, 0), Err(ErrKind::DivByZero));
+    // i64 の境界。実装は絶対値の符号なし除算で計算するので、両端の値で確かめる。
+    let (max, min) = (i64::MAX, i64::MIN);
+    assert_eq!(div(min, -1), Err(ErrKind::Overflow));
+    assert_eq!(rem(min, -1), Ok(Value::Int(0)));
+    assert_eq!(div(min, 1), Ok(Value::Int(min)));
+    assert_eq!(div(min, min), Ok(Value::Int(1)));
+    assert_eq!(rem(min, min), Ok(Value::Int(0)));
+    assert_eq!(div(min, max), Ok(Value::Int(-2)));
+    assert_eq!(rem(min, max), Ok(Value::Int(max - 1)));
+    assert_eq!(div(max, min), Ok(Value::Int(-1)));
+    assert_eq!(rem(max, min), Ok(Value::Int(-1)));
+    assert_eq!(div(max, -1), Ok(Value::Int(-max)));
+    assert_eq!(rem(min + 1, 2), Ok(Value::Int(1)));
+}
+
+#[test]
+fn let_binds_locals_by_depth_from_the_outermost() {
+    let let_ = |a, b| Expr::Let(Box::new(a), Box::new(b));
+    // `Local(0)` は最も外側の束縛、`Local(1)` はその内側の束縛。
+    assert_eq!(run(&let_(int(1), let_(int(2), Expr::Local(0)))), Ok(Value::Int(1)));
+    assert_eq!(run(&let_(int(1), let_(int(2), Expr::Local(1)))), Ok(Value::Int(2)));
+    assert_eq!(run(&let_(int(1), Expr::Local(1))), Err(ErrKind::Unbound));
+    assert_eq!(run(&Expr::Local(0)), Err(ErrKind::Unbound));
+    // 束縛は本体の外で見えない。
+    assert_eq!(
+        run(&bin(BinOp::Add, let_(int(1), Expr::Local(0)), Expr::Local(0))),
+        Err(ErrKind::Unbound)
+    );
+    // 束縛する値は、本体が使わなくても評価する。
+    assert_eq!(run(&let_(overflow(), boolean(true))), Err(ErrKind::Overflow));
+}
+
+#[test]
+fn quantifiers_visit_codes_in_ascending_order() {
+    let forall = |ty, lo, hi, body| Expr::Forall(ty, lo, hi, Box::new(body));
+    let exists = |ty, lo, hi, body| Expr::Exists(ty, lo, hi, Box::new(body));
+    let x = || Expr::Local(0);
+    let int_ty = Type::Int(i64::MIN, i64::MAX);
+    // 区間は両端を含む。
+    let ge = |lo| bin(BinOp::Ge, x(), int(lo));
+    assert_eq!(run(&forall(int_ty, 1, 3, ge(1))), Ok(Value::Bool(true)));
+    assert_eq!(run(&forall(int_ty, 1, 3, ge(2))), Ok(Value::Bool(false)));
+    assert_eq!(
+        run(&exists(int_ty, 1, 3, bin(BinOp::Eq, x(), int(3)))),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        run(&exists(int_ty, 1, 3, bin(BinOp::Eq, x(), int(4)))),
+        Ok(Value::Bool(false))
+    );
+    // 空の区間。
+    assert_eq!(run(&forall(int_ty, 1, 0, boolean(false))), Ok(Value::Bool(true)));
+    assert_eq!(run(&exists(int_ty, 1, 0, boolean(true))), Ok(Value::Bool(false)));
+    // 昇順にたどり、結果が決まった時点で止まる。後ろの値で起きるエラーは評価しない。
+    let fails_at = |k| {
+        Expr::Ite(
+            Box::new(bin(BinOp::Eq, x(), int(k))),
+            Box::new(overflow()),
+            Box::new(bin(BinOp::Lt, x(), int(1))),
+        )
+    };
+    assert_eq!(run(&forall(int_ty, 0, 2, fails_at(2))), Ok(Value::Bool(false)));
+    assert_eq!(run(&forall(int_ty, 0, 2, fails_at(1))), Err(ErrKind::Overflow));
+    assert_eq!(run(&exists(int_ty, -1, 2, fails_at(1))), Ok(Value::Bool(true)));
+    // 束縛する値は量化の型で復号する。
+    assert_eq!(run(&exists(Type::Bool, 0, 1, x())), Ok(Value::Bool(true)));
+    assert_eq!(run(&forall(Type::Bool, 0, 1, x())), Ok(Value::Bool(false)));
+    let is_label = |k| bin(BinOp::Eq, x(), Expr::Const(Value::Enum(0, k)));
+    assert_eq!(run(&exists(Type::Enum(0), 0, 2, is_label(2))), Ok(Value::Bool(true)));
+    // 本体が Bool でなければ型エラー。
+    assert_eq!(run(&forall(int_ty, 0, 0, x())), Err(ErrKind::TypeMismatch));
+    // i64 の上端で止まる（位置を進めるときにオーバーフローしない）。
+    let max = i64::MAX;
+    assert_eq!(run(&forall(int_ty, max - 1, max, ge(max - 1))), Ok(Value::Bool(true)));
+    assert_eq!(
+        run(&exists(int_ty, max, max, bin(BinOp::Eq, x(), int(max)))),
+        Ok(Value::Bool(true))
+    );
+    // 外側の局所変数の後ろに束縛する。
+    let nested = Expr::Let(
+        Box::new(int(5)),
+        Box::new(forall(int_ty, 0, 2, bin(BinOp::Lt, Expr::Local(1), Expr::Local(0)))),
+    );
+    assert_eq!(run(&nested), Ok(Value::Bool(true)));
+}
+
+#[test]
+fn code_and_fail() {
+    let code = |e| run(&Expr::Code(Box::new(e)));
+    assert_eq!(code(boolean(true)), Ok(Value::Int(1)));
+    assert_eq!(code(boolean(false)), Ok(Value::Int(0)));
+    assert_eq!(code(int(-4)), Ok(Value::Int(-4)));
+    assert_eq!(code(Expr::Var(2)), Ok(Value::Int(2)));
+    assert_eq!(code(overflow()), Err(ErrKind::Overflow));
+    assert_eq!(run(&Expr::Fail(Type::Bool, 7)), Err(ErrKind::Failed(7)));
+    // 左の失敗が先に伝播する。
+    assert_eq!(
+        run(&bin(BinOp::Add, Expr::Fail(Type::Int(0, 1), 3), overflow())),
+        Err(ErrKind::Failed(3))
+    );
+}
