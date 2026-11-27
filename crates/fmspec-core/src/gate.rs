@@ -81,6 +81,25 @@ impl CheckedModel {
         }
     }
 
+    /// 状態 `s` で操作 `a` を引数 `args`（公開引数と内部選択）で適用した結果を計算する。
+    /// 他の引数の評価に関係しないので、列挙が評価エラーになる状態でも、この引数の遷移を計算できる。
+    /// 操作が未定義か、状態が状態型に、引数が操作のドメインに従わなければ `None`。
+    pub fn apply(&self, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r: Option<StepR>)
+        ensures
+            r matches Some(x) ==> a < self@.actions@.len() && state_ok(self@, s@) && args_ok(self@, a as int, args@)
+                && x@ == step_spec(self@, a as int, args@, s@),
+    {
+        if a < self.raw.actions.len() && self.state_ok(s) && vals_ok_exec(
+            &self.raw.enums,
+            &self.raw.actions[a].domains,
+            args,
+        ) {
+            Some(step(&self.raw, a, args, s))
+        } else {
+            None
+        }
+    }
+
     /// 対象の不変条件を定義順に評価し、真でない最初のものと、その評価結果を返す。
     pub fn invariants(&self, c: &Conditions, s: &Vec<i64>) -> (r: Option<(usize, Result<bool, ErrKind>)>)
         ensures

@@ -530,6 +530,148 @@ fn shrunk_traces_keep_the_claim_and_no_single_step_can_be_removed() {
     assert!(shrunk > 30, "縮小できたトレースが少なすぎる: {shrunk}");
 }
 
+/// 引数と内部選択を持つグラフ。辺 `(from, to)` ごとに操作を1つ作り、公開引数 `d`（0から2）と内部選択 `c`（真偽値）を持たせる。
+/// `x == from` で有効になり、`x` を `(to + d + (c ? 1 : 0)) mod n` にする。
+/// ただし、`d` は添字が偶数の辺でだけ、`c` は添字が3の倍数の辺でだけ遷移先に効く（`uses`）。不変条件は `graph` と同じ。
+fn graph_with_args(n: i64, edges: &[(i64, i64)], bad: &[i64]) -> CheckedModel {
+    let bin = |op, a, b| Expr::Bin(op, Box::new(a), Box::new(b));
+    let actions = edges
+        .iter()
+        .enumerate()
+        .map(|(e, (from, to))| {
+            let d = if uses(e, 0) { Expr::Arg(0) } else { int(0) };
+            let c = if uses(e, 1) {
+                Expr::Ite(Box::new(Expr::Arg(1)), Box::new(int(1)), Box::new(int(0)))
+            } else {
+                int(0)
+            };
+            let sum = bin(BinOp::Add, bin(BinOp::Add, int(*to), d), c);
+            Action {
+                n_params: 1,
+                domains: vec![Type::Int(0, 2), Type::Bool],
+                guard: eq(Expr::Var(0), int(*from)),
+                updates: vec![Update {
+                    target: 0,
+                    expr: bin(BinOp::Mod, sum, int(n)),
+                }],
+                output: None,
+            }
+        })
+        .collect();
+    let invariants = bad
+        .iter()
+        .map(|b| Expr::Bin(BinOp::Ne, Box::new(Expr::Var(0)), Box::new(int(*b))))
+        .collect();
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, n - 1)],
+        inits: vec![vec![0]],
+        actions,
+        invariants,
+        contracts: vec![],
+        terminal: None,
+    };
+    validate(raw).expect("整形式のモデル")
+}
+
+/// 辺 `e` の `j` 番目の引数が遷移先に効くか。
+fn uses(e: usize, j: usize) -> bool {
+    if j == 0 {
+        e.is_multiple_of(2)
+    } else {
+        e.is_multiple_of(3)
+    }
+}
+
+/// 辺の添字と引数（`d`、`c` を 0/1 で）の列を、開始頂点から直接たどったトレースのステップ。無効な辺があれば `None`。
+fn walk_with_args(n: i64, edges: &[(i64, i64)], start: i64, taken: &[(usize, Vec<i64>)]) -> Option<Vec<TraceStep>> {
+    let mut at = start;
+    let mut steps = Vec::new();
+    for (e, args) in taken {
+        if edges[*e].0 != at {
+            return None;
+        }
+        let effect = |j: usize| if uses(*e, j) { args[j] } else { 0 };
+        at = (edges[*e].1 + effect(0) + effect(1)) % n;
+        steps.push(TraceStep {
+            action: *e,
+            args: args.clone(),
+            output: None,
+            state: vec![at],
+        });
+    }
+    Some(steps)
+}
+
+#[test]
+fn shrunk_traces_keep_the_claim_and_no_single_step_or_argument_can_be_reduced() {
+    let mut lowered = 0;
+    for seed in 0..300u64 {
+        let n = 4 + (seed % 7) as i64;
+        let edges = random_graph(seed, n, 3 + (seed % 8) as usize);
+        let bad = [n - 1];
+        let m = graph_with_args(n, &edges, &bad);
+        let cond = conditions(&m, false);
+        let opts = SimOptions {
+            seed,
+            traces: 20,
+            max_steps: 30,
+            interrupt: None,
+        };
+        let Ok(Some(Evidence::Trace(start, steps, claim))) = simulate(&m, &cond, &opts).evidence else {
+            continue;
+        };
+        assert_eq!(shrink(&m, &cond, &start, &steps, &claim, 0), steps, "seed {seed}");
+
+        let best = shrink(&m, &cond, &start, &steps, &claim, 10_000);
+        let accepted = |steps: Vec<TraceStep>| {
+            decide(&m, &cond, &Evidence::Trace(start.clone(), steps, claim.clone())).kind() == VerdictKind::Violated
+        };
+        assert!(accepted(best.clone()), "seed {seed}");
+        assert!(best.len() <= steps.len(), "seed {seed}");
+        // 結果は、独立にたどり直したトレースと一致する（状態は再計算されている）。
+        let taken: Vec<(usize, Vec<i64>)> = best.iter().map(|s| (s.action, s.args.clone())).collect();
+        assert_eq!(
+            walk_with_args(n, &edges, start[0], &taken),
+            Some(best.clone()),
+            "seed {seed}"
+        );
+        // 局所最小：どの1ステップを除いても、同じ主張のトレースにならない。
+        for i in 0..taken.len() {
+            let mut fewer = taken.clone();
+            fewer.remove(i);
+            if let Some(candidate) = walk_with_args(n, &edges, start[0], &fewer) {
+                assert!(!accepted(candidate), "seed {seed}: step {i} of {taken:?}");
+            }
+        }
+        // 局所最小：どの1ステップの1つの引数を、より小さい値に変えても、同じ主張のトレースにならない。
+        for i in 0..taken.len() {
+            for j in 0..2 {
+                for v in 0..taken[i].1[j] {
+                    let mut other = taken.clone();
+                    other[i].1[j] = v;
+                    if let Some(candidate) = walk_with_args(n, &edges, start[0], &other) {
+                        assert!(!accepted(candidate), "seed {seed}: step {i} arg {j} = {v} of {taken:?}");
+                    }
+                }
+            }
+        }
+        // 遷移先に効かない引数は、ドメインの最小の値まで小さくなる。
+        for (e, args) in &taken {
+            for j in 0..2 {
+                assert!(uses(*e, j) || args[j] == 0, "seed {seed}: {taken:?}");
+            }
+        }
+        if steps
+            .iter()
+            .any(|s| (0..2).any(|j| !uses(s.action, j) && s.args[j] != 0))
+        {
+            lowered += 1;
+        }
+    }
+    assert!(lowered > 30, "効かない引数が0でないトレースが少なすぎる: {lowered}");
+}
+
 // ---- 状態と遷移のグラフ（仕様書 §11.3）----
 
 #[test]
