@@ -7,18 +7,19 @@
 
 mod coverage;
 mod human;
+mod options;
 mod report;
 mod session;
 
 use fmspec_core::evidence::Evidence;
 use fmspec_core::gate::decide;
 use fmspec_core::gate::VerdictKind;
-use fmspec_core::semantics::Conditions;
-use fmspec_ir::{certificate_from_json, certificate_to_json, default_conditions, trace_from_json, LoadError};
+use fmspec_ir::{certificate_from_json, certificate_to_json, trace_from_json, LoadError};
 use fmspec_search::{
     check as search_check, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions, Status,
 };
-use serde_json::{json, Map, Value};
+use options::{conditions, count, flag, keys, max_states, options, size};
+use serde_json::{json, Value};
 use std::time::Instant;
 
 pub use coverage::{coverage, test_paths};
@@ -28,79 +29,6 @@ pub use session::Session;
 
 /// 中断要求の問い合わせ。真を返したら、探索か証明書の検査を打ち切って `inconclusive` を返す。
 pub type Interrupt<'a> = Option<&'a dyn Fn() -> bool>;
-
-const CONDITION_KEYS: [&str; 4] = ["actions", "invariants", "contracts", "deadlock"];
-
-pub(crate) fn options<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, String> {
-    let map = v.as_object().ok_or("オプションはオブジェクトです")?;
-    for key in map.keys() {
-        if !CONDITION_KEYS.contains(&key.as_str()) && !allowed.contains(&key.as_str()) {
-            return Err(format!("未知のオプション {key:?}"));
-        }
-    }
-    Ok(map)
-}
-
-fn select(
-    mask: &mut [bool],
-    wanted: Option<&Value>,
-    what: &str,
-    find: impl Fn(&str) -> Option<usize>,
-) -> Result<(), String> {
-    let Some(wanted) = wanted.filter(|v| !v.is_null()) else {
-        return Ok(());
-    };
-    let names = wanted
-        .as_array()
-        .ok_or_else(|| format!("{what}の指定は名前の配列です"))?;
-    mask.fill(false);
-    for name in names {
-        let name = name.as_str().ok_or_else(|| format!("{what}の指定は名前の配列です"))?;
-        match find(name) {
-            Some(i) => mask[i] = true,
-            None => return Err(format!("未定義の{what} {name:?}")),
-        }
-    }
-    Ok(())
-}
-
-/// オプションから検査条件を作る。省略した項目は、すべてが対象で、デッドロック検査は無効。
-pub(crate) fn conditions(model: &Model, map: &Map<String, Value>) -> Result<Conditions, String> {
-    let deadlock = match map.get("deadlock") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(_) => return Err("deadlock は真偽値です".to_string()),
-    };
-    let mut c = default_conditions(model, deadlock);
-    select(&mut c.actions, map.get("actions"), "操作", |n| {
-        model.names.action_index(n)
-    })?;
-    select(&mut c.invariants, map.get("invariants"), "不変条件", |n| {
-        model.names.invariant_index(n)
-    })?;
-    select(&mut c.contracts, map.get("contracts"), "遷移契約", |n| {
-        model.names.contract_index(n)
-    })?;
-    Ok(c)
-}
-
-pub(crate) fn count(map: &Map<String, Value>, key: &str, min: u64) -> Result<Option<u64>, String> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => match v.as_u64() {
-            Some(n) if n >= min => Ok(Some(n)),
-            _ => Err(format!("{key} は{min}以上の整数です（{v}）")),
-        },
-    }
-}
-
-fn flag(map: &Map<String, Value>, key: &str) -> Result<bool, String> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(false),
-        Some(Value::Bool(b)) => Ok(*b),
-        Some(_) => Err(format!("{key} は真偽値です")),
-    }
-}
 
 /// 結果をJSON文字列にする。オプションの誤りは、結果と同じ形（`status` が `usage_error`）で表す。
 pub fn to_text(result: Result<Value, String>) -> String {
@@ -136,12 +64,10 @@ pub fn load_error(e: &LoadError) -> Value {
 pub fn check(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
     let map = options(opts, &["max_states", "max_check_cost", "certificate"])?;
     let cond = conditions(model, map)?;
-    let max_states = count(map, "max_states", 1)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
-    let max_check_cost = count(map, "max_check_cost", 0)?;
     let opts = BfsOptions {
-        max_states,
+        max_states: max_states(map)?,
         interrupt,
-        max_check_cost,
+        max_check_cost: count(map, "max_check_cost", 0)?,
     };
     let outcome = search_check(model.checked(), &cond, &opts);
     let mut body = report::check_report(model, &cond, &outcome);
@@ -164,8 +90,8 @@ pub fn simulate(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
     let max_steps = count(map, "max_steps", 0)?.unwrap_or(100);
     let sim = SimOptions {
         seed,
-        traces: usize::try_from(traces).unwrap_or(usize::MAX),
-        max_steps: usize::try_from(max_steps).unwrap_or(usize::MAX),
+        traces: size(traces),
+        max_steps: size(max_steps),
         interrupt,
     };
     let started = Instant::now();
@@ -221,10 +147,7 @@ const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 /// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に記録する。
 /// オプションは `attempts`（試す候補の数の上限）。
 pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
-    let map = opts.as_object().ok_or("オプションはオブジェクトです")?;
-    if let Some(key) = map.keys().find(|k| k.as_str() != "attempts") {
-        return Err(format!("未知のオプション {key:?}"));
-    }
+    let map = keys(opts, &["attempts"])?;
     let attempts = count(map, "attempts", 1)?.unwrap_or(DEFAULT_SHRINK_ATTEMPTS);
     let trace = match trace_from_json(model, trace) {
         Ok(trace) => trace,
@@ -240,8 +163,7 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
     let Evidence::Trace(start, steps, claim) = evidence else {
         return Err("トレースではありません".to_string());
     };
-    let attempts = usize::try_from(attempts).unwrap_or(usize::MAX);
-    let shrunk_steps = search_shrink(model.checked(), &cond, &start, &steps, &claim, attempts);
+    let shrunk_steps = search_shrink(model.checked(), &cond, &start, &steps, &claim, size(attempts));
     let shrunk = Evidence::Trace(start, shrunk_steps, claim);
     let verdict = decide(model.checked(), &cond, &shrunk);
     let mut body = report::evidence_report(model, &cond, &shrunk, &verdict);

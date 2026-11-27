@@ -3,8 +3,9 @@
 //! どちらも、到達可能な状態と遷移のグラフ（`fmspec_search::explore`）を分母にする。
 //! モデルの検査ではないので、判定ゲートを通さず、`Verified` などの判定も返さない。
 
+use crate::options::{conditions, count, max_states, options, size};
 use crate::session::{inject_slots, input_json, parse_inject};
-use crate::{conditions, count, options, Interrupt};
+use crate::Interrupt;
 use fmspec_ir::{args_to_json, state_to_json, Model};
 use fmspec_search::{explore, test_paths as search_paths};
 use serde_json::{json, Value};
@@ -15,10 +16,6 @@ const MAX_UNCOVERED: usize = 20;
 
 /// 経路の最大入力数の既定値。
 const DEFAULT_MAX_STEPS: u64 = 20;
-
-fn max_states(map: &serde_json::Map<String, Value>) -> Result<Option<usize>, String> {
-    Ok(count(map, "max_states", 1)?.map(|n| usize::try_from(n).unwrap_or(usize::MAX)))
-}
 
 fn codes(v: &Value, what: &str) -> Result<Vec<i64>, String> {
     v.as_array()
@@ -123,8 +120,7 @@ pub fn coverage(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Val
 pub fn test_paths(model: &Model, opts: &Value, interrupt: Interrupt) -> Result<Value, String> {
     let map = options(opts, &["max_states", "max_steps", "inject"])?;
     let cond = conditions(model, map)?;
-    let max_steps = count(map, "max_steps", 1)?.unwrap_or(DEFAULT_MAX_STEPS);
-    let max_steps = usize::try_from(max_steps).unwrap_or(usize::MAX);
+    let max_steps = size(count(map, "max_steps", 1)?.unwrap_or(DEFAULT_MAX_STEPS));
     let injected = parse_inject(model, map.get("inject"))?;
     let slots = inject_slots(model, &injected);
     let found = search_paths(model.checked(), &cond, &slots, max_states(map)?, max_steps, interrupt);

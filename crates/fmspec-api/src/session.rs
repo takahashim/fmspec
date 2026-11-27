@@ -3,7 +3,7 @@
 //! Ruby 側のドライバが `setup`、`command`、`observe` を実行し、その結果の値だけをここに渡す。
 //! セッションは Ruby のコードを呼び出さない。
 
-use crate::conditions;
+use crate::options::{conditions, count, options, size};
 use fmspec_core::evidence::Claim;
 use fmspec_ir::{
     claim_to_json, output_to_json, output_value_from_json, state_to_json, value_from_json, value_to_json, Model,
@@ -112,10 +112,10 @@ impl Session {
     /// `observe`（観測する状態変数の名前。省略時はすべて）、
     /// `inject`（操作名から、注入する内部選択の名前の配列へのオブジェクト）、`max_candidates`。
     pub fn new(model: Arc<Model>, opts: &Value) -> Result<Session, String> {
-        let map = crate::options(opts, &["seed", "observe", "inject", "max_candidates"])?;
+        let map = options(opts, &["seed", "observe", "inject", "max_candidates"])?;
         let cond = conditions(&model, map)?;
-        let seed = crate::count(map, "seed", 0)?.unwrap_or(0);
-        let max = crate::count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);
+        let seed = count(map, "seed", 0)?.unwrap_or(0);
+        let max = count(map, "max_candidates", 1)?.unwrap_or(DEFAULT_MAX_CANDIDATES);
         let names = &model.names.states;
         let observed = match map.get("observe") {
             None | Some(Value::Null) => (0..names.len()).collect(),
@@ -136,9 +136,8 @@ impl Session {
             }
         };
         let injected = parse_inject(&model, map.get("inject"))?;
-        let max = usize::try_from(max).unwrap_or(usize::MAX);
         let slots: Vec<usize> = observed.iter().flat_map(|v| model.names.state_slots(*v)).collect();
-        let inner = fmspec_search::Session::new(cond, slots, inject_slots(&model, &injected), seed, max);
+        let inner = fmspec_search::Session::new(cond, slots, inject_slots(&model, &injected), seed, size(max));
         Ok(Session {
             model,
             inner,
