@@ -6,10 +6,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
 use fmspec_core::gate::{decide, validate, CheckedModel, VerdictKind};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
 use fmspec_core::semantics::Conditions;
+use fmspec_core::step::Site;
 use fmspec_search::{
     check, explore, sample, shrink, simulate, test_paths, BfsOptions, Outcome, ShrinkOptions, ShrinkStop, SimOptions,
     Status,
@@ -920,6 +922,99 @@ fn a_wide_domain_does_not_spend_the_attempts_before_other_arguments_are_lowered(
     assert_eq!(shrunk.steps, expected);
     // d より前の値をすべて試して局所最小を確かめるには候補が足りないので、打ち切ったことを報告する。
     assert_eq!((shrunk.attempts, shrunk.stopped), (10_000, Some(ShrinkStop::Attempts)));
+}
+
+/// 公開引数 `d`（0から3）と、遷移先に効かない内部選択 `e`（0から3）を持つ操作 `add` だけのモデル。`add` は `x` を `d` だけ増やす。
+fn add_with_choice(guard: Expr, contracts: Vec<Contract>) -> CheckedModel {
+    let raw = RawModel {
+        enums: vec![],
+        state_types: vec![Type::Int(0, 10)],
+        inits: vec![vec![0]],
+        actions: vec![Action {
+            n_params: 1,
+            domains: vec![Type::Int(0, 3), Type::Int(0, 3)],
+            guard,
+            updates: vec![Update {
+                target: 0,
+                expr: Expr::Bin(BinOp::Add, Box::new(Expr::Var(0)), Box::new(Expr::Arg(0))),
+            }],
+            output: None,
+        }],
+        invariants: vec![],
+        contracts,
+        terminal: None,
+    };
+    validate(raw).expect("整形式のモデル")
+}
+
+/// `add_with_choice` で、引数 `(d, e)` の列を初期状態からたどったトレース。
+fn adds_with_choice(args: &[(i64, i64)]) -> Vec<TraceStep> {
+    args.iter()
+        .scan(0, |x, (d, e)| {
+            *x += d;
+            Some(TraceStep {
+                action: 0,
+                args: vec![*d, *e],
+                output: None,
+                state: vec![*x],
+            })
+        })
+        .collect()
+}
+
+/// 主張が不変条件でない違反と評価エラーでも、引数を小さくし、後続のステップを再実行する。
+#[test]
+fn arguments_are_lowered_for_contract_deadlock_and_step_error_claims() {
+    let bin = |op, a, b| Expr::Bin(op, Box::new(a), Box::new(b));
+    let below_five = bin(BinOp::Lt, Expr::Var(0), int(5));
+    // 遷移契約：1回の遷移で2以上増えない。
+    let small_steps = Contract {
+        action: 0,
+        expr: bin(BinOp::Lt, bin(BinOp::Sub, Expr::Next(0), Expr::Var(0)), int(2)),
+    };
+    // x = 5 で guard の評価が0除算になる。x < 5 では真、x > 5 では偽。
+    let fails_at_five = bin(
+        BinOp::Ge,
+        bin(BinOp::Div, int(10), bin(BinOp::Sub, int(5), Expr::Var(0))),
+        int(0),
+    );
+    let cases = [
+        (
+            add_with_choice(Expr::Const(Value::Bool(true)), vec![small_steps]),
+            false,
+            Claim::Contract(0),
+            adds_with_choice(&[(1, 1), (3, 2)]),
+            // 前のステップを除き、d は違反する最小の2に、e は0になる。
+            adds_with_choice(&[(2, 0)]),
+        ),
+        (
+            add_with_choice(below_five, vec![]),
+            true,
+            Claim::Deadlock,
+            adds_with_choice(&[(3, 1), (3, 1)]),
+            // 1つ目の d を2にすると、2つ目のステップの遷移先が5になり、そこで止まる。
+            adds_with_choice(&[(2, 0), (3, 0)]),
+        ),
+        (
+            add_with_choice(fails_at_five, vec![]),
+            false,
+            Claim::StepError(0, vec![0, 0], Site::Guard, ErrKind::DivByZero),
+            adds_with_choice(&[(2, 3), (3, 1)]),
+            adds_with_choice(&[(2, 0), (3, 0)]),
+        ),
+    ];
+    for (m, deadlock, claim, steps, expected) in cases {
+        let cond = conditions(&m, deadlock);
+        let accepted = |steps: &[TraceStep]| {
+            let kind = decide(&m, &cond, &Evidence::Trace(vec![0], steps.to_vec(), claim.clone())).kind();
+            matches!(kind, VerdictKind::Violated | VerdictKind::Error)
+        };
+        assert!(accepted(&steps), "{claim:?}");
+        let shrunk = shrink(&m, &cond, &[0], &steps, &claim, &ShrinkOptions::attempts(10_000));
+        assert_eq!(shrunk.stopped, None, "{claim:?}");
+        assert_eq!(shrunk.steps, expected, "{claim:?}");
+        assert!(accepted(&shrunk.steps), "{claim:?}");
+    }
 }
 
 // ---- 状態と遷移のグラフ（仕様書 §11.3）----
