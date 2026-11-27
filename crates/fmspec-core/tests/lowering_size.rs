@@ -4,7 +4,8 @@
 
 use fmspec_core::encoding::SType;
 use fmspec_core::eval::{eval, Ctx};
-use fmspec_core::lowering::{lower_stored, Layout, LowerCtx};
+use fmspec_core::lower_ctx::{Layout, LowerCtx};
+use fmspec_core::lowering::lower_stored;
 use fmspec_core::model::{BinOp, Expr, Type, Value};
 use fmspec_core::source::TExpr;
 

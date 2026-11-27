@@ -429,7 +429,6 @@ pub proof fn lemma_ite_simple(
 
 /// スロットごとの束縛の、先頭 `k` 個の評価。
 #[verifier::spinoff_prover]
-#[verifier::spinoff_prover]
 pub proof fn lemma_ite_prefix(
     br: TExpr,
     f: Seq<Seq<Expr>>,
@@ -519,7 +518,11 @@ pub proof fn lemma_ite_prefix(
                     }
                     lemma_prefix_trans(l2, lj, lk);
                 },
-                Err(_) => {},
+                Err(kk) => {
+                    assert(eval_l(fj, env, lj) == Err::<Value, ErrKind>(kk));
+                    assert(eval_l(x, env, lj) == Err::<Value, ErrKind>(kk));
+                    assert(run(ite_binds(c, fa, fb, k), env, l2) == Err::<Seq<Value>, ErrKind>(kk));
+                },
             }
         }
     }
