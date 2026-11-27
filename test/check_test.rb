@@ -155,6 +155,46 @@ class CheckTest < Minitest::Test
     assert_equal shortest.to_h["steps"], model.shrink(shortest).trace.to_h["steps"]
   end
 
+  def test_evidence_for_another_model_is_checked_only_when_asked
+    old = TestModels.tickets(guarded: false)
+    trace = old.check.trace
+    # 不変条件を1つ加えた、別のモデル。トレースの検査条件は加えた不変条件を含まない。
+    new = Fmspec.define(:tickets) do
+      state :sold, int(0..4), initial: 0
+      action(:purchase, quantity: 1..2) { |s, quantity| update sold: s.sold + quantity }
+      action :cancel do |s|
+        guard s.sold > 0
+        update sold: s.sold - 1
+      end
+      invariant(:capacity_respected) { |s| s.sold <= 3 }
+      invariant(:nonnegative) { |s| s.sold >= 0 }
+    end
+    refute_equal old.digest, new.digest
+
+    refused = new.replay(trace)
+    assert_equal [:rejected, "unreadable"], [refused.status, refused.rejected["reason"]]
+    assert_nil refused.evidence_model_digest
+    assert_equal "unreadable", new.shrink(trace).rejected["reason"]
+
+    replayed = new.replay(trace, allow_other_model: true)
+    assert_equal :violated, replayed.status
+    assert_equal old.digest, replayed.evidence_model_digest
+    assert_equal new.digest, replayed.trace.to_h["model_digest"]
+    assert_equal :violated, new.replay(replayed.trace).status
+    assert_equal :violated, new.shrink(trace, allow_other_model: true).status
+
+    # 判定は今のモデルに対して行う。guard のあるモデルでは、この反例はたどれない。
+    guarded = TestModels.tickets.replay(trace, allow_other_model: true)
+    assert_equal [:rejected, "step_mismatch"], [guarded.status, guarded.rejected["reason"]]
+
+    certificate = TestModels.tickets.check(certificate: true).certificate
+    assert_equal "unreadable", old.verify_certificate(certificate).rejected["reason"]
+    checked = old.verify_certificate(certificate, allow_other_model: true)
+    assert_equal :rejected, checked.status
+    refute_equal "unreadable", checked.rejected["reason"]
+    assert_equal TestModels.tickets.digest, checked.evidence_model_digest
+  end
+
   def test_digest_identifies_the_model
     assert_equal TestModels.tickets.digest, TestModels.tickets.digest
     refute_equal TestModels.tickets.digest, TestModels.tickets(guarded: false).digest

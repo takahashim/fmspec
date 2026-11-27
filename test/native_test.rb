@@ -108,7 +108,8 @@ class NativeTest < Minitest::Test
     assert_raises(ArgumentError) { model.check }
     assert_equal "usage_error", JSON.parse(model.check('{"depth": 1}'))["status"]
     assert_equal "usage_error", JSON.parse(model.simulate("[]"))["status"]
-    assert_equal "rejected", JSON.parse(model.replay("{}"))["status"]
+    assert_equal "rejected", JSON.parse(model.replay("{}", "{}"))["status"]
+    assert_equal "usage_error", JSON.parse(model.replay("{}", '{"allow_other_model": 1}'))["status"]
     assert_equal "rejected", JSON.parse(model.verify_certificate("not json", "{}"))["status"]
     assert_raises(ArgumentError) { Fmspec::Native.format("not json") }
   end
