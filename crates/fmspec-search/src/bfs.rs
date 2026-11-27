@@ -197,6 +197,11 @@ where
             for t in transitions {
                 enabled = true;
                 stats.transitions += 1;
+                // 上限の深さの状態からの遷移は、何も報告せず、打ち切りを記録するだけである。
+                // 打ち切りが決まっていれば、遷移契約と訪問済みかを確かめる必要はない。
+                if at_limit && truncated {
+                    continue;
+                }
                 if let Some(claim) = contract_claim(model, cond, a, &state, &t.args, &t.state, &t.output) {
                     if at_limit {
                         truncated = true;
