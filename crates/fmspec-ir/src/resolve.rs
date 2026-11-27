@@ -24,6 +24,11 @@ use std::collections::HashSet;
 pub(crate) struct Fields(RefCell<Vec<String>>);
 
 impl Fields {
+    /// 番号の順のフィールドの名前。
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.0.borrow().clone()
+    }
+
     pub(crate) fn id(&self, name: &str) -> usize {
         let mut names = self.0.borrow_mut();
         match names.iter().position(|n| n == name) {

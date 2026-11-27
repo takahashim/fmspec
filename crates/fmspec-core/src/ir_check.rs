@@ -4,7 +4,6 @@
 //! [`lower_checked`] は、対応を確かめてからモデルを下ろす。
 
 use crate::encoding::SType;
-use crate::expr_copy::copy_expr;
 use crate::ir::*;
 use crate::model::{BinOp, Expr, RawModel, Value};
 use crate::model_lower::{lower_model_map, SMap};
@@ -366,23 +365,6 @@ fn is_nat(j: &Json, x: usize) -> (r: bool)
     }
 }
 
-fn nat_exec(j: &Json) -> (r: Option<u64>)
-    ensures
-        match r {
-            Some(n) => nat_of(*j) == Some(n as nat),
-            None => nat_of(*j) is None,
-        },
-{
-    match j {
-        Json::Int(n) => if *n >= 0 {
-            Some(*n as u64)
-        } else {
-            None
-        },
-        _ => None,
-    }
-}
-
 fn is_empty_obj(j: &Json) -> (r: bool)
     ensures
         r == empty_obj(*j),
@@ -698,6 +680,7 @@ pub fn check_ex(j: &Json, e: &TExpr, ns: &IrNames, np: usize, nc: usize, sc: &mu
 }
 
 /// リテラルと参照。
+#[allow(unused_variables)]
 fn check_leaf(
     j: &Json,
     k: &Vec<char>,
@@ -889,6 +872,7 @@ fn check_key(b: &Json, key: &str, e: &TExpr, ns: &IrNames, np: usize, nc: usize,
 }
 
 /// 演算子、`let`、量化。
+#[allow(unused_variables)]
 fn check_core(
     j: &Json,
     k: &Vec<char>,
@@ -1045,6 +1029,7 @@ fn check_over(b: &Json, over: &Over, ns: &IrNames, np: usize, nc: usize, sc: &mu
 }
 
 /// Tuple、Record、Option。
+#[allow(unused_variables)]
 fn check_struct(
     j: &Json,
     k: &Vec<char>,
@@ -1168,6 +1153,7 @@ fn check_field(j: &Json, id: usize, e: &TExpr, ns: &IrNames, np: usize, nc: usiz
 }
 
 /// Set、Map、Listのリテラル。
+#[allow(unused_variables)]
 fn check_lit(
     j: &Json,
     k: &Vec<char>,
@@ -1256,6 +1242,7 @@ fn check_lit(
 }
 
 /// Set、Map、Listの演算。
+#[allow(unused_variables)]
 fn check_coll(
     j: &Json,
     k: &Vec<char>,
@@ -1695,11 +1682,11 @@ fn check_binds(xs: &[Json], names: &Vec<Vec<char>>, tys: &Vec<SType>, off: usize
         return false;
     }
     let ghost ts = tys@.subrange(off as int, off + xs@.len());
-    let tl = tys.len();
+    let _tl = tys.len();
     let mut i = 0;
     while i < xs.len()
         invariant
-            tl == tys@.len(),
+            _tl == tys@.len(),
             i <= xs@.len(),
             xs@.len() == names@.len(),
             off + xs@.len() <= tys@.len(),
@@ -2117,4 +2104,3 @@ pub fn lower_checked(j: &Json, ns: &IrNames, sm: &SModel, maps: &Vec<SMap>) -> (
 }
 
 } // verus!
-

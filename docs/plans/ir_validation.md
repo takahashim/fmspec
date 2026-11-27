@@ -56,12 +56,15 @@
 注釈は中核の型付け `type_of` が検査し、型の付くモデルでは一意に決まる。
 この一意性を補題として示すかは、手順4で判断する。
 
-## 手順
+## 結果
 
-1. **JSONの木と名前の表**：中核に `Json`（`Null`、`Bool`、`Int(i64)`、`Str(Vec<char>)`、`Arr`、`Obj`）と `IrNames` を置く。`fmspec-ir` に `serde_json::Value` からの変換を置く。
-2. **関係の定義**：型の対応 `ty_rel`、式の対応 `ex_rel`（局所変数の名前の列を文脈に持つ）、モデルの対応 `ir_rel` を spec で書く。
-3. **検査の実装と証明**：`check_ty`、`check_ex`、`check_ir` を exec で書き、`true` なら関係が成り立つことを証明する。`load_checked` を置く。
-4. **一意性**：`ex_rel` が注釈を除いて式を一意に決めることを示す。可能なら、型の付く式では注釈も一意であることを示す。
-5. **組み込み**：`fmspec-ir` の `parse_value` で、`lower_model_map` の代わりに `load_checked` を通す。対応しなければ内部エラーにする。
-6. **テスト**：例のモデルと、ランダムに生成したIRがすべて通ることを確かめる。名前解決にわざと誤りを入れた `SModel` を拒否することを、単体テストで確かめる。
-7. **文書**：`docs/verification.md` の信頼基盤、`fmspec-ir` の冒頭の説明、変異と `assert(false)` を更新する。この計画書は結果の記録に書き換える。
+- 手順1〜3：`crates/fmspec-core/src/ir.rs` に `Json`、`IrNames` と、関係 `ty_rel`、`ex_rel`、`ir_rel` を置いた。`crates/fmspec-core/src/ir_check.rs` に検査 `check_ty`、`check_ex`、`check_ir` と、確かめてから下ろす `lower_checked` を置き、真を返すなら関係が成り立つことを証明した。
+  - 再帰の関係の量化子は、関係の適用でなく要素（`xs@[i]`）を引き金にする。関係の適用を引き金にすると、燃料を減らした定義の中の項と一致せず、展開できない。
+- 手順5：`fmspec-ir` の `parse_value` は、組み立て（`build`）のあと `lower_checked` で下ろす。対応しなければ内部エラー「名前を解決したモデルがIRと対応しません」にする。`serde_json::Value` から `Json` への変換と名前の表の組み立ては `fmspec-ir/src/ir_json.rs` にある。
+- 手順6：例のモデル、ランダムに生成したIR（`tests/random_ir.rs`）、既存のテストがすべて通る。`ir_json.rs` の単体テストは、状態変数、演算子、リテラル、引数と内部選択、局所変数、動的ドメイン、名前の表、定義の有無を取り違えたモデルを拒否することを確かめる。
+- 手順7：`docs/verification.md` の証明済みの性質と信頼基盤、`fmspec-ir` の冒頭の説明、変異と `assert(false)` を更新した。
+
+## 残っていること
+
+- **一意性（手順4）**：`ir_rel` が型の注釈を除いて `SModel` を一意に決めることは、まだ証明していない。定義を読めば、各構文が1つの構造に対応することは分かるが、補題にすれば `ir_rel` の定義の誤り（2通りに読める規則）を検出できる。
+- 受理の条件と、対称性、詳細化の写像は、`ir_rel` の外にある。

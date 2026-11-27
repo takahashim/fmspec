@@ -10,10 +10,14 @@
 //! JSONに書かれないので制約しない。注釈は中核の型付け（[`crate::infer::type_of`]）が検査する。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, stys, width_sum};
 use crate::encoding::SType;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{stys, width_sum};
+#[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Value};
+#[cfg(verus_keep_ghost)]
 use crate::smodel::{SAction, SModel};
+#[cfg(verus_keep_ghost)]
 use crate::source::{Over, SetOp, TExpr};
 use vstd::prelude::*;
 
