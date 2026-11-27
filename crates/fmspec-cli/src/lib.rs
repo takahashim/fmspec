@@ -126,6 +126,7 @@ fn parse_args(command: &str, allowed: &[&str], conditions: bool, args: &[String]
         certificate_out: None,
         trace_out: None,
     };
+    let mut seen: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -150,6 +151,12 @@ fn parse_args(command: &str, allowed: &[&str], conditions: bool, args: &[String]
         if !allowed.contains(&arg) && !(conditions && CONDITION_FLAGS.contains(&arg)) {
             return Err(format!("{command} は {arg} を受け付けません"));
         }
+        // 重ねた指定の後のほうだけを使うと、順序で結果が変わり、前の指定が効いたと誤解させる。
+        // `--json` は重ねても意味が変わらないので、上で受け付けている。
+        if seen.contains(&arg) {
+            return Err(format!("{arg} は1回だけ指定できます"));
+        }
+        seen.push(arg);
         // `--` で始まる語は値として読まない。`--trace-out --json` の `--json` を値として消費すると、
         // run が引数全体から判定する出力の形式と食い違う。
         let mut value = || -> Result<String, String> {

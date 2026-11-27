@@ -713,3 +713,57 @@ fn arguments_after_the_separator_are_files() {
     assert_eq!((code, out.as_str()), (2, ""));
     assert_eq!(err, "usage_error: validate にはモデルのファイルを1つ指定します\n");
 }
+
+#[test]
+fn an_option_given_twice_is_an_error() {
+    let f = files();
+    // 後の指定だけを黙って使うと、順序で結果が変わり、前の指定が効いたと誤解させる。
+    for (args, flag) in [
+        (
+            vec!["check", "tickets.json", "--max-states", "100000", "--max-states", "1"],
+            "--max-states",
+        ),
+        (
+            vec!["check", "noguard.json", "--actions", "purchase", "--actions", "cancel"],
+            "--actions",
+        ),
+        (
+            vec![
+                "check",
+                "noguard.json",
+                "--invariants",
+                "capacity_respected",
+                "--invariants",
+                "",
+            ],
+            "--invariants",
+        ),
+        (vec!["check", "noguard.json", "--deadlock", "--deadlock"], "--deadlock"),
+        (
+            vec![
+                "check",
+                "noguard.json",
+                "--trace-out",
+                "a.json",
+                "--trace-out",
+                "b.json",
+            ],
+            "--trace-out",
+        ),
+    ] {
+        let (code, body) = f.json(&args);
+        assert_eq!(
+            (code, &body["status"], &body["message"]),
+            (
+                2,
+                &json!("usage_error"),
+                &json!(format!("{flag} は1回だけ指定できます"))
+            ),
+            "{args:?}"
+        );
+    }
+    assert!(!f.has("a.json") && !f.has("b.json"));
+    // 出力の形式の指定は、重ねても意味が変わらないので受け付ける。
+    let (code, body) = f.json(&["check", "tickets.json", "--json"]);
+    assert_eq!((code, &body["status"]), (0, &json!("verified")));
+}
