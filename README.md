@@ -58,7 +58,7 @@ DSLの説明は [docs/dsl.md](docs/dsl.md) に、Railsアプリケーション�
 | `crates/fmspec-cli` | `fmspec` コマンド |
 | `fmspec-rails/` | Rails統合の別gem。DBの隔離、Active Job、リクエスト、時刻の固定 |
 | `vendor/nupur` | MakiriのNupurの写し。編集しない |
-| `reference/` | 比較テスト用のRubyの参照実装 |
+| `reference/` | 比較テスト用のRubyの参照実装と、IRからTLA+への変換 |
 | `examples/models/` | IRの例 |
 
 ## コマンド
@@ -82,12 +82,14 @@ IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
 rake compile       # native extension をビルドして lib/fmspec に置く
 rake test          # Rustのテスト、参照実装のテスト、参照実装との比較テスト、Rubyのテスト、fmspec-railsのテスト
 rake verus         # 中核の証明（rake verus:proof と同じ。変異と assert(false) の検査を除く）
+rake test:tlc      # TLA+に変換したモデルをTLCで検査した結果との比較（Javaが要る）
 rake verus:mutants # 変異と assert(false) が証明に失敗することの検査（すべて回すと数時間かかる）
 rake lint          # rustfmt と clippy
 rake nupur:check   # Nupurの写しが、固定したコミットの内容と一致することの検査
 rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 ```
 
+`rake test:tlc` は `rake test` に含めない。tla2tools.jar を環境変数 `TLA2TOOLS` で指定しなければ、固定したリリースを `tmp/tlc` に取得する。
 `rake test:rails` の前に、`fmspec-rails` で `bundle install` を実行しておく。
 `rake verus:mutants` は変種ごとに crate 全体を検証し直すので、証明を変えたときに、変えたファイルに絞って実行する（例：`VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants`）。
 `rake verus` には Verus 0.2026.11.02.8bf68ee が必要で、実行ファイルを環境変数 `VERUS` で指定する。
@@ -103,6 +105,7 @@ GitHub Actions（`.github/workflows/ci.yml`）で、上の検査を実行する�
 |---|---|
 | `rust` | `rake lint`、`rake nupur:check`、Rustのテスト、参照実装のテスト、参照実装との比較テスト |
 | `ruby` | native extension のビルドと Rubyのテスト。Ruby 3.3 と 4.0 |
+| `tlc` | TLCとの比較テスト。tla2tools.jar は `rakelib/tlc.rake` の `TLA2TOOLS_VERSION` のリリースを取得する |
 | `rails` | `fmspec-rails` のテスト。PostgreSQL を立て、分離レベル別のテストも skip させない |
 | `verus` | `rake verus:proof`（変異の検査を除いた証明）。Verus は `rakelib/verus.rake` の `VERUS_VERSION` のリリースを取得する |
 | `nupur` | `rake nupur:upstream` と `rake nupur:lint`。Makiri の固定コミット（`rakelib/nupur.rake` の `NUPUR_COMMIT`）を取得する |
