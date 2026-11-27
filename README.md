@@ -60,6 +60,7 @@ DSLの説明は [docs/dsl.md](docs/dsl.md) に、Railsアプリケーション�
 | `vendor/nupur` | MakiriのNupurの写し。編集しない |
 | `reference/` | 比較テスト用のRubyの参照実装と、IRからTLA+への変換 |
 | `examples/models/` | IRの例 |
+| `examples/tlaplus/` | tlaplus/Examples のTLA+の仕様の写しと、同じモデルをDSLで書いたもの。TLCとの比較に使う |
 
 ## コマンド
 
@@ -82,7 +83,7 @@ IRと出力の形式は [docs/ir.md](docs/ir.md) にある。
 rake compile       # native extension をビルドして lib/fmspec に置く
 rake test          # Rustのテスト、参照実装のテスト、参照実装との比較テスト、Rubyのテスト、fmspec-railsのテスト
 rake verus         # 中核の証明（rake verus:proof と同じ。変異と assert(false) の検査を除く）
-rake test:tlc      # TLA+に変換したモデルをTLCで検査した結果との比較（Javaが要る）
+rake test:tlc      # TLA+に変換したモデルと、第三者が書いたTLA+の仕様を、TLCで検査した結果との比較（Javaが要る）
 rake verus:mutants # 変異と assert(false) が証明に失敗することの検査（すべて回すと数時間かかる）
 rake lint          # rustfmt と clippy
 rake nupur:check   # Nupurの写しが、固定したコミットの内容と一致することの検査
