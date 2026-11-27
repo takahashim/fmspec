@@ -20,7 +20,7 @@
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
 //! - [`preserve_ops`]、[`preserve_tuple`]、[`preserve_list`]、[`preserve_set`]、[`preserve_map`]、[`preserve_quant`]：
-//!   演算子と条件式、Tuple と Option、List、Set、Map、量化の下ろしが意味を保存することの補題
+//!   演算子と `let` と条件式、Tuple と Record と Option、List、Set と大きさ、Map、量化の下ろしが意味を保存することの補題
 //! - [`limits`]：下ろしが大きさの理由で失敗しないための条件（仕様）
 //! - [`total`]：下ろしの全域性の仕様
 //! - [`total_check`]：下ろしの全域性の前提を、実行時に確かめる検査
