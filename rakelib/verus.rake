@@ -38,12 +38,13 @@ def verus_bin
 end
 
 def verus_code(path)
-  File.read(path).gsub(%r{/\*.*?\*/}m, "").lines.map { |l| l.sub(%r{//.*$}, "") }.join
+  File.read(path, encoding: Encoding::UTF_8).gsub(%r{/\*.*?\*/}m, "").lines.map { |l| l.sub(%r{//.*$}, "") }.join
 end
 
 # Verus を実行し、[成功したか, 検証した数, エラーの数, 出力] を返す。エラーの数が nil なら、検証まで進んでいない。
 def verus_run(dir)
   out, status = Open3.capture2e(verus_bin, "--crate-type=lib", File.join(dir, "src/lib.rs"))
+  out.force_encoding(Encoding::UTF_8)
   m = out.match(/verification results:: (\d+) verified, (\d+) errors/)
   [status.success?, m && m[1].to_i, m && m[2].to_i, out]
 end
@@ -205,6 +206,7 @@ VERUS_MUTANTS = [
   ["slots.rs", "let y = bin(BinOp::Le, copy_expr(&slots[0]), ci(*hi));", "let y = bin(BinOp::Lt, copy_expr(&slots[0]), ci(*hi));", "整数の型の上限を除く"],
   ["lowering.rs", "let r = lookup_rank(x, cx, sc, blk, &k)?;\n    let ghost b2", "let r = lookup_rank(x, cx, sc, blk, &v)?;\n    let ghost b2", "Mapのキーの番号を値の型で計算する"],
   ["lowering.rs", "out.push(bin(*op, x, y));", "out.push(bin(*op, y, x));", "比較の左右を入れ替える"],
+  ["lowering.rs", "let k = w - 1 - j;", "let k = w - j;", "条件式のスロットの深さを空の let で1つ余分に埋める"],
   ["lowering.rs", "out.push(not(x));", "out.push(x);", "否定を落とす"],
   ["lowering.rs", "out.push(bind(blk, Expr::Implies(Box::new(p), Box::new(q)))?);", "out.push(bind(blk, Expr::Or(Box::new(p), Box::new(q)))?);", "含意を論理和にする"],
   ["lowering.rs", "if all { Join::RawAnd } else { Join::RawOr }", "if all { Join::RawOr } else { Join::RawAnd }", "allとanyのたたみ方を入れ替える"],
@@ -323,6 +325,8 @@ VERUS_CANARIES = [
   ["lowering.rs", "            assert(ctx_ok(cx, sc2, env, se, l2, sls2));", "lemma_let の局所変数の対応"],
   ["lowering.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
   ["lowering.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
+  ["lowering.rs", "            lemma_pad_eval(k, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
+  ["lowering.rs", "                lemma_pads_closed(**a, *cx, sc0, top as nat, (d + j) as nat, k as nat, xty(tx), xa@);", "low_ite のスロットの束縛"],
   ["preserve.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["preserve.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
   ["lowering.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],
@@ -392,7 +396,7 @@ def verus_variant(name, file, description)
   FileUtils.mkdir_p(dir)
   FileUtils.cp_r(File.join(VERUS_CRATE, "src"), dir)
   path = File.join(dir, "src", file)
-  File.write(path, yield(File.read(path)))
+  File.write(path, yield(File.read(path, encoding: Encoding::UTF_8)))
   ok, verified, errors, out = verus_run(dir)
   if ok || errors.nil? || errors.zero?
     reason = errors.nil? && !ok ? "検証まで進まなかった" : "証明が通ってしまった"
@@ -427,10 +431,11 @@ namespace :verus do
   desc "Verus と、cargoビルドで使う vstd の版が、固定したものと一致することを確かめる"
   task :version do
     out, = Open3.capture2e(verus_bin, "--version")
+    out.force_encoding(Encoding::UTF_8)
     version = out[/Version: (\S+)/, 1]
     abort "verus: #{verus_bin} のバージョンは #{version.inspect}。固定したバージョンは #{VERUS_VERSION}" unless version == VERUS_VERSION
 
-    lock = File.read(File.join(ROOT, "Cargo.lock"))
+    lock = File.read(File.join(ROOT, "Cargo.lock"), encoding: Encoding::UTF_8)
     VERUS_CRATES.each do |name|
       found = lock.scan(/^name = "#{name}"\nversion = "([^"]+)"/).flatten
       abort "verus: Cargo.lock に #{name} がない" if found.empty?
@@ -455,7 +460,7 @@ namespace :verus do
       name = File.basename(path)
       next if name == "lib.rs"
 
-      code = File.read(path)
+      code = File.read(path, encoding: Encoding::UTF_8)
       inside = code.include?("verus! {")
       abort "verus: #{name} は証明の対象外のはずだが verus! ブロックがある" if VERUS_UNVERIFIED.include?(name) && inside
       next if VERUS_UNVERIFIED.include?(name)

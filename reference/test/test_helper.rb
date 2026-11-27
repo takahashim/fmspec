@@ -12,7 +12,7 @@ module Models
   module_function
 
   def tickets
-    JSON.parse(File.read(File.join(ROOT, "examples/models/tickets.json")))
+    JSON.parse(File.read(File.join(ROOT, "examples/models/tickets.json"), encoding: Encoding::UTF_8))
   end
 
   def tickets_without_guard
