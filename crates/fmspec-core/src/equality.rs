@@ -53,6 +53,20 @@ pub open spec fn smalls(ts: Seq<STy>) -> bool
     }
 }
 
+proof fn lemma_smalls_at(ts: Seq<STy>, i: int)
+    requires
+        smalls(ts),
+        0 <= i < ts.len(),
+    ensures
+        small(ts[i]),
+    decreases ts.len(),
+{
+    if i < ts.len() - 1 {
+        assert(ts.drop_last()[i] == ts[i]);
+        lemma_smalls_at(ts.drop_last(), i);
+    }
+}
+
 proof fn lemma_smalls(ts: Seq<STy>)
     requires
         forall|i: int| 0 <= i < ts.len() ==> small(#[trigger] ts[i]),
@@ -68,7 +82,7 @@ proof fn lemma_smalls(ts: Seq<STy>)
 /// 型の中のどのListも、長さの上限が `0x7fff_ffff` 以下かを判定する。
 pub fn small_stype(t: &SType) -> (r: bool)
     ensures
-        r ==> small(sty(*t)),
+        r == small(sty(*t)),
     decreases t,
 {
     match t {
@@ -95,9 +109,12 @@ fn small_stypes(_parent: &SType, ts: &Vec<SType>) -> (r: bool)
     requires
         decreases_to!(*_parent => *ts),
     ensures
-        r ==> smalls(stys(ts@)),
+        r == smalls(stys(ts@)),
     decreases _parent, 0nat,
 {
+    proof {
+        lemma_stys(ts@);
+    }
     let mut i = 0;
     while i < ts.len()
         invariant
@@ -110,6 +127,12 @@ fn small_stypes(_parent: &SType, ts: &Vec<SType>) -> (r: bool)
             vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
         }
         if !small_stype(&ts[i]) {
+            proof {
+                lemma_stys(ts@);
+                if smalls(stys(ts@)) {
+                    lemma_smalls_at(stys(ts@), i as int);
+                }
+            }
             return false;
         }
         i += 1;

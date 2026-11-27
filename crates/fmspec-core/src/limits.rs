@@ -6,7 +6,13 @@
 //! `fmspec-ir` の上限（幅が65536以下、Listの長さが1024以下）を満たす宣言の型は、この条件を満たす。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{width, width_sum, xwidth, xwidth_sum, STy, XTy};
+use crate::canon::lemma_fits_to;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{lemma_xwidth_of, to_xty, to_xtys, width, width_sum, xwidth, xwidth_sum, STy, XTy};
+#[cfg(verus_keep_ghost)]
+use crate::equality::{small, smalls};
+#[cfg(verus_keep_ghost)]
+use crate::preserve::{fits_all_s, fits_s, lemma_fits_all};
 use vstd::prelude::*;
 
 verus! {
@@ -125,6 +131,74 @@ pub proof fn lemma_xwidth_sum_prefix(ts: Seq<XTy>, enums: Seq<i64>, i: int)
         lemma_xwidth_sum_prefix(ts.drop_last(), enums, i);
     } else {
         assert(ts.take(i) =~= ts);
+    }
+}
+
+/// 格納の型から作った式の型は、その格納の型に合う。
+pub proof fn lemma_to_fits(t: STy)
+    ensures
+        fits_s(to_xty(t), t),
+    decreases t, 1nat,
+{
+    match t {
+        STy::Tuple(ts) => lemma_to_fits_seq(ts),
+        STy::Record(_, ts) => lemma_to_fits_seq(ts),
+        STy::Option(x) => lemma_to_fits(*x),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_to_fits_seq(ts: Seq<STy>)
+    ensures
+        fits_all_s(to_xtys(ts), ts),
+    decreases ts, 0nat,
+{
+    if ts.len() > 0 {
+        lemma_to_fits_seq(ts.drop_last());
+        lemma_to_fits(ts.last());
+        assert(to_xtys(ts).drop_last() == to_xtys(ts.drop_last()));
+    }
+}
+
+/// 合う型の幅は等しい。
+pub proof fn lemma_fits_width(t: XTy, st: STy, enums: Seq<i64>)
+    requires
+        fits_s(t, st),
+    ensures
+        xwidth(t, enums) == width(st, enums),
+{
+    lemma_fits_to(t, st);
+    lemma_xwidth_of(st, enums);
+}
+
+/// 上限を満たす型は、Listの長さの上限が小さい。
+pub proof fn lemma_lim_small(t: STy, enums: Seq<i64>)
+    requires
+        lim_s(t, enums),
+    ensures
+        small(t),
+    decreases t, 1nat,
+{
+    match t {
+        STy::Tuple(ts) => lemma_lim_smalls(ts, enums),
+        STy::Record(_, ts) => lemma_lim_smalls(ts, enums),
+        STy::Option(x) => lemma_lim_small(*x, enums),
+        STy::Map(_, v) => lemma_lim_small(*v, enums),
+        STy::List(e, _) => lemma_lim_small(*e, enums),
+        _ => {},
+    }
+}
+
+pub proof fn lemma_lim_smalls(ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        lim_ss(ts, enums),
+    ensures
+        smalls(ts),
+    decreases ts, 0nat,
+{
+    if ts.len() > 0 {
+        lemma_lim_smalls(ts.drop_last(), enums);
+        lemma_lim_small(ts.last(), enums);
     }
 }
 
