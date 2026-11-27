@@ -120,6 +120,25 @@ class JobTest < Minitest::Test
     assert_equal :charge, retried.steps.last.observation[:"job[0].pc"]
   end
 
+  # ワーカーのプロセスの停止では、perform の rescue も ensure も実行されず、接続は切れる。
+  # retry_on を通す crash: :exception では、ensure は実行される。
+  def test_a_killed_worker_does_not_run_ensure_and_loses_its_connection
+    JobApp.ensured = []
+    inputs = [[:"job[0].charge", {}], [:"job[0].crash", {}]]
+    result = NAIVE.test(binding_for(NAIVE, JobApp.job_class, crash: :kill), replay: inputs)
+    assert_equal :passed, result.status, result.to_s
+    assert_empty JobApp.ensured
+    connection = JobApp.connection
+    refute connection.active?
+    refute_includes JobRecord.connection_pool.connections, connection
+
+    result = NAIVE.test(binding_for(NAIVE, JobApp.job_class), replay: inputs)
+    assert_equal :passed, result.status, result.to_s
+    assert_equal 1, JobApp.ensured.length
+  ensure
+    JobApp.ensured = nil
+  end
+
   def test_job_bindings_are_validated
     assert_raises(Fmspec::BuildError) do
       Fmspec::Rails.bind(NAIVE, records: [JobOrder], isolation: :deletion) { job :other, JobApp.job_class }

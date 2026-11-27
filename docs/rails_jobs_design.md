@@ -142,9 +142,12 @@ end
 
 ### 6.2 `crash: :kill`
 
-止まっている `checkpoint` から、`Fmspec::Rails::Killed`（`Exception` の子）を上げる。
-`StandardError` を捕まえる `rescue`、`retry_on`、`discard_on` は動かない。
-Fiberが終われば、仕様が `crash: :restart` なら、取り出したジョブを同じ内容（`executions` を増やさない）でキューに戻す。
+止まっている `perform` を再開せずに捨てる。
+`rescue`、`retry_on`、`discard_on`、`ensure` のどれも動かない。
+Rubyは、再開しないまま回収したFiberの `ensure` を実行しない。
+`perform` が使っていたDBの接続は、接続プールから外して切る。
+接続は、`checkpoint` で止まる時点に、Fiberの中から全接続プールの現在の接続として記録しておく。
+そのあと、仕様が `crash: :restart` なら、取り出したジョブを同じ内容（`executions` を増やさない）でキューに戻す。
 `crash: :abort` なら戻さない。
 プログラムカウンタは、戻せば最初のステップ、戻さなければ `:crashed` である。
 
@@ -154,16 +157,24 @@ Fiberが終われば、仕様が `crash: :restart` なら、取り出したジ�
 どちらを仮定するかは、仕様の `crash:` で決める。
 再試行の回数を数えるのはバックエンドなので、`crash: :kill` は仕様の `max_crashes:` と組み合わせる。
 
-実際のSIGKILLと違い、`Killed` は `ensure` を実行する。
-`ensure` でロックを解放するコードは、本番では解放されないのに、テストでは解放される。
-トランザクションは `checkpoint` の外にしかないので（§3）、ロールバックの違いは起きない。
-この差は、`on_crash` で環境の変化を書くときに注意する点として、ドキュメントに書く。
+プロセスが止まると、Rubyのコードは何も実行されず、DBの接続が切れる。
+DBは、切れた接続のセッションのロック（PostgreSQLのadvisory lockなど）を解放し、確定していないトランザクションを捨てる。
+接続を切るのは、この振る舞いを実DBに起こさせるためである。
+接続をプールに返すだけだと、セッションが残り、ロックも残る。
+トランザクションは `checkpoint` の外にしかないので（§3）、捨てるトランザクションは普通はない。
+
+テストのプロセスは止まらないので、次の差は残る。
+
+- Rubyのプロセスの中の資源（`Mutex`、メモリ上のキャッシュ）は、捨てたFiberが持ったままになる。本番では、プロセスごと消える。`checkpoint` をまたいで `Mutex` を持つジョブでは、他のインスタンスが待たされ、`:step_timeout` になる。プロセスの間で共有するロックは、DBやRedisで持つ。
+- `ActiveSupport::CurrentAttributes` やexecutorの状態は、インスタンスのスレッドに残る。そのスレッドはクラッシュのあとで終わり、再起動は新しいスレッドで始まるので、次の実行には持ち越さない。
 
 ### 6.3 後始末
 
-どちらの方式でも、Fiberは `perform` の外まで巻き戻ってから終わる。
+`crash: :exception` では、Fiberは `perform` の外まで巻き戻ってから終わる。
+`crash: :kill` では、Fiberを捨てる。
 コアの `crash` の規則どおり、落ちたインスタンスの `teardown` は呼ばない。
-テストケースの終わりに `checkpoint` で止まったままの実行器は、`teardown` で `Killed` を上げて巻き戻す。
+テストケースの終わりに `checkpoint` で止まったままの実行器は、`teardown` で `Fmspec::Rails::Killed`（`Exception` の子）を上げて巻き戻す。
+これはクラッシュではなく後始末なので、`ensure` を実行してよい。
 
 ## 7. 既存の補助との関係
 
@@ -187,7 +198,6 @@ PostgreSQLのテストと違い、環境がなくてもskipしない。
 
 ## 9. 未決事項
 
-- `crash: :kill` で `ensure` が実行される差を、どこまで埋めるか。`Fiber` を `resume` せずに捨てれば `ensure` は実行されないが、DBの接続とトランザクションの状態が残る。
 - `retry_on` の `wait:` で予約した時刻を、`travel` と結び付けるか。いまの案では、時刻を見ずに取り出す。
 - ジョブが別のジョブを積む場合（`perform` の中の `perform_later`）に、積まれたジョブを別の `job` のインスタンスに結び付ける方法。`claim:` で足りるか。
 - `checkpoint` の名前と仕様のステップの対応を、テストの前に静的に検査できるか（Prismで `perform` を読む）。
@@ -201,3 +211,4 @@ PostgreSQLのテストと違い、環境がなくてもskipしない。
 - トランザクションの中かどうかは、`checkpoint` の時点で、Fiberの中から全接続プールの現在の接続を見て判定する。`isolation_level` が `:fiber` の構成でも、ジョブの接続を見るためである。
 - `crash: :exception` で上げた例外を、ジョブ自身が `rescue` して次の `checkpoint` まで進んだときは、そこをプログラムカウンタにする。仕様と食い違えば、観測の不一致になる。
 - `Checkpoints` を include していないジョブを `job` に結合すると、最初のステップで `CheckpointError` になる。
+- `crash: :kill` は、当初 `checkpoint` から `Killed` を上げていたが、それでは `ensure` が実行され、本番では起きない後始末がテストで起きた。`perform` を再開せずに捨て、DBの接続を切る方式に変えた（§6.2）。`fmspec-rails/test/job_test.rb` で、`ensure` が実行されないこと、接続が切れてプールから外れることを確かめる。

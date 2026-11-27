@@ -235,17 +235,18 @@ end
 クラッシュは、止まっている `checkpoint` から例外を上げる。
 
 - `crash: :exception` は、`error:` の例外を上げ、実装の `retry_on` と `discard_on` に処理させる。積み直されれば最初のステップ、例外が外へ出るか積み直されなければ `:crashed` になる。仕様の `crash: :restart` と `retries:` に対応する。
-- `crash: :kill` は、`Fmspec::Rails::Killed`（`Exception` の子）を上げる。`retry_on` は通らない。仕様が `:restart` ならジョブを同じ内容でキューに戻し（止まったワーカーのジョブを拾い直すバックエンド）、`:abort` なら戻さない。仕様の `max_crashes:` か `:abort` と組み合わせる。
+- `crash: :kill` は、ワーカーのプロセスの停止を模す。止まっている `perform` を再開せずに捨てるので、`rescue`、`retry_on`、`ensure` のどれも動かない。`perform` が使っていたDBの接続は切るので、DBはその接続のロックを解放する。仕様が `:restart` ならジョブを同じ内容でキューに戻し（止まったワーカーのジョブを拾い直すバックエンド）、`:abort` なら戻さない。仕様の `max_crashes:` か `:abort` と組み合わせる。
 
 `job[i].pc` を観測するので、実装の `retry_on attempts:` と仕様の `retries:` の食い違い、`retry_on` が捕まえない例外、`checkpoint` の書き落としは、観測の不一致になる。
 
-`Killed` は、実際のプロセスの停止と違い、`ensure` を実行する。
-`ensure` で行う後始末（ロックの解放など）は、本番では行われないのにテストでは行われる。
+テストのプロセスは止まらないので、`crash: :kill` のあとも、捨てた `perform` が持っていたRubyの資源（`Mutex` など）は残る。
+`checkpoint` をまたいで `Mutex` を持つジョブでは、他のインスタンスが待たされて `:step_timeout` になる。
+プロセスの間で共有するロックは、DBやRedisで持つ。
 
 `job` に結合したクラスのジョブを `perform_next_job` が取り出せば、`Fmspec::Rails::IsolationError` になる。
 `enqueued_jobs` は、`job` が取り出したジョブを含まない。
 
-テストは `fmspec-rails/test/job_test.rb` にある。
+テストは `fmspec-rails/test/job_test.rb` と `fmspec-rails/test/job_lock_test.rb`（PostgreSQLのadvisory lock）にある。
 `examples/crash/double_charge.rb` の仕様の反例を実装のジョブで再現し、`retry_on attempts:` の変異、`checkpoint` の誤りを検出する。
 ジョブはインスタンスのスレッドの接続で動くので、ファイルのSQLiteを使う。
 
