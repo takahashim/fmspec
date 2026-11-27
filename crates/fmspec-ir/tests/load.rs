@@ -117,6 +117,8 @@ fn duplicate_definitions_are_rejected() {
 #[test]
 fn type_errors_are_rejected() {
     assert!(schema_error(|ir| ir["states"][1]["initial"] = json!({"int": 0})).contains("初期値の型"));
+    let constant = json!([{"name": "k", "type": {"int": {"min": 0, "max": 3}}, "value": {"bool": true}}]);
+    assert!(schema_error(|ir| ir["constants"] = constant).contains("定数の値の型"));
     assert_eq!(
         invalid(|ir| ir["states"][0]["initial"] = json!({"int": 4})),
         InvalidModel::Initial(0)

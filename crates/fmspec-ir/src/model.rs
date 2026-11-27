@@ -173,10 +173,11 @@ pub(crate) fn invalid(reason: InvalidModel, message: String) -> LoadError {
 }
 
 /// 局所変数のない環境に置く値を名前解決する（初期値と定数）。値は中核の下ろしが評価する。
-fn stored_tree(ctx: &Ctx, v: &Value, path: &str, st: &SType) -> Result<TExpr, LoadError> {
+/// `what` は型の誤りのメッセージで、何の型が合わないかを言う。
+fn stored_tree(ctx: &Ctx, v: &Value, path: &str, st: &SType, what: &str) -> Result<TExpr, LoadError> {
     resolved(ctx.stored(v, path, st), |detail| LoadError::Schema {
         path: path.to_string(),
-        message: format!("初期値の型が状態変数の型と合いません（{detail}）"),
+        message: format!("{what}（{detail}）"),
     })
 }
 
@@ -551,7 +552,13 @@ fn parse_constants(items: &[Value], enums: &[EnumNames], fields: &Fields) -> Res
         unique(&mut seen, &name, &path, "定数")?;
         let ty = parse_type(required(c, &path, "type")?, &format!("{path}.type"), enums)?;
         let ctx = Ctx::closed(enums, &constants, fields);
-        let expr = stored_tree(&ctx, required(c, &path, "value")?, &format!("{path}.value"), &ty)?;
+        let expr = stored_tree(
+            &ctx,
+            required(c, &path, "value")?,
+            &format!("{path}.value"),
+            &ty,
+            "定数の値の型が定数の型と合いません",
+        )?;
         sconsts.push(SConst {
             ty: fields.stype(&ty),
             expr,
@@ -608,7 +615,7 @@ fn parse_states(items: &[Value], ctx: &Ctx) -> Res<States> {
         };
         let mut exprs = Vec::new();
         for (p, v) in &candidates {
-            exprs.push(stored_tree(ctx, v, p, &ty)?);
+            exprs.push(stored_tree(ctx, v, p, &ty, "初期値の型が状態変数の型と合いません")?);
         }
         out.inits.push(exprs);
         out.init_paths.push(candidates.into_iter().map(|(p, _)| p).collect());
