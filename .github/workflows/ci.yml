@@ -4,7 +4,7 @@
 #   ruby   rake compile、test:ruby（対応する Ruby の下限と開発版）
 #   tlc    rake test:tlc（TLA+ に変換したモデルを TLC で検査した結果との比較）
 #   rails  rake test:rails。PostgreSQL を立てて、分離レベル別のテストも skip させない
-#   verus  rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件）
+#   verus  rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件、使われない use）
 #   nupur  rake nupur:upstream、nupur:lint（Makiri の固定コミットと nupur_lints）
 #
 # 変異と assert(false) の検査（rake verus:mutants）は、変種ごとに crate 全体を検証し直すので数時間かかる。

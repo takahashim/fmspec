@@ -68,6 +68,7 @@ MBTの「応答と矛盾しない」は、観測するスロットの値の一�
 - 信頼する項目（`assume`、`admit`、`external_body`、`assume_specification` など）が `fmspec-core` に1つもない。
 - 証明の対象外のコードは `impls.rs`（標準トレイトの手書き実装）だけで、判定の経路から呼ばれない。
 - 公開関数が `requires` を持たない。
+- 使われない `use` がない（`rake verus:imports`）。ghost コードでだけ使う `#[cfg(verus_keep_ghost)]` の `use` は、cargoビルドでは消え、Verus も警告しないので、Verus に ghost コードを残した型検査だけを行わせ、`--force-warn unused_imports` で警告させる。
 
 `rake verus:mutants` は、さらに次を検査する。
 
