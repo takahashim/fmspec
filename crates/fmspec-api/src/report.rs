@@ -224,6 +224,11 @@ fn attach_outcome(body: &mut Value, model: &Model, cond: &Conditions, outcome: &
             body["rejected"] = reject_json(model, &outcome.evidence, *reject);
             body["message"] = json!("探索器が生成した証拠を判定ゲートが拒否しました。fmspec の不具合です");
         }
+        // 検証済みのモデルに対する判定ゲートはモデルを拒否しない（証明済み）ので、起きない。
+        Status::InternalError(Internal::InvalidModel(invalid)) => {
+            attach_evidence(body, model, cond, &outcome.evidence, seed);
+            body["message"] = json!(invalid_message(*invalid));
+        }
         _ => attach_evidence(body, model, cond, &outcome.evidence, seed),
     }
 }

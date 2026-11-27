@@ -8,11 +8,11 @@ use crate::bfs::{BfsOptions, Stats};
 use crate::check::Internal;
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
-use fmspec_core::evidence::{Certificate, Claim, Limit, Reject, TraceStep};
+use fmspec_core::evidence::{Certificate, Claim, Limit, TraceStep};
 use fmspec_core::gate::CheckedModel;
 use fmspec_core::model::Expr;
 use fmspec_core::refine::{
-    decide_refinement, find_move, map_state, Mapped, Move, RefClaim, RefEvidence, RefVerdict, RefVerdictKind,
+    decide_refinement, find_move, map_state, Mapped, Move, RefClaim, RefEvidence, RefVerdict, RefVerdictOutcome,
 };
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
@@ -214,16 +214,14 @@ fn search(
 
 /// 判定ゲートの判定を、検査結果に分類する。
 pub fn ref_status(verdict: &RefVerdict) -> RefStatus {
-    match verdict.kind() {
-        RefVerdictKind::Refines => RefStatus::Refines,
-        RefVerdictKind::NotRefines => RefStatus::NotRefines,
-        RefVerdictKind::Error => RefStatus::Error,
-        RefVerdictKind::Inconclusive => RefStatus::Inconclusive(verdict.limit().unwrap_or(Limit::Interrupted)),
-        RefVerdictKind::Rejected => RefStatus::InternalError(Internal::Rejected(
-            verdict.reject().unwrap_or(Reject::ClaimNotReproduced),
-        )),
-        // 読み込みは写像の式の数を揃えるので、ここには来ない。
-        RefVerdictKind::InvalidModel => RefStatus::InternalError(Internal::Rejected(Reject::ClaimNotReproduced)),
+    match verdict.outcome() {
+        RefVerdictOutcome::Refines => RefStatus::Refines,
+        RefVerdictOutcome::NotRefines => RefStatus::NotRefines,
+        RefVerdictOutcome::Error => RefStatus::Error,
+        RefVerdictOutcome::Inconclusive(limit) => RefStatus::Inconclusive(limit),
+        RefVerdictOutcome::Rejected(reject) => RefStatus::InternalError(Internal::Rejected(reject)),
+        // 具体モデルと抽象モデルは検証済みなので、写像の式の数が違うときに限る。読み込みは写像の式の数を揃えるので、起きない。
+        RefVerdictOutcome::InvalidModel => RefStatus::InternalError(Internal::InvalidMapping),
     }
 }
 
@@ -252,5 +250,27 @@ pub fn refine(b: &CheckedModel, cb: &Conditions, a: &CheckedModel, f: &Vec<Expr>
         stats,
         search_time,
         gate_time,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::{refine, RefStatus};
+    use crate::bfs::BfsOptions;
+    use crate::check::Internal;
+    use crate::inconsistency::tests::counter;
+    use fmspec_core::refine::RefVerdictKind;
+    use fmspec_ir::default_conditions;
+
+    #[test]
+    fn a_mapping_of_the_wrong_length_is_an_invalid_mapping_and_not_a_rejection() {
+        let m = counter();
+        let cond = default_conditions(&m, false);
+        // 抽象モデルの状態のスロットは1つなので、式のない写像は数が合わない。
+        let o = refine(m.checked(), &cond, m.checked(), &Vec::new(), &BfsOptions::default());
+        assert_eq!(o.verdict.kind(), RefVerdictKind::InvalidModel);
+        assert_eq!(o.status, RefStatus::InternalError(Internal::InvalidMapping));
     }
 }

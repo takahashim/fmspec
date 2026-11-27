@@ -177,6 +177,23 @@ pub enum VerdictKind {
     Rejected,
 }
 
+/// 判定と、その理由。[`Verdict::outcome`] が返す。理由のある判定は、理由を必ず持つ。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerdictOutcome {
+    /// 証明書を受理した。
+    Verified,
+    /// 違反に至るトレースを受理した。
+    Violated,
+    /// 評価エラーに至るトレースを受理した。
+    Error,
+    /// 証拠を得られなかった。理由を持つ。
+    Inconclusive(Limit),
+    /// モデルが整形式でない。モデルを拒否した理由を持つ。
+    InvalidModel(InvalidModel),
+    /// 証拠を拒否した。拒否の理由を持つ。
+    Rejected(Reject),
+}
+
 /// 判定。`decide` と `decide_raw` だけが構築する。
 pub struct Verdict {
     kind: VerdictKind,
@@ -186,6 +203,12 @@ pub struct Verdict {
 }
 
 impl Verdict {
+    /// 理由は、判定の種類に対応するものだけがある（`reasons_ok`）。
+    #[verifier::type_invariant]
+    spec fn reasons_match(self) -> bool {
+        self.reasons_ok()
+    }
+
     pub closed spec fn spec_kind(self) -> VerdictKind {
         self.kind
     }
@@ -241,7 +264,34 @@ impl Verdict {
         self.limit
     }
 
+    /// 判定と、その理由。理由のある判定（`Rejected`、`InvalidModel`、`Inconclusive`）は、その理由を持つ。
+    pub fn outcome(&self) -> (o: VerdictOutcome)
+        ensures
+            match o {
+                VerdictOutcome::Verified => self.spec_kind() is Verified,
+                VerdictOutcome::Violated => self.spec_kind() is Violated,
+                VerdictOutcome::Error => self.spec_kind() is Error,
+                VerdictOutcome::Inconclusive(l) => self.spec_kind() is Inconclusive && self.spec_limit() == Some(l),
+                VerdictOutcome::InvalidModel(e) => self.spec_kind() is InvalidModel && self.spec_invalid() == Some(e),
+                VerdictOutcome::Rejected(r) => self.spec_kind() is Rejected && self.spec_reject() == Some(r),
+            },
+    {
+        proof {
+            use_type_invariant(self);
+        }
+        match self.kind {
+            VerdictKind::Verified => VerdictOutcome::Verified,
+            VerdictKind::Violated => VerdictOutcome::Violated,
+            VerdictKind::Error => VerdictOutcome::Error,
+            VerdictKind::Inconclusive => VerdictOutcome::Inconclusive(self.limit.unwrap()),
+            VerdictKind::InvalidModel => VerdictOutcome::InvalidModel(self.invalid.unwrap()),
+            VerdictKind::Rejected => VerdictOutcome::Rejected(self.reject.unwrap()),
+        }
+    }
+
     fn of(kind: VerdictKind) -> (v: Verdict)
+        requires
+            !(kind is Rejected || kind is InvalidModel || kind is Inconclusive),
         ensures
             v.spec_kind() == kind,
             v.spec_reject() is None,

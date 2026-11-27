@@ -793,6 +793,23 @@ pub enum RefVerdictKind {
     Rejected,
 }
 
+/// 詳細化の判定と、その理由。[`RefVerdict::outcome`] が返す。理由のある判定は、理由を必ず持つ。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefVerdictOutcome {
+    /// 証明書を受理した。
+    Refines,
+    /// 詳細化が破れるトレースを受理した。
+    NotRefines,
+    /// 写像か具体モデルの評価エラーに至るトレースを受理した。
+    Error,
+    /// 証拠を得られなかった。理由を持つ。
+    Inconclusive(Limit),
+    /// モデルが整形式でないか、写像の式の数が抽象モデルの状態のスロットの数と違う。
+    InvalidModel,
+    /// 証拠を拒否した。拒否の理由を持つ。
+    Rejected(Reject),
+}
+
 /// 詳細化の判定。`decide_refinement` だけが構築する。
 pub struct RefVerdict {
     kind: RefVerdictKind,
@@ -801,6 +818,12 @@ pub struct RefVerdict {
 }
 
 impl RefVerdict {
+    /// 理由は、判定の種類に対応するものだけがある（`reasons_ok`）。
+    #[verifier::type_invariant]
+    spec fn reasons_match(self) -> bool {
+        self.reasons_ok()
+    }
+
     pub closed spec fn spec_kind(self) -> RefVerdictKind {
         self.kind
     }
@@ -843,7 +866,34 @@ impl RefVerdict {
         self.limit
     }
 
+    /// 判定と、その理由。理由のある判定（`Rejected`、`Inconclusive`）は、その理由を持つ。
+    pub fn outcome(&self) -> (o: RefVerdictOutcome)
+        ensures
+            match o {
+                RefVerdictOutcome::Refines => self.spec_kind() is Refines,
+                RefVerdictOutcome::NotRefines => self.spec_kind() is NotRefines,
+                RefVerdictOutcome::Error => self.spec_kind() is Error,
+                RefVerdictOutcome::Inconclusive(l) => self.spec_kind() is Inconclusive && self.spec_limit() == Some(l),
+                RefVerdictOutcome::InvalidModel => self.spec_kind() is InvalidModel,
+                RefVerdictOutcome::Rejected(r) => self.spec_kind() is Rejected && self.spec_reject() == Some(r),
+            },
+    {
+        proof {
+            use_type_invariant(self);
+        }
+        match self.kind {
+            RefVerdictKind::Refines => RefVerdictOutcome::Refines,
+            RefVerdictKind::NotRefines => RefVerdictOutcome::NotRefines,
+            RefVerdictKind::Error => RefVerdictOutcome::Error,
+            RefVerdictKind::Inconclusive => RefVerdictOutcome::Inconclusive(self.limit.unwrap()),
+            RefVerdictKind::InvalidModel => RefVerdictOutcome::InvalidModel,
+            RefVerdictKind::Rejected => RefVerdictOutcome::Rejected(self.reject.unwrap()),
+        }
+    }
+
     fn of(kind: RefVerdictKind) -> (v: RefVerdict)
+        requires
+            !(kind is Rejected || kind is Inconclusive),
         ensures
             v.spec_kind() == kind,
             v.spec_reject() is None,
