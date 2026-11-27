@@ -176,6 +176,63 @@ JSONの位置付きのメッセージを作るのも `fmspec-ir` である。
 - ランダムに生成したIRで、`fmspec-ir` が受理することと、中核の `check` と `limits_ok` が受理することが一致するかを調べるテストを加える。
 - 文書を更新する（「完了後に更新する文書」の節）。
 
+## 手順1の結果（棚卸し）
+
+`lowering.rs`、`smodel.rs`、`model_lower.rs` と、式を作る部品（`slots.rs`、`quant.rs`、`ranking.rs`、`map_lookup.rs`、`canon.rs`、`equality.rs`、`map_encoding.rs`）で、下ろしが `None` か `Err` を返す箇所を調べた。
+`ranking.rs` と `map_lookup.rs` の `Err(ErrKind::...)` は、評価の意味論（spec関数の値）であり、下ろしの失敗ではないので除いた。
+
+### 失敗の分類
+
+| 分類 | 主な箇所 | 型の合うモデルで起きるか |
+|---|---|---|
+| 型の不一致 | `sub_scalar`、`bool_in` の型、`element`・`element_rank`・`lookup_rank` の `fits`、`low_leaf` の参照（状態のない文脈の `Var`、`next` のない文脈の `Next` と `Out`、添字の範囲外、範囲外の列挙型のラベル）、`low_core` の演算子と `Eq` の型、`low_struct` の `Nth`・`Field`・`IsSome`・`Unwrap`、`low_quant` のたどる値の型、`low_coll`・`low_access`・`low_get` の型と注釈の `stype_eq`、空の `Tuple` | 起きない（`type_of` が同じ条件で拒否する）。手順4で示す |
+| 内部の整合性 | スロットの数の検査（`slots.len() != 1`、`s.len() == 0`、`cs.len() != n`、`at >= cs.len()`、`xs.len() != ys.len()`、`j >= xa.len()`）、`split`・`select`・`heads`・`ite_rows`・`list_parts`・`map_rows`・`eq_slots`・`store`・`rank_expr`・`mixed`・`unrank`・`map_slot_indices`・`encode_map_rows` の長さの検査、`ite_slots` の `pure_exec`、`eval_slots` と `eval_stored` の長さ | 起きない。スロットの数が型の幅と等しいこと（手順3）と、スロットの式が純粋であることから従う |
+| 大きさ（中核の定数から従う） | キーの数が `0x7fff_ffff` 以下（`low_quant`、`low_set_lit`、`Size` の Map、`Delete` の行の数、`HasKey` と `Keys` の `present`）、`select` の行の数、`ranking.rs` の `append_rank_digit` | 起きない。中核の `keys` は `MAX_KEYS` = 4096 以下でしか `Some` にならない |
+| 大きさ（中核の定数から従わない） | Listの長さの上限が `0x7fff_ffff` 以下（`At`、`First`、`Last`、`ListContains`、`List` をたどる量化、`Size` の List、`eq_slots` の `small_stype`）、`ListLit` の要素の数が `0x7fff_ffff` 以下 | `limits_ok` に入れる。`fmspec-ir` の `MAX_LIST` = 1024 で満たされる |
+| 算術のオーバーフロー | `stype_width`・`xtype_width` の幅、`layout_slots` と `layouts_of` の位置、`split` の `at + w`、`list_parts` の `p * w + 1 + w`、`map_rows` と `low_quant` の `j * stride`、`k * w + 1 + j`、`push_block` の `off + j`、`arg_exprs` | `limits_ok` に入れる。式に現れるすべての型の幅が `usize` に十分収まること |
+| 束縛の深さ | `bind`（深さ + 1 が `usize::MAX`）、`new_block`（深さが `usize::MAX`）、`low_quant` の `d.checked_add(1)`、これらを呼ぶ `atom`・`atoms`・`check`・`keep` | 型と大きさの条件だけでは除けない（下の「見つかった問題」） |
+| 値による誤り | `Const(i, Eval)`、`Init(i, j, Eval)`、`Constraint(Eval)`、`NoInit`、候補の組が `MAX_INITIAL_CANDIDATES` を超える `InitCount`、`eval_slots` の範囲外の値 | 利用者の誤り |
+
+### `LowerError` の各変種
+
+| 変種 | 原因 | 区分 |
+|---|---|---|
+| `State(i)`、`Args(a, i)` | 状態変数と引数の型の `wf_stype`・`small_stype`（`check_types`）、位置の和のオーバーフロー（`layouts_of`）、`guard_fold` の正規形の判定の失敗 | 内部（`fmspec-ir` が型を先に検査する） |
+| `Const(i, Lower)`、`Init(i, j, Lower)`、`Constraint(Lower)` | 下ろしの失敗 | 内部 |
+| `Const(i, Eval)`、`Init(i, j, Eval)`、`Constraint(Eval)` | 評価の失敗 | 利用者 |
+| `InitCount` | 初期値の候補の列の数が状態変数の数と違う | 内部。分ける |
+| `InitCount` | 候補の組の数が `MAX_INITIAL_CANDIDATES` を超える、または `usize` に収まらない | 利用者。分ける |
+| `NoInit` | 初期条件を満たす初期状態がない | 利用者 |
+| `Guard(a)`、`Invariant(i)`、`Contract(k)`、`Terminal` | 下ろしの失敗 | 内部 |
+| `Update(a, u)` | 状態のない文脈、代入先の添字の範囲外、下ろしの失敗、空のスロット、`push_block` のオーバーフロー | 内部 |
+| `Output(a)` | 出力の型がスカラーでない、下ろしの失敗、スロットが1つでない | 内部（`model_typed` が出力の型をスカラーに限る） |
+
+### `type_of` との突き合わせ
+
+- 下ろしの方が緩い箇所がある。`Field` はフィールドの名前を確かめず、`Record` は名前の重複を確かめない。`type_of` の方が厳しいので、全域性の妨げにはならない。
+- 下ろしは要素の型を `fits(t, st)` で確かめ、`type_of` は `type_of(x) == to_xty(st)` を要求する。`fits_s(to_xty(st), st)` の補題が要る。
+- `type_of` が返す型が整形式であること（文脈の型が整形式なら `wf_xtype`）を示す補題が要る。Setの要素の `keys` が `Some` であること、Listの要素の幅などを、型から引き出すためである。
+- `check` は、目で見た限り `type_of` と同じ条件で拒否する。完全性（型の付く式を拒否しないこと）は手順2で証明する。
+
+### `fmspec-ir` の上限との突き合わせ
+
+- 宣言と注釈の型は、すべて `parse_type` を通るので、幅が `MAX_WIDTH` = 65536 以下、Listの長さの上限が `MAX_LIST` = 1024 以下、キーの数が `MAX_KEYS` = 4096 以下である。中核の条件はこれより緩いので、`fmspec-ir` が受理した型を中核が大きさの理由で拒否することはない。
+- 一方、式の途中の型（`Tuple`、`Record`、`Some` で組み立てた型）の幅は、`fmspec-ir` が検査しない。宣言の型の幅の和で抑えられるが、`limits_ok` は型だけでなく式の形にもよる条件になる。
+- 中核の `MAX_KEYS` と `fmspec-ir` の `MAX_KEYS` は同じ値（4096）で、別々に定義されている。
+
+### 見つかった問題
+
+1. **束縛の深さは、型と大きさの条件では除けない。**
+   `bind` は深さが `usize::MAX` に近いと `None` を返す。
+   深さは下ろす式の大きさで決まり、`Vec` の長さが実際には `usize::MAX` に届かないことを、Verusは仮定なしでは示せない。
+   全域性の定理には、次のどちらかが要る。
+   - (A) 下ろしの失敗を「型」と「深さ」に分ける。`low` などの戻り値を `Result<_, Fail>`（`Fail::Type` と `Fail::Depth`）にし、定理を「型が付き `limits_ok` が成り立つなら、`Fail::Type` を返さない」にする。`Fail::Depth` は資源の上限として、利用者向けの誤り（式が大きすぎる）にする。`lowering.rs` の失敗の箇所（約240）を機械的に書き換える。
+   - (B) 下ろしが加える束縛の数の上限を spec関数で定め、前提に「深さ + 上限 < `usize::MAX`」を加える。戻り値の型は変えないが、各場合で束縛の数を数える証明が要り、手順4と同じくらいの量になる。
+   (A) を推す。数える証明が要らず、深さの上限に達した場合も内部エラーにならない。
+2. **`low_ite` は、枝に束縛があると、スロットごとに枝を下ろし直す**（`closed_in` をスロットの数だけ呼ぶ）。
+   入れ子の `ite` で、下ろしの時間と式の大きさが入れ子の深さに対して指数的に増えうる。
+   正しさの問題ではないので、この計画では扱わず、別に記録する。
+
 ## 各段階の確認
 
 各段階の終わりに次を通す。
