@@ -194,7 +194,7 @@ fn load_model(io: &Io, path: &str, json: bool) -> Result<Model, Run> {
 }
 
 fn write_file(io: &Io, path: &str, body: &Value, json: bool) -> Result<(), Run> {
-    (io.write)(path, &pretty(body)).map_err(|e| failure(json, "input_error", format!("{path}: {e}")))
+    (io.write)(path, &pretty(body)).map_err(|e| failure(json, "output_error", format!("{path}: {e}")))
 }
 
 /// 検査条件のオプション。

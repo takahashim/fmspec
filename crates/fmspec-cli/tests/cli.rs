@@ -444,9 +444,10 @@ fn a_failed_write_is_an_error() {
     let read = |_: &str| Ok(model.clone());
     let write = |_: &str, _: &str| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
     let run = fmspec_cli::run(&args, &read, &write);
-    // 違反を見つけても、書き出せなければ終了コード2にする。
+    // 違反を見つけても、書き出せなければ終了コード2にする。入力の誤りとは区別する。
     assert_eq!(run.code, 2);
     let body: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(body["status"], json!("output_error"), "{body}");
     assert!(body["message"].as_str().unwrap().starts_with("out.json: "), "{body}");
 }
 
