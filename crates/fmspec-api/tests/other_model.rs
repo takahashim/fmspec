@@ -208,3 +208,44 @@ fn allow_other_model_is_a_boolean() {
     // check と simulate は証拠を読まないので、受け付けない。
     assert!(check(&m, &json!({"allow_other_model": true}), None).is_err());
 }
+
+/// 状態変数 `x`（`0..=4`、初期値0）と、`x` に引数 `d`（`0..=2`）を足す操作 `add`、不変条件 `small`（`x <= 2`）を持つモデル。
+fn adder(edit: impl FnOnce(&mut Value)) -> Model {
+    let mut ir = json!({
+        "ir_version": 1,
+        "name": "adder",
+        "states": [{"name": "x", "type": {"int": {"min": 0, "max": 4}}, "initial": {"int": 0}}],
+        "actions": [{
+            "name": "add",
+            "params": [{"name": "d", "type": {"int": {"min": 0, "max": 2}}}],
+            "updates": [{"target": 0, "expr": {"add": [{"var": 0}, {"param": 0}]}}]
+        }],
+        "invariants": [{"name": "small", "expr": {"le": [{"var": 0}, {"int": 2}]}}]
+    });
+    edit(&mut ir);
+    load(&ir.to_string()).unwrap()
+}
+
+#[test]
+fn shrinking_evidence_for_another_model_also_makes_arguments_smaller() {
+    let old = adder(|_| {});
+    let new = adder(with_reset);
+    assert_ne!(old.digest, new.digest);
+    let step = |d: i64, x: i64| json!({"action": "add", "args": {"d": d}, "choices": {}, "output": {"unit": true}, "state": {"x": x}});
+    let trace = json!({
+        "trace_version": 1,
+        "model_digest": old.digest,
+        "seed": null,
+        "conditions": {"actions": ["add"], "invariants": ["small"], "contracts": [], "deadlock": false},
+        "initial": {"x": 0},
+        "steps": [step(2, 2), step(2, 4)],
+        "claim": {"violation": "invariant", "name": "small"}
+    });
+    // どちらのステップを削っても x は 2 以下だが、最初の引数を 1 にしても違反は残る。
+    let body = shrink(&new, &trace.to_string(), &allow()).unwrap();
+    assert_eq!(body["status"], "violated", "{body}");
+    assert_eq!(body["trace"]["steps"], json!([step(1, 1), step(2, 3)]));
+    assert_eq!(body["original_steps"], 2);
+    assert_eq!(body["evidence_model_digest"], json!(old.digest));
+    assert_eq!(body["trace"]["model_digest"], json!(new.digest));
+}
