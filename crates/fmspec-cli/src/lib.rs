@@ -105,9 +105,16 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         if arg.starts_with("--") && arg != "--json" && !parsed.flags.iter().any(|f| f == arg) {
             parsed.flags.push(arg.to_string());
         }
+        // `--` で始まる語は値として読まない。`--trace-out --json` の `--json` を値として消費すると、
+        // run が引数全体から判定する出力の形式と食い違う。
         let mut value = || -> Result<String, String> {
-            i += 1;
-            args.get(i).cloned().ok_or_else(|| format!("{arg} には値が必要です"))
+            match args.get(i + 1) {
+                Some(next) if !next.starts_with("--") => {
+                    i += 1;
+                    Ok(next.clone())
+                }
+                _ => Err(format!("{arg} には値が必要です")),
+            }
         };
         match arg {
             "--json" => parsed.json = true,
@@ -335,6 +342,8 @@ pub fn run(
     if command == "--version" {
         return Run::stdout(EXIT_OK, format!("fmspec {}\n", env!("CARGO_PKG_VERSION")));
     }
+    // parse_args は `--json` を値として消費しないので、引数の解析に失敗したときも、成功したときの
+    // `Args::json` と同じ形式になる。
     let json = rest.iter().any(|a| a == "--json");
     let parsed = match parse_args(rest) {
         Ok(a) => a,
