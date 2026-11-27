@@ -1,0 +1,271 @@
+//! Arrays, Hashes, Ranges and numbers (`build` spells some of these for a caller).
+
+use super::*;
+
+/// `rb_ary_new_capa`: raises `NoMemoryError`.
+#[inline]
+pub(crate) fn ary_new_capa(_: &Ruby, capa: usize) -> Result<RArray, Error> {
+    let n = crate::int::capacity(capa);
+    let v = call_allocating(|inside| unsafe { nupur_sys::raising::rb_ary_new_capa(inside, n) })?;
+    typed(v, RArray::from_value, "a C call made no Array")
+}
+
+/// `rb_ary_push`: raises `NoMemoryError`, and `FrozenError` for a frozen
+/// Array.
+#[inline]
+pub(crate) fn ary_push(a: RArray, v: Value) -> Result<(), Error> {
+    let (a, v) = (a.as_sys(), v.as_sys());
+    call_allocating(|inside| unsafe { nupur_sys::raising::rb_ary_push(inside, a, v) }).map(|_| ())
+}
+
+/// `rb_ivar_set` for a hidden ivar (a name without `@`, so Ruby code cannot
+/// see it): raises `FrozenError` for a frozen object and
+/// `NoMemoryError`.
+#[inline]
+pub(crate) fn ivar_set(obj: Value, id: crate::rb::HiddenId, v: Value) -> Result<(), Error> {
+    let (o, v, id) = (obj.as_sys(), v.as_sys(), id.as_raw());
+    call_allocating(|inside| unsafe { nupur_sys::raising::rb_ivar_set(inside, o, id, v) })
+        .map(|_| ())
+}
+
+/// `rb_hash_lookup2` at the Fixnum `n`: a Fixnum hashes and compares by
+/// value in C, so no Ruby code runs; protected all the same, and a raise
+/// passed on, as [`hash_lookup`]'s is.
+#[inline]
+pub(crate) fn table_get(h: RHash, n: u32) -> Result<Option<Value>, Error> {
+    let h = h.as_sys();
+    /* No entry has a key past a Fixnum - past 2^30 - 1 on Windows. */
+    let Some(key) = h.ruby().fixnum(i64::from(n)) else {
+        return Ok(None);
+    };
+    let v = call(|inside| unsafe {
+        nupur_sys::raising::rb_hash_lookup2(inside, h, key, inside.ruby().qundef())
+    })?;
+    /* A value of the Hash's, or `Qundef`, which is not handed out. */
+    Ok((!v.is_undef()).then(|| Value::from_sys(v)))
+}
+
+/// `rb_hash_aset` at the Fixnum `n`: raises `NoMemoryError`.
+#[inline]
+pub(crate) fn table_set(h: RHash, n: u32, v: Value) -> Result<(), Error> {
+    /* No entry for a key past a Fixnum: refused, never wrapped round. */
+    let key = h.as_sys().ruby().fixnum(i64::from(n)).ok_or_else(|| {
+        Error::new(
+            crate::rb::Builtin::RangeError,
+            "a table key past a Fixnum (2^30 - 1 on Windows)",
+        )
+    })?;
+    let (h, v) = (h.as_sys(), v.as_sys());
+    call_allocating(|inside| unsafe { nupur_sys::raising::rb_hash_aset(inside, h, key, v) })
+        .map(|_| ())
+}
+
+/// A key whose hash Ruby computes itself ([`crate::rb::value::plain_key`]),
+/// or the `TypeError` for one whose `#hash` and `#eql?` would be called.
+#[inline]
+pub(super) fn plain_key_or_refuse(k: Value) -> Result<(), Error> {
+    if crate::rb::value::plain_key(k) {
+        return Ok(());
+    }
+    Err(crate::rb::error::type_error(
+        "a Hash key must be a Symbol or a String (not a subclass's)",
+    ))
+}
+
+/// `rb_hash_new`: raises `NoMemoryError`.
+#[inline]
+pub(crate) fn hash_new(_: &Ruby) -> Result<RHash, Error> {
+    let v = call_allocating(|inside| unsafe { nupur_sys::raising::rb_hash_new(inside) })?;
+    typed(v, RHash::from_value, "a C call made no Hash")
+}
+
+/// A Hash no Ruby code can find: `rb_hash_new`, then `rb_obj_hide` with
+/// nothing between, so `ObjectSpace` never lists it - an object's private
+/// table ([`crate::table::IntTable`]), which is never shown. Raises
+/// `NoMemoryError`. Hand it to no Ruby code: a hidden object has no class.
+pub(crate) fn hidden_hash_new(ruby: &Ruby) -> Result<RHash, Error> {
+    let h = hash_new(ruby)?;
+    // SAFETY: the Hash just made, referenced only from this frame.
+    unsafe { crate::rb::object::obj_hide(crate::rb::ReprValue::as_value(h)) };
+    Ok(h)
+}
+
+/// `rb_ary_new_from_values`: a new Array of `vals`, in one call. Raises
+/// `NoMemoryError`.
+#[inline]
+pub(crate) fn ary_from_values(_: &Ruby, vals: &[Value]) -> Result<RArray, Error> {
+    let n = c_len(vals.len(), "too many values for one Array")?;
+    /* `Value` is transparent over `VALUE`, so the slice is the C array. */
+    let p = vals.as_ptr().cast::<nupur_sys::value::Value>();
+    let v = call_allocating(|inside| unsafe {
+        nupur_sys::raising::rb_ary_new_from_values(inside, n, p)
+    })?;
+    typed(v, RArray::from_value, "a C call made no Array")
+}
+
+/// `rb_ary_cat`: append `vals` to `a`, in one call. Raises `NoMemoryError`,
+/// and `FrozenError` for a frozen Array.
+#[inline]
+pub(crate) fn ary_cat(a: RArray, vals: &[Value]) -> Result<(), Error> {
+    let n = c_len(vals.len(), "too many values for one Array")?;
+    let (a, p) = (a.as_sys(), vals.as_ptr().cast::<nupur_sys::value::Value>());
+    call_allocating(|inside| unsafe { nupur_sys::raising::rb_ary_cat(inside, a, p, n) }).map(|_| ())
+}
+
+/// `rb_hash_bulk_insert`: `pairs` (key, value, key, value, ...) into `h`,
+/// in one call, a later key's value replacing an earlier one's. Every key
+/// must be one Ruby hashes in C, as [`hash_aset`] requires - anything else,
+/// or an odd count, is refused before the call. Raises `NoMemoryError`, and
+/// `FrozenError` for a frozen Hash.
+#[inline]
+pub(crate) fn hash_bulk_insert(h: RHash, pairs: &[Value]) -> Result<(), Error> {
+    if !pairs.len().is_multiple_of(2) {
+        return Err(crate::rb::error::arg_error(
+            "an odd number of keys and values",
+        ));
+    }
+    for k in pairs.iter().step_by(2) {
+        plain_key_or_refuse(*k)?;
+    }
+    let n = c_len(pairs.len(), "too many keys and values for one Hash")?;
+    let (h, p) = (h.as_sys(), pairs.as_ptr().cast::<nupur_sys::value::Value>());
+    call_allocating(|inside| unsafe { nupur_sys::raising::rb_hash_bulk_insert(inside, n, p, h) })
+}
+
+/// `rb_hash_aset` for a Symbol or String key, whose hash Ruby computes
+/// itself ([`crate::rb::value::plain_key`]): any other key - an instance of a
+/// String subclass included - would have its `#hash` and `#eql?` called, so
+/// it is a `TypeError` here. Raises `NoMemoryError`, and `FrozenError` for a
+/// frozen Hash.
+#[inline]
+pub(crate) fn hash_aset(h: RHash, k: Value, v: Value) -> Result<(), Error> {
+    plain_key_or_refuse(k)?;
+    let (h, k, v) = (h.as_sys(), k.as_sys(), v.as_sys());
+    call_allocating(|inside| unsafe { nupur_sys::raising::rb_hash_aset(inside, h, k, v) })
+        .map(|_| ())
+}
+
+/// `rb_ll2inum`: raises `NoMemoryError` for a value past a Fixnum (a Bignum).
+#[inline]
+pub(crate) fn int_from_i64(ruby: &Ruby, n: i64) -> Result<Integer, Error> {
+    /* A Fixnum is the value's own bits: no allocation, nothing to raise, no
+     * protected call - the common case (a length, an index, a count). */
+    if let Some(v) = ruby.sys().fixnum(n) {
+        return Ok(Integer::from_known(Value::from_sys(v)));
+    }
+    let v = call_allocating(|inside| unsafe { nupur_sys::raising::rb_ll2inum(inside, n) })?;
+    typed(v, Integer::from_value, "a C call made no Integer")
+}
+
+/// `rb_ull2inum`: as [`int_from_i64`].
+#[inline]
+pub(crate) fn int_from_u64(ruby: &Ruby, n: u64) -> Result<Integer, Error> {
+    /* As `int_from_i64`. */
+    if let Some(v) = ruby.sys().posfixnum(n) {
+        return Ok(Integer::from_known(Value::from_sys(v)));
+    }
+    let v = call_allocating(|inside| unsafe { nupur_sys::raising::rb_ull2inum(inside, n) })?;
+    typed(v, Integer::from_value, "a C call made no Integer")
+}
+
+/// `rb_float_new`: raises `NoMemoryError` for a value that is not a flonum.
+#[inline]
+pub(crate) fn float_new(ruby: &Ruby, f: f64) -> Result<Float, Error> {
+    /* A flonum is the value's own bits, as a Fixnum is: no allocation,
+     * nothing to raise, no protected call. */
+    if let Some(v) = ruby.sys().flonum(f) {
+        return Ok(Float::from_known(Value::from_sys(v)));
+    }
+    let v = call_allocating(|inside| unsafe { nupur_sys::raising::rb_float_new(inside, f) })?;
+    typed(v, Float::from_value, "a C call made no Float")
+}
+
+/// `rb_enumeratorize_with_size` with no arguments and no size: raises
+/// `NoMemoryError`.
+#[inline]
+pub(crate) fn enumeratorize(obj: Value, meth: Symbol) -> Result<Value, Error> {
+    let (o, m) = (obj.as_sys(), meth.as_sys());
+    let v = call_allocating(|inside| unsafe {
+        nupur_sys::raising::rb_enumeratorize_with_size(inside, o, m, 0, core::ptr::null(), None)
+    })?;
+    typed(v, Some, "a C call made no value")
+}
+
+/// `rb_hash_lookup2` at `key`, `Ok(None)` for no entry. The key must be a
+/// Symbol or a plain String, hashed and compared in C - any other is a
+/// `TypeError` here, as [`hash_aset`]'s, since its own `#hash` would run - but
+/// a key already IN the Hash may be any object, and one whose hash collides
+/// is compared by calling `key.eql?(stored)` (`rb_any_cmp`, then `rb_eql`):
+/// Symbol's or String's own, the caller's Ruby where a program redefined it,
+/// which can raise or `throw`. That comes back as `Err`,
+/// to be passed on: read as "no entry", the exception would be lost and the
+/// keyword taken as absent. In the raise sweep's set (`call_allocating`), so
+/// that path is run.
+pub(crate) fn hash_lookup(h: RHash, key: Value) -> Result<Option<Value>, Error> {
+    plain_key_or_refuse(key)?;
+    let (h, key) = (h.as_sys(), key.as_sys());
+    let v = call_allocating(|inside| unsafe {
+        nupur_sys::raising::rb_hash_lookup2(inside, h, key, inside.ruby().qundef())
+    })?;
+    /* A value of the Hash's, or `Qundef`, which is not handed out. */
+    Ok((!v.is_undef()).then(|| Value::from_sys(v)))
+}
+
+/// `rb_range_values`: a Range's ends and whether it excludes its end. For a
+/// Range (or a subclass's instance) the fields are read, and no Ruby runs.
+pub(crate) fn range_values(r: Range) -> Result<(Value, Value, bool), Error> {
+    let r = r.as_sys();
+    let nil = r.ruby().qnil();
+    let (mut beg, mut end, mut excl): (_, _, c_int) = (nil, nil, 0);
+    let (pb, pe, px) = (
+        core::ptr::addr_of_mut!(beg),
+        core::ptr::addr_of_mut!(end),
+        core::ptr::addr_of_mut!(excl),
+    );
+    call(|inside| unsafe { nupur_sys::raising::rb_range_values(inside, r, pb, pe, px) })?;
+    /* The Range's own ends, live while it is. */
+    Ok((Value::from_sys(beg), Value::from_sys(end), excl != 0))
+}
+
+/// `rb_big2ll`: raises `RangeError` past an `i64`. For a Bignum only - the C
+/// reads a Bignum's header unchecked - so it has one caller,
+/// `Integer::to_i64`, which answers a Fixnum itself.
+pub(crate) fn big2ll(n: Integer) -> Result<i64, Error> {
+    let n = n.as_sys();
+    Ok(i64::from(call(|inside| unsafe {
+        nupur_sys::raising::rb_big2ll(inside, n)
+    })?))
+}
+
+/// `rb_big2ull`: raises `RangeError` past a `u64`. For a non-negative Bignum
+/// only (a negative one would wrap), so it has one caller,
+/// `Integer::to_u64`, which refuses a negative value and answers a Fixnum
+/// itself.
+pub(crate) fn big2ull(n: Integer) -> Result<u64, Error> {
+    let n = n.as_sys();
+    Ok(u64::from(call(|inside| unsafe {
+        nupur_sys::raising::rb_big2ull(inside, n)
+    })?))
+}
+
+/// `rb_big2str(n, 10)`: a Bignum's decimal digits, as a new US-ASCII String.
+/// Raises `NoMemoryError`. For a Bignum only (the C reads a Bignum's digits
+/// unchecked), so it has one caller, `Integer::to_decimal`,
+/// which writes a Fixnum itself.
+pub(crate) fn big2str(n: Integer) -> Result<RString, Error> {
+    let n = n.as_sys();
+    let v = call_allocating(|inside| unsafe { nupur_sys::raising::rb_big2str(inside, n, 10) })?;
+    typed(v, RString::from_value, "a C call made no String")
+}
+
+/// `rb_str_to_inum(s, 10, 1)`: the Integer `s`'s decimal digits spell, which
+/// may be a Bignum. Raises `ArgumentError` for anything but digits and
+/// `NoMemoryError`. Its one caller, `build::int_from_decimal`, checks the
+/// digits first and hands a String of its own, so no caller's String (whose
+/// encoding or subclass the C would read) reaches it.
+pub(crate) fn str_to_inum(s: RString) -> Result<Integer, Error> {
+    let s = s.as_sys();
+    let v =
+        call_allocating(|inside| unsafe { nupur_sys::raising::rb_str_to_inum(inside, s, 10, 1) })?;
+    typed(v, Integer::from_value, "a C call made no Integer")
+}

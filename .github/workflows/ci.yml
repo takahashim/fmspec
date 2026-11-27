@@ -1,0 +1,185 @@
+# fmspec の CI。手元の rake のタスクを、ジョブに分けて実行する（仕様書 §14.3）。
+#
+#   rust   rake lint、nupur:check、test:rust、test:reference、test:differential
+#   ruby   rake compile、test:ruby（対応する Ruby の下限と開発版）
+#   rails  rake test:rails。PostgreSQL を立てて、分離レベル別のテストも skip させない
+#   verus          rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件）
+#   verus-mutants  rake verus:mutants（変異と assert(false)）。重いので、main への PR、定期実行、手動実行に限る
+#   nupur  rake nupur:upstream、nupur:lint（Makiri の固定コミットと nupur_lints）
+#
+# バージョンは docs/verification.md の表に合わせる。Verus と Nupur のバージョンは rakelib から読む。
+name: CI
+
+on:
+  push:
+    branches: [main, core-mvp]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # 毎日 03:17 JST。変異の検査（verus-mutants）をここで回す。
+    - cron: "17 18 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # rakelib は UTF-8 のファイルを読む。ロケールが US-ASCII だと読み込みで失敗する。
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.100.0"
+  RUBY_VERSION: "4.0"
+
+jobs:
+  rust:
+    name: Rust (lint, test, differential)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # clippy は拡張（fmspec_ext）も対象にするので、Ruby のヘッダが要る。参照実装の比較テストも Ruby で書いてある。
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - run: gem install --no-document rake minitest
+      - run: rake lint
+      - run: rake nupur:check
+      - run: rake test:rust
+      - run: rake test:reference
+      - run: rake test:differential
+
+  ruby:
+    name: Ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # 下限（fmspec.gemspec の required_ruby_version）と開発版。
+        ruby: ["3.3", "4.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ruby-${{ matrix.ruby }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+      - run: gem install --no-document rake minitest json_schemer
+      - run: rake test:ruby
+
+  rails:
+    name: fmspec-rails
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # test/support/withdrawal_app.rb が読む。ユーザーとパスワードは libpq が環境変数から読む。
+      FMSPEC_PG_HOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - run: gem install --no-document rake
+      - name: bundle install
+        working-directory: fmspec-rails
+        run: |
+          bundle config set --local path vendor/bundle
+          bundle install --jobs 4
+      - name: rake test:rails
+        run: |
+          rake test:rails 2>&1 | tee rails-test.log
+          # PostgreSQL に接続できないと分離レベル別のテストは skip する。CI では skip を失敗にする。
+          if grep -E '[1-9][0-9]* skips' rails-test.log; then
+            echo "::error::fmspec-rails のテストに skip がある（PostgreSQL に接続できていない）"
+            exit 1
+          fi
+
+  verus:
+    name: Verus (proof)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - run: gem install --no-document rake
+      - uses: ./.github/actions/setup-verus
+      - run: rake verus:proof
+
+  verus-mutants:
+    name: Verus (mutants)
+    # 変異161件と assert(false) 100件のそれぞれで crate 全体を検証し直すので、push ごとには回さない。
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: verus
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - run: gem install --no-document rake
+      - uses: ./.github/actions/setup-verus
+      - run: rake verus:mutants
+
+  nupur:
+    name: Nupur (upstream, lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - run: gem install --no-document rake
+      - name: Checkout Makiri
+        run: |
+          commit=$(ruby -e 'puts File.read("rakelib/nupur.rake")[/^NUPUR_COMMIT = "(\h+)"/, 1]')
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/takahashim/makiri "$RUNNER_TEMP/makiri"
+          git -C "$RUNNER_TEMP/makiri" checkout --quiet "$commit"
+          echo "MAKIRI=$RUNNER_TEMP/makiri" >> "$GITHUB_ENV"
+          # nupur_lints が固定する nightly と、rustc のプラグインに要るコンポーネント。
+          (cd "$RUNNER_TEMP/makiri/ext/makiri/rust/lints" && rustup toolchain install)
+      - run: cargo install --locked cargo-dylint dylint-link
+      - run: rake nupur:upstream
+      - run: rake nupur:lint

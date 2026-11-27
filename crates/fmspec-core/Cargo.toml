@@ -1,0 +1,22 @@
+[package]
+name = "fmspec-core"
+version = "0.1.0"
+edition = "2021"
+description = "fmspec の検証済み中核: IR検証、Evaluator、遷移列挙、証拠の検査、判定ゲート"
+publish = false
+
+[dependencies]
+# Verus のマクロと vstd。通常の cargo ビルドでは ghost コードを消去する（仕様書 §14.3）。
+vstd = "=0.0.0-2026-11-01-0251"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(verus_keep_ghost)'] }
+
+# 検証済みのコードは Verus の書き方（`&Vec`、`i = i + 1`、網羅的な match など）に従う。
+# 書き換えると証明をやり直すことになるので、書き方に関する clippy の lint は外す。
+# 誤りを指摘する lint（correctness、suspicious）は有効のままにする。
+[lints.clippy]
+style = { level = "allow", priority = -1 }
+complexity = { level = "allow", priority = -1 }
+ptr_arg = "allow"
+vec_init_then_push = "allow"

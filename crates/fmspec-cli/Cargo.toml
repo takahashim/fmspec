@@ -1,0 +1,22 @@
+[package]
+name = "fmspec-cli"
+description = "fmspec のコマンドラインインターフェース"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fmspec"
+path = "src/main.rs"
+
+[dependencies]
+fmspec-api = { path = "../fmspec-api" }
+serde_json = "1"
+
+[dev-dependencies]
+fmspec-core = { path = "../fmspec-core" }
+fmspec-ir = { path = "../fmspec-ir" }
+fmspec-search = { path = "../fmspec-search" }
+
+[lints]
+workspace = true

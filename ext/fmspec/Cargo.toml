@@ -1,0 +1,25 @@
+[package]
+name = "fmspec_ext"
+description = "fmspec の Ruby native extension"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+# Ruby が読み込むのは `fmspec/fmspec.bundle`（`.so`）で、lib名はそのファイル名に合わせる。
+name = "fmspec"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+# テスト用のメソッド（わざと panic する、など）を定義する。配布するビルドには入れない。
+test-hooks = []
+
+[dependencies]
+fmspec-api = { path = "../../crates/fmspec-api" }
+# Ruby とのやりとりは、すべて Nupur を通す。このcrateは rb-sys を名指ししない。
+nupur = { path = "../../vendor/nupur" }
+serde_json = "1"

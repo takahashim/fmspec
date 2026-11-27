@@ -1,0 +1,21 @@
+# rakelib/verus.rake の VERUS_VERSION のリリースを取得し、環境変数 VERUS に実行ファイルを設定する。
+# Verus が使う Rust のツールチェーンも rustup で入れる。
+name: Setup Verus
+description: Install the Verus release pinned in rakelib/verus.rake
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        version=$(ruby -e 'puts File.read("rakelib/verus.rake")[/^VERUS_VERSION = "([^"]+)"/, 1]')
+        test -n "$version"
+        curl -fsSL -o "$RUNNER_TEMP/verus.zip" \
+          "https://github.com/verus-lang/verus/releases/download/release/${version}/verus-${version}-x86-linux.zip"
+        unzip -q "$RUNNER_TEMP/verus.zip" -d "$RUNNER_TEMP"
+        verus=$(find "$RUNNER_TEMP" -maxdepth 2 -type f -name verus -perm -u+x | head -n 1)
+        test -n "$verus"
+        # ツールチェーンがなければ、--version はその名前を挙げて失敗する。
+        toolchain=$("$verus" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-x86_64-unknown-linux-gnu' | head -n 1 || true)
+        if [ -n "$toolchain" ]; then rustup toolchain install --profile minimal "$toolchain"; fi
+        "$verus" --version
+        echo "VERUS=$verus" >> "$GITHUB_ENV"

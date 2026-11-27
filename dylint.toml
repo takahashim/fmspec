@@ -1,0 +1,6 @@
+# Makiri の nupur_lints（rake nupur:lint）に伝える、このワークスペースの事実。
+[nupur_lints]
+# 拡張のlib名。
+extension = "fmspec"
+# Ruby に依存しないcrate。GVL を解放した処理から呼べる。
+ruby_free = ["fmspec_core", "fmspec_ir", "fmspec_search", "fmspec_api"]

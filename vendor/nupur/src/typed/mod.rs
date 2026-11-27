@@ -1,0 +1,373 @@
+//! The TypedData objects, and the GC callbacks Ruby drives.
+//!
+//! A wrapped value is a Rust struct behind a `rb_data_type_t`. Ruby calls the
+//! function pointers in that struct directly, so they have the C calling
+//! convention and receive a raw data pointer - the raw Ruby ABI, and therefore
+//! this layer's job. A struct says what it is through [`Payload`], and the
+//! callbacks (`callbacks`) are the one monomorphised bridge from Ruby's GC to it, so
+//! no other module writes an `extern "C"` GC function.
+//!
+//! What an object holds is an `Envelope`: the payload `T`, and `N` slots
+//! for the Ruby values the object keeps alive. The slots are this module's,
+//! written once - in the same step as the payload, right after the object's
+//! allocation - and never again, and the mark callback marks every one of
+//! them pinned. So a payload holds no Ruby value at all (`rake dylint`'s
+//! `ruby_value_on_heap` refuses one in a `Payload` type), and there is no
+//! trace for a payload to forget: the `DocData.errors` crash - a value stored
+//! before the object that marks it existed - and its mirror, a value stored
+//! where no mark reaches it, have no code to happen in.
+//!
+//! The envelope is the object's data, made with the object by
+//! `rb_data_typed_object_zalloc` (`wrap_built`) - in the object's own slot
+//! for an embedded type, from `xcalloc` otherwise - and the free callback runs
+//! the payload's `Drop` in place before the memory goes back: freeing alone
+//! would skip the destructor, and with it everything the payload owns.
+
+#![allow(unsafe_code)]
+
+mod callbacks;
+mod data_type;
+mod embedded;
+mod external;
+// An object kept hidden while its data is completed (`TypedType::wrap_hidden`).
+mod hidden;
+
+pub use embedded::{EmbeddedType, EMBED_ALIGN, EMBED_MAX};
+pub use external::External;
+
+use callbacks::{free_cb, free_embedded_cb, mark_cb, memsize_cb};
+use data_type::{data_pointer, typed_data, typed_data_known, wrap_built, DataType};
+use nupur_sys::data_type::DataFlags;
+
+use core::ffi::CStr;
+use core::marker::PhantomData;
+
+use crate::rb::value::AsSys;
+use crate::rb::{Error, Value};
+use nupur_sys::value::Root as Slot;
+
+/// What an object's slot can be given ([`TypedType::wrap`]'s `roots`): any
+/// Ruby value, or a value only a slot may keep - a hidden
+/// [`IntTable`](crate::table::IntTable), which hands out no `Value` of its
+/// own, since a hidden object has no class and Ruby code given one would
+/// crash on it. Sealed: the value is read by this module alone.
+pub trait Root: Copy + sealed::Root {}
+
+impl<T: Copy + sealed::Root> Root for T {}
+
+pub(crate) mod sealed {
+    use crate::rb::{ReprValue, Value};
+
+    /// [`super::Root`]'s value, out of reach of the crate's users.
+    pub trait Root {
+        fn root_value(self) -> Value;
+    }
+
+    impl<T: ReprValue> Root for T {
+        #[inline]
+        fn root_value(self) -> Value {
+            self.as_value()
+        }
+    }
+
+    impl Root for crate::table::IntTable {
+        #[inline]
+        fn root_value(self) -> Value {
+            self.as_value()
+        }
+    }
+}
+
+/// A Rust value owned by a Ruby object: what [`TypedType`] wraps.
+///
+/// It holds no Ruby value - those are the object's slots (`roots` in
+/// [`TypedType::wrap`]). What it owns is released by its ordinary `Drop`,
+/// which the free callback runs - so a `Drop` here runs inside Ruby's
+/// collector, and must neither panic nor call Ruby: memory reported to the
+/// GC is given back by this module ([`Payload::reported_external`]), not by
+/// the `Drop`.
+pub trait Payload: Sized {
+    /// The bytes this object owns, reported to Ruby's GC as its size.
+    fn memsize(&self) -> usize {
+        core::mem::size_of::<Self>()
+    }
+
+    /// What this object has reported to the GC and not yet given back - its
+    /// [`External`]'s [`reported`](External::reported): the free callback
+    /// gives exactly these back after the `Drop`. Read in the collector, so
+    /// it must be a plain read.
+    fn reported_external(&self) -> usize {
+        0
+    }
+}
+
+/// The bytes an object of payload `T` with `N` slots keeps as its data - its
+/// envelope, padding included: what a size ratchet over a wrapper should
+/// measure, since a sum of the parts misses the padding.
+pub const fn envelope_size<T, const N: usize>() -> usize {
+    core::mem::size_of::<Envelope<T, N>>()
+}
+
+/// What an object's data is: its `N` slots, then its payload.
+///
+/// `repr(C)`, so the slots come first at a fixed offset whatever `T` is.
+#[repr(C)]
+struct Envelope<T, const N: usize> {
+    /// The values the object keeps alive, marked pinned by [`mark_cb`].
+    /// Written once, by [`wrap_built`], and never again.
+    roots: [Slot; N],
+    data: T,
+}
+
+/// What a new object is made of: its class, its payload, and the values its
+/// slots keep alive - one value, as they are one object's, which
+/// [`TypedType::wrap`] and its kin make and write together (`wrap_built`).
+pub struct Birth<T, R, const N: usize> {
+    /// The class Ruby sees it as.
+    pub klass: crate::rb::DataClass,
+    /// The payload.
+    pub data: T,
+    /// What its slots keep alive.
+    pub roots: [R; N],
+}
+
+/// A `rb_data_type_t` for a payload `T` with `N` slots: its GC callbacks
+/// drive [`Payload`] for `T`, and every way to make or read an object of this
+/// type goes through it.
+///
+/// The type parameters are the point. The raw API took a `*const
+/// rb_data_type_t` beside a separate `T`, so wrapping a node's data under a
+/// type for another struct - and reading it back as the wrong one - compiled. Here
+/// the data type, the struct and the slot count are one value, so the pairing
+/// cannot be wrong.
+///
+/// `const`, so a module keeps it in a `static`, as the C did.
+pub struct TypedType<T: Payload, const N: usize = 0> {
+    raw: DataType,
+    /// Whether its objects are made shareable between Ractors at birth
+    /// ([`TypedType::shareable`]).
+    shareable: bool,
+    _t: PhantomData<fn() -> T>,
+}
+
+impl<T: Payload, const N: usize> TypedType<T, N> {
+    const fn with_flags(
+        name: &'static CStr,
+        parent: Option<&'static DataType>,
+        embedded: bool,
+        shareable: bool,
+    ) -> TypedType<T, N> {
+        let flags = if embedded {
+            DataFlags::EMBEDDABLE
+        } else {
+            DataFlags::SEPARATE
+        };
+        let flags = if shareable {
+            flags.frozen_shareable()
+        } else {
+            flags
+        };
+        TypedType {
+            shareable,
+            raw: DataType::new(
+                name,
+                parent,
+                Some(mark_cb::<T, N>),
+                Some(if embedded {
+                    free_embedded_cb::<T, N>
+                } else {
+                    free_cb::<T, N>
+                }),
+                Some(if embedded {
+                    memsize_cb::<T, N, true>
+                } else {
+                    memsize_cb::<T, N, false>
+                }),
+                flags,
+            ),
+            _t: PhantomData,
+        }
+    }
+
+    /// A base type. `name` is what Ruby calls the type in its messages and
+    /// `ObjectSpace`, read as a C string for the life of the process - so a
+    /// `'static` one, NUL-terminated by type.
+    pub const fn base(name: &'static CStr) -> TypedType<T, N> {
+        Self::with_flags(name, None, false, false)
+    }
+
+    /// A base type whose objects are shared between Ractors: each is frozen
+    /// and made shareable as it is made ([`wrap`](Self::wrap)), together
+    /// with everything its slots reach, which `rb_ractor_make_shareable`
+    /// freezes too - so put in a slot only what may be frozen, or is
+    /// already. Two Ractors may then read the payload at once, which its
+    /// `Sync` bound makes sound; nothing else of the layer mutates it.
+    pub const fn shareable(name: &'static CStr) -> TypedType<T, N>
+    where
+        T: Sync,
+    {
+        Self::with_flags(name, None, false, true)
+    }
+
+    /// A type deriving from `parent`, which holds the same payload and
+    /// slots: an object of this type is also one of `parent`'s, and is
+    /// shareable between Ractors when `parent`'s are (whose `T: Sync` was
+    /// asked when `parent` was made).
+    ///
+    /// `parent` is `'static`: its `rb_data_type_t`'s address is kept, and
+    /// Ruby follows it for the life of the process.
+    pub const fn derived(name: &'static CStr, parent: &'static TypedType<T, N>) -> TypedType<T, N> {
+        Self::with_flags(name, Some(&parent.raw), false, parent.shareable)
+    }
+
+    /// Whether `v` is an object of this type or one deriving from it. Never
+    /// raises.
+    #[inline]
+    pub fn is(&'static self, v: Value) -> bool {
+        nupur_sys::non_raising::rb_typeddata_is_kind_of(v.as_sys(), &self.raw)
+    }
+
+    /// `Ok` for an object of this type (or one deriving from it), else Ruby's
+    /// own `TypeError` - a type check that borrows nothing, for a caller that
+    /// only needs to refuse another kind of value.
+    #[inline]
+    pub fn ensure(&'static self, v: Value) -> Result<(), Error> {
+        typed_data(v, &self.raw).map(|_| ())
+    }
+
+    /// A handle on `v`, an object of this type whose type the caller already
+    /// established - a node's Document from its slot, a receiver its method's
+    /// conversion checked; a mismatch is a bug in that reasoning, and panics.
+    ///
+    /// The fast way in for those: one `rb_typeddata_is_kind_of`, asserted,
+    /// where [`check`](Self::check) answers a `TypeError`. Its data is
+    /// borrowed from the handle, as any [`Typed`]'s, so the object is held
+    /// for as long as the borrow - there is no way from a bare `Value` to a
+    /// `&T`, whose lifetime the GC would not see.
+    #[inline]
+    pub fn known(&'static self, v: Value) -> Typed<T, N> {
+        self.known_ptr(v);
+        Typed::new(v)
+    }
+
+    /// `v` checked once to be an object of this type (or one deriving from
+    /// it), or Ruby's own `TypeError`: a [`Typed`], which holds the object and
+    /// reads the data and the slots with no check of its own.
+    #[inline]
+    pub fn check(&'static self, v: Value) -> Result<Typed<T, N>, Error> {
+        typed_data(v, &self.raw)?;
+        Ok(Typed::new(v))
+    }
+
+    /// The envelope behind an object whose type the caller established. The
+    /// pointer is valid while `v` is rooted.
+    fn known_ptr(&'static self, v: Value) -> *const Envelope<T, N> {
+        typed_data_known(v, &self.raw) as *const Envelope<T, N>
+    }
+
+    /// Make the object `birth` describes, of this type: its payload wrapped
+    /// as an instance of its class, its roots kept alive in its slots. A
+    /// failed allocation is `Err`, the payload dropped.
+    ///
+    /// The payload is built, and the roots held, before the object exists:
+    /// they are on this frame through the allocation - where the GC's stack
+    /// scan keeps the roots alive and in place - and both are written into
+    /// the object right after it, with nothing run between (`wrap_built`).
+    ///
+    /// The object comes back as a [`Typed`]: nothing but this frame refers
+    /// to it yet, and the handle holds it while its data is borrowed.
+    pub fn wrap<R: Root>(
+        &'static self,
+        ruby: &crate::rb::Ruby,
+        birth: Birth<T, R, N>,
+    ) -> Result<Typed<T, N>, Error> {
+        self.wrap_value(ruby, birth).map(Typed::new)
+    }
+
+    /// [`wrap`](Self::wrap)'s object as a bare `Value`, for an embedded
+    /// type, whose data is never borrowed.
+    fn wrap_value<R: Root>(
+        &'static self,
+        _: &crate::rb::Ruby,
+        birth: Birth<T, R, N>,
+    ) -> Result<Value, Error> {
+        let Birth { klass, data, roots } = birth;
+        // SAFETY: under the GVL (`&Ruby`), and `ty` is this payload's own type.
+        let obj = unsafe {
+            wrap_built::<T, N>(
+                klass.as_sys(),
+                &self.raw,
+                data,
+                roots.map(|v| Slot::of(sealed::Root::root_value(v).as_sys())),
+            )
+        }?;
+        let obj = Value::from_sys(obj);
+        if self.shareable {
+            crate::raw::ractor_make_shareable(obj)?;
+        }
+        Ok(obj)
+    }
+}
+
+/// An object of a [`TypedType<T, N>`], its type established - checked by
+/// [`TypedType::check`], or made by [`TypedType::wrap`] - and the handle its
+/// data is borrowed through. Whatever the object is - a receiver, a value
+/// read from somewhere, one just made that nothing else refers to - the
+/// handle holds it where the GC sees it until the handle is dropped, which
+/// is after the last borrow of [`data`](Self::data): borrow from the handle,
+/// not from a copy of its [`value`](Self::value), and do not `mem::forget`
+/// it. It is the only way to a `&T`: [`TypedType::check`] makes one for a
+/// value Ruby gave, [`TypedType::known`] for one whose type is established,
+/// and [`TypedType::wrap`] returns one for an object just made.
+///
+/// A hot path that reads an object's data and slots several times - a
+/// collection's elements and its owner, per element - pays for the check
+/// once. Sound with no further check because an object's type never changes
+/// after it is made, its data was found allocated (and is never freed
+/// before the object), and a non-embedded type's data, which is all this
+/// reads, is its own allocation, which compaction does not move.
+pub struct Typed<T: Payload + 'static, const N: usize> {
+    obj: crate::rb::kept::Kept,
+    _t: PhantomData<fn() -> T>,
+}
+
+impl<T: Payload + 'static, const N: usize> Typed<T, N> {
+    /// A handle on `v`, whose type the caller established.
+    #[inline]
+    fn new(v: Value) -> Typed<T, N> {
+        Typed {
+            obj: crate::rb::kept::Kept::new(v),
+            _t: PhantomData,
+        }
+    }
+
+    /// The object, for handing to Ruby or storing where Ruby keeps it.
+    #[inline]
+    pub fn value(&self) -> Value {
+        *self.obj.value()
+    }
+
+    /// The object's envelope, borrowed for as long as the handle is.
+    #[inline]
+    fn envelope(&self) -> &Envelope<T, N> {
+        // SAFETY: the type was established when the handle was made, which
+        // is `T`'s with `N` slots (a derived type holds the same); the data
+        // is the envelope `wrap_built` wrote, and the handle holds the object
+        // until after the borrow.
+        unsafe { &*(data_pointer(self.value().as_sys()) as *const Envelope<T, N>) }
+    }
+
+    /// The payload, borrowed for as long as the handle is.
+    #[inline]
+    pub fn data(&self) -> &T {
+        &self.envelope().data
+    }
+
+    /// Slot `I` (`I < N`, checked when it compiles).
+    #[inline]
+    pub fn root<const I: usize>(&self) -> Value {
+        const { assert!(I < N, "no such slot") };
+        // SAFETY: the slots hold live values the object marks.
+        Value::from_sys(unsafe { self.envelope().roots[I].value() })
+    }
+}

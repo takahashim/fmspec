@@ -1,0 +1,7 @@
+/target/
+/tmp/
+/lib/fmspec/*.bundle
+/lib/fmspec/*.so
+/fmspec-rails/vendor/
+/fmspec-rails/.bundle/
+/fmspec-rails/Gemfile.lock
