@@ -298,7 +298,14 @@ fn claim_from_json(model: &Model, v: Option<&Value>) -> Result<Claim, TraceError
                 "output" => Site::Output,
                 _ => {
                     let target = map.get("target").and_then(Value::as_str).unwrap_or("");
-                    let slot = map.get("slot").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    // slot は範囲外更新にだけ付く。省略すると状態変数の最初のスロットとする。
+                    let slot = match map.get("slot") {
+                        None => 0,
+                        Some(v) => match v.as_u64().and_then(|n| usize::try_from(n).ok()) {
+                            Some(slot) => slot,
+                            None => return format("claim.slot は0以上の整数です"),
+                        },
+                    };
                     let index = names.state_index(target);
                     let update = index.and_then(|t| {
                         names.actions[a]

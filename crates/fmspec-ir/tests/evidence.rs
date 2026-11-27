@@ -89,6 +89,12 @@ fn update_errors_name_the_target_and_the_slot_of_an_out_of_range_value() {
     let mut json = trace_json(&m, Claim::StepError(0, vec![], Site::Update(1), ErrKind::OutOfRange(4)));
     json["claim"]["slot"] = json!(2);
     assert!(format_error(&m, &json).contains("\"p\" を更新しません"));
+    // 2^32 + 1 は、32ビットで切り詰めると 1 になるが、そう読まない。
+    json["claim"]["slot"] = json!(4_294_967_297u64);
+    assert!(format_error(&m, &json).contains("を更新しません"));
+    // 整数でない slot を、最初のスロットとして読まない。
+    json["claim"]["slot"] = json!("1");
+    assert!(format_error(&m, &json).contains("claim.slot"));
 }
 
 #[test]
