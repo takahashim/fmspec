@@ -90,7 +90,10 @@ fn each_kind_of_result_has_its_own_set_of_keys() {
     let replayed = replay(&m, &violated["trace"].to_string());
     assert_eq!(keys(&replayed), with(&judged, &["property", "trace"]));
     let shrunk = shrink(&m, &violated["trace"].to_string(), &json!({})).unwrap();
-    assert_eq!(keys(&shrunk), with(&judged, &["original_steps", "property", "trace"]));
+    assert_eq!(
+        keys(&shrunk),
+        with(&judged, &["original_steps", "property", "shrink", "trace"])
+    );
 
     // 読めない証拠には、読めていない検査条件を付けない。
     for unreadable in [
@@ -259,4 +262,17 @@ fn shrinking_lowers_arguments_that_the_violation_does_not_need() {
     // 試す候補の数の上限が1なら、最初の候補（1つ目のステップの削除）だけを試して、元のトレースを返す。
     let limited = shrink(&m, &trace.to_string(), &json!({"attempts": 1})).unwrap();
     assert_eq!(limited["trace"]["steps"], trace["steps"]);
+    // 打ち切ったことを結果に残す。結果のトレースは判定ゲートが受理したもので、status は違反のままである。
+    assert_eq!(limited["status"], "violated");
+    assert_eq!(
+        limited["shrink"],
+        json!({"attempts": 1, "complete": false, "limit": "attempts"})
+    );
+    assert!(
+        human(&limited)
+            .ends_with("  縮小前は 2 ステップ\n  縮小は打ち切った（attempts、試した候補 1）。局所最小とは限らない\n"),
+        "{}",
+        human(&limited)
+    );
+    assert_eq!(shrunk["shrink"]["complete"], true);
 }

@@ -198,6 +198,14 @@ pub fn human(body: &Value) -> String {
     if let Some(n) = body.get("original_steps") {
         let _ = writeln!(out, "  縮小前は {n} ステップ");
     }
+    if let Some(shrink) = body.get("shrink").filter(|s| s["complete"] != json!(true)) {
+        let _ = writeln!(
+            out,
+            "  縮小は打ち切った（{}、試した候補 {}）。局所最小とは限らない",
+            plain(&shrink["limit"]),
+            shrink["attempts"]
+        );
+    }
     if let Some(n) = body.get("certificate_states") {
         let checked = if status == "verified" || status == "refines" {
             "（判定ゲートが受理）"

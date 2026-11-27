@@ -18,8 +18,8 @@ use fmspec_core::gate::decide;
 use fmspec_core::gate::VerdictKind;
 use fmspec_ir::{certificate_to_json, read_certificate, read_trace, LoadError, TraceError};
 use fmspec_search::{
-    check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, SimOptions,
-    Status,
+    check as search_check, check_sym, judge, sample, shrink as search_shrink, BfsOptions, GateOptions, ShrinkOptions,
+    ShrinkStop, SimOptions, Status,
 };
 use options::{conditions, count, deadline, flag, keys, max_states, options, size};
 use serde_json::{json, Value};
@@ -213,6 +213,17 @@ pub fn replay_with(model: &Model, trace: &str, opts: &Value) -> Result<Value, St
     Ok(mark_other_model(body, loaded.other_model_digest))
 }
 
+/// 縮小器の報告。検査済みの値ではない。`complete` が偽なら、`limit` に打ち切った理由を書く。
+fn shrink_report(attempts: usize, stopped: Option<ShrinkStop>) -> Value {
+    let mut body = json!({"attempts": attempts, "complete": stopped.is_none()});
+    match stopped {
+        None => {}
+        Some(ShrinkStop::Attempts) => body["limit"] = json!("attempts"),
+        Some(ShrinkStop::Limit(limit)) => body["limit"] = json!(report::limit_name(limit)),
+    }
+    body
+}
+
 /// 縮小で試す候補の数の、既定の上限。
 const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 
@@ -220,7 +231,8 @@ const DEFAULT_SHRINK_ATTEMPTS: u64 = 10_000;
 ///
 /// 元のトレースを判定ゲートが受理しなければ、その拒否を報告する。
 /// ステップの削除と、引数（公開引数と内部選択）を小さくする変更を試す。
-/// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に記録する。
+/// 縮小結果は判定ゲートが同じ主張で受理したトレースで、元のステップ数を `original_steps` に、
+/// 縮小器の報告（試した候補の数と、打ち切ったか）を `shrink` に記録する。
 /// オプションは `attempts`（試す候補の数の上限。削除と引数の変更で共有する）と
 /// `allow_other_model`（`verify_certificate` と同じ）。
 pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String> {
@@ -239,17 +251,18 @@ pub fn shrink(model: &Model, trace: &str, opts: &Value) -> Result<Value, String>
         let body = report::evidence_report(model, cond, &evidence, &verdict, trace.seed);
         return Ok(mark_other_model(body, other));
     }
-    let shrunk_steps = search_shrink(
+    let result = search_shrink(
         model.checked(),
         cond,
         &trace.start,
         &trace.steps,
         &trace.claim,
-        size(attempts),
+        &ShrinkOptions::attempts(size(attempts)),
     );
-    let shrunk = Evidence::Trace(trace.start.clone(), shrunk_steps, trace.claim.clone());
+    let shrunk = Evidence::Trace(trace.start.clone(), result.steps, trace.claim.clone());
     let verdict = decide(model.checked(), cond, &shrunk);
     let mut body = report::evidence_report(model, cond, &shrunk, &verdict, trace.seed);
     body["original_steps"] = json!(original);
+    body["shrink"] = shrink_report(result.attempts, result.stopped);
     Ok(mark_other_model(body, other))
 }
