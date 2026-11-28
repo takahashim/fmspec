@@ -5,7 +5,9 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_rows, keys, keys_or_zero, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_models_enc, member, sty, to_xty, width, STy, SVal, XTy};
+use crate::encoding::{lemma_map_rows_member_index, lemma_models_enc, member, sty, STy, SVal};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{to_xty, width, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
@@ -29,7 +31,7 @@ use crate::preserve_elem::{elem_lowers, elem_rank_lowers};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, head_at, heads_ok, ite_rows_ok, mparts_ok};
+use crate::rows::{flat, head_at, heads_ok, ite_rows_ok, lemma_enc_rows_index, mparts_ok, row_slots};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_map_items, eval_src, put_row, Item, SEnv, TExpr};
 use vstd::prelude::*;

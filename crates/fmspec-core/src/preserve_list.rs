@@ -3,9 +3,11 @@
 //! 下ろしの実装は [`crate::lowering`] にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_models_enc, list_items_member};
+use crate::encoding::XTy;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, sty, to_xty, width, STy, SVal, XTy};
+use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_items_member};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{lemma_models_enc, list_items_member, member, sty, to_xty, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
@@ -13,11 +15,9 @@ use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, ite_s, lits, pure_below, tree_s, Join};
 #[cfg(verus_keep_ghost)]
-use crate::lists::select_ok;
+use crate::lists::{at_rank, lemma_bin_const, lemma_ite_rows, lemma_list_join, lemma_list_parts};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{at_rank, lemma_bin_const, lemma_ite_rows, lemma_items_member, lemma_list_join};
-#[cfg(verus_keep_ghost)]
-use crate::lists::{lemma_list_parts, lemma_rows_weaken, lemma_select, pad, pad_vals, rows_at};
+use crate::lists::{lemma_rows_weaken, lemma_select, pad, pad_vals, rows_at, select_ok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]

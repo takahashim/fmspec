@@ -22,7 +22,7 @@ use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, mparts_ok, mrow_at};
+use crate::rows::{flat, lemma_enc_rows_index, mparts_ok, mrow_at, row_slots};
 use crate::stype_exec::{keys_or_zero_exec, stype_width};
 use vstd::prelude::*;
 

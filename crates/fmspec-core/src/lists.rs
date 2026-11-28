@@ -9,7 +9,7 @@ use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, member, sty, width, STy, SVal, XTy};
+use crate::encoding::{lemma_items_member, list_items_member, member, sty, width, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 use crate::expr_build::sub_exprs;
@@ -473,21 +473,6 @@ pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> 
 
 pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
     picks_in(x, fs, r, 0, fs.len() as int)
-}
-
-/// Listの要素は、要素の型に属する。
-pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
-    requires
-        list_items_member(items, t, enums),
-        0 <= k < items.len(),
-    ensures
-        member(items[k], t, enums),
-    decreases items.len(),
-{
-    if k < items.len() - 1 {
-        lemma_items_member(items.drop_last(), t, enums, k);
-        assert(items.drop_last()[k] == items[k]);
-    }
 }
 
 /// List のスロットの、長さと要素。

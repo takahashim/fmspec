@@ -13,15 +13,17 @@ use crate::encoding::{has_xtype, has_xtypes, keys, keys_or_zero, lemma_default_l
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_repeat_len, lemma_stys};
+use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_items_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_to_xtys, lemma_xtys, lemma_xwidth_of, lemma_xwidths_of};
+use crate::encoding::{lemma_items_member_all, lemma_repeat_len, lemma_stys, lemma_to_xtys};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, map_rows_member, member, members, models, models_seq, STy};
+use crate::encoding::{lemma_xtys, lemma_xwidth_of, lemma_xwidths_of, list_items_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, stys, to_xty, to_xtys, wf_stype, wf_stypes, width, width_sum, SVal, XTy};
+use crate::encoding::{map_rows_member, member, members, models, models_seq, sty, stys, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{to_xty, to_xtys, wf_stype, wf_stypes, width, width_sum, xty, xtys, XTy};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{xwidth, xwidth_sum};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
@@ -35,9 +37,7 @@ use crate::expr_copy::copy_expr;
 use crate::limits::*;
 use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
-use crate::lists::rows_view;
-#[cfg(verus_keep_ghost)]
-use crate::lists::{lemma_items_member, lemma_list_join, lemma_list_parts, pad, pad_vals, rows_at};
+use crate::lists::{lemma_list_join, lemma_list_parts, pad, pad_vals, rows_at, rows_view};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
 use crate::maps::map_rows;
@@ -49,7 +49,7 @@ use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, mparts_ok, mrow_at, parts_ok, row_at};
+use crate::rows::{flat, mparts_ok, mrow_at, parts_ok, row_at, row_slots};
 use crate::stype_exec::{keys_or_zero_exec, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
@@ -528,23 +528,6 @@ pub proof fn lemma_wf_index(ts: Seq<STy>, i: int, enums: Seq<i64>)
     if i < ts.len() - 1 {
         lemma_wf_index(ts.drop_last(), i, enums);
         assert(ts.drop_last()[i] == ts[i]);
-    }
-}
-
-pub proof fn lemma_items_member_all(items: Seq<SVal>, t: STy, enums: Seq<i64>)
-    requires
-        forall|k: int| 0 <= k < items.len() ==> member(#[trigger] items[k], t, enums),
-    ensures
-        list_items_member(items, t, enums),
-    decreases items.len(),
-{
-    if items.len() > 0 {
-        let a = items.drop_last();
-        assert forall|k: int| 0 <= k < a.len() implies member(#[trigger] a[k], t, enums) by {
-            assert(a[k] == items[k]);
-        }
-        lemma_items_member_all(a, t, enums);
-        assert(member(items[items.len() - 1], t, enums));
     }
 }
 
@@ -1264,7 +1247,7 @@ proof fn lemma_canon_map_eval(
             Value::Bool(true),
         ) by {
             assert(rv[p] == row_vals(rs, x, enums)[p]);
-            crate::preserve::lemma_map_rows_member_index(rs, x, enums, p);
+            crate::encoding::lemma_map_rows_member_index(rs, x, enums, p);
             match rs[p] {
                 Some(w) => {
                     assert(rv[p].subrange(1, s as int) =~= enc(w, x, enums));

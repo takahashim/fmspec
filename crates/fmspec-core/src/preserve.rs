@@ -12,11 +12,9 @@
 //! そのため、後に束縛を加えても値は変わらない（[`lemma_weaken`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_rows, enc_seq, lemma_default_len, lemma_enc_len};
+use crate::encoding::{enc, enc_seq, lemma_enc_len, member, members, models, models_seq, sty, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, models, models_seq};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, width, xty, xwidth, xwidth_sum, STy, SVal, XTy};
+use crate::encoding::{width, xty, xwidth, xwidth_sum, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
@@ -855,77 +853,6 @@ pub proof fn lemma_option_out_pure(tag: Expr, payload: Seq<Expr>, defs: Seq<Expr
 
 pub open spec fn ranks_pure(parts: Seq<(Expr, i64)>, n: nat) -> bool {
     forall|k: int| 0 <= k < parts.len() ==> pure_below(#[trigger] parts[k].0, n)
-}
-
-/// Mapの行の符号化。有無のBoolと、値（ない行は既定値）の符号化。
-pub open spec fn row_slots(o: Option<SVal>, t: STy, enums: Seq<i64>) -> Seq<Value> {
-    match o {
-        Some(x) => seq![Value::Bool(true)] + enc(x, t, enums),
-        None => seq![Value::Bool(false)] + enc(default_val(t, enums), t, enums),
-    }
-}
-
-pub proof fn lemma_map_rows_member_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>, r: int)
-    requires
-        map_rows_member(rows, t, enums),
-        0 <= r < rows.len(),
-    ensures
-        rows[r] matches Some(x) ==> member(x, t, enums),
-    decreases rows.len(),
-{
-    if r < rows.len() - 1 {
-        lemma_map_rows_member_index(rows.drop_last(), t, enums, r);
-        assert(rows.drop_last()[r] == rows[r]);
-    }
-}
-
-/// Mapの符号化の `r` 行目の `i` 番目のスロット。
-pub proof fn lemma_enc_rows_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>, r: int, i: int)
-    requires
-        map_rows_member(rows, t, enums),
-        0 <= r < rows.len(),
-        0 <= i <= width(t, enums),
-    ensures
-        enc_rows(rows, t, enums).len() == rows.len() * (1 + width(t, enums)),
-        0 <= r * (1 + width(t, enums)) + i < rows.len() * (1 + width(t, enums)),
-        row_slots(rows[r], t, enums).len() == 1 + width(t, enums),
-        enc_rows(rows, t, enums)[r * (1 + width(t, enums)) + i] == row_slots(rows[r], t, enums)[i],
-    decreases rows.len(),
-{
-    let w = 1 + width(t, enums);
-    let n = rows.len() as int;
-    lemma_enc_rows_len(rows, t, enums);
-    lemma_map_rows_member_index(rows, t, enums, r);
-    match rows[r] {
-        Some(x) => lemma_enc_len(x, t, enums),
-        None => lemma_default_len(t, enums),
-    }
-    assert(0 <= r * w) by (nonlinear_arith)
-        requires
-            0 <= r,
-            0 <= w,
-    ;
-    assert(r * w + i < n * w) by (nonlinear_arith)
-        requires
-            0 <= r < n,
-            0 <= i < w,
-    ;
-    let pre = rows.drop_last();
-    lemma_enc_rows_len(pre, t, enums);
-    let p = enc_rows(pre, t, enums);
-    assert(p.len() == (n - 1) * w);
-    if r < n - 1 {
-        lemma_enc_rows_index(pre, t, enums, r, i);
-        assert(pre[r] == rows[r]);
-        assert(r * w + i < (n - 1) * w) by (nonlinear_arith)
-            requires
-                0 <= r < n - 1,
-                0 <= i < w,
-        ;
-    } else {
-        assert(r * w == (n - 1) * w);
-        assert(rows.last() == rows[r]);
-    }
 }
 
 // ---- 型の適合 ----

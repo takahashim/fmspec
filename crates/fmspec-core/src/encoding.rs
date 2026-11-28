@@ -1139,4 +1139,50 @@ pub proof fn lemma_wf_xtypes_intro(ts: Seq<XTy>, enums: Seq<i64>)
     }
 }
 
+pub proof fn lemma_items_member_all(items: Seq<SVal>, t: STy, enums: Seq<i64>)
+    requires
+        forall|k: int| 0 <= k < items.len() ==> member(#[trigger] items[k], t, enums),
+    ensures
+        list_items_member(items, t, enums),
+    decreases items.len(),
+{
+    if items.len() > 0 {
+        let a = items.drop_last();
+        assert forall|k: int| 0 <= k < a.len() implies member(#[trigger] a[k], t, enums) by {
+            assert(a[k] == items[k]);
+        }
+        lemma_items_member_all(a, t, enums);
+        assert(member(items[items.len() - 1], t, enums));
+    }
+}
+
+/// Listの要素は、要素の型に属する。
+pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
+    requires
+        list_items_member(items, t, enums),
+        0 <= k < items.len(),
+    ensures
+        member(items[k], t, enums),
+    decreases items.len(),
+{
+    if k < items.len() - 1 {
+        lemma_items_member(items.drop_last(), t, enums, k);
+        assert(items.drop_last()[k] == items[k]);
+    }
+}
+
+pub proof fn lemma_map_rows_member_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>, r: int)
+    requires
+        map_rows_member(rows, t, enums),
+        0 <= r < rows.len(),
+    ensures
+        rows[r] matches Some(x) ==> member(x, t, enums),
+    decreases rows.len(),
+{
+    if r < rows.len() - 1 {
+        lemma_map_rows_member_index(rows.drop_last(), t, enums, r);
+        assert(rows.drop_last()[r] == rows[r]);
+    }
+}
+
 } // verus!

@@ -23,6 +23,8 @@ use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_elem::elem_rank_lowers;
 #[cfg(verus_keep_ghost)]
+use crate::rows::{lemma_enc_rows_index, row_slots};
+#[cfg(verus_keep_ghost)]
 use crate::source::{count_some, count_true, eval_set_items, eval_src, SEnv, SetOp, TExpr};
 use vstd::prelude::*;
 
