@@ -5,27 +5,27 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, enc_rows, keys, lemma_default_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_items_member, lemma_models_enc};
+use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_items_index, lemma_items_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_repeat_len, list_items_member, member, sty, to_xty, STy, SType, SVal};
+use crate::encoding::{lemma_models_enc, lemma_repeat_len, member, sty, to_xty, STy, SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{width, xty, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, decode, eval_l, quant_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, pure_below};
+use crate::expr_build::{all_pure, bool_lit, lemma_pure_mono, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_domain_rank};
-#[cfg(verus_keep_ghost)]
-use crate::lists::{at_rank, picks, vals_at};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
+use crate::pick::{at_rank, lemma_vals_weaken, picks, vals_at};
+#[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::quant::{lemma_select_prefix, lemma_vals_weaken, unrank_ok};
+use crate::quant::unrank_ok;
 #[cfg(verus_keep_ghost)]
 use crate::rows::{lemma_enc_rows_index, row_slots};
 #[cfg(verus_keep_ghost)]
@@ -837,42 +837,6 @@ pub proof fn lemma_quant(
     }
 }
 
-/// Listの要素の符号化の、`k` 番目の要素の `j` 番目のスロット。
-pub proof fn lemma_items_index(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int, j: int)
-    requires
-        list_items_member(items, t, enums),
-        0 <= k < items.len(),
-        0 <= j < width(t, enums),
-    ensures
-        member(items[k], t, enums),
-        enc_items(items, t, enums).len() == items.len() * width(t, enums),
-        0 <= k * width(t, enums) + j < items.len() * width(t, enums),
-        enc_items(items, t, enums)[k * width(t, enums) + j] == enc(items[k], t, enums)[j],
-    decreases items.len(),
-{
-    let n = items.len() as int;
-    let w = width(t, enums) as int;
-    lemma_enc_items_len(items, t, enums);
-    lemma_enc_items_len(items.drop_last(), t, enums);
-    assert(k * w + j < n * w) by (nonlinear_arith)
-        requires
-            0 <= k < n,
-            0 <= j < w,
-    ;
-    assert(0 <= k * w) by (nonlinear_arith)
-        requires
-            0 <= k,
-            0 <= w,
-    ;
-    lemma_enc_len(items.last(), t, enums);
-    if k == n - 1 {
-        assert((n - 1) * w + j - (n - 1) * w == j);
-    } else {
-        lemma_items_index(items.drop_last(), t, enums, k, j);
-        assert(items.drop_last()[k] == items[k]);
-    }
-}
-
 /// 正規順の列 `dom` のうち、`bits` の先頭 `n` 個で選んだ値をたどった量化の状態。
 pub open spec fn qprefix(all: bool, dom: Seq<SVal>, bits: Seq<bool>, n: int, body: TExpr, se: SEnv, sls: Seq<SVal>) -> QState {
     eval_qstate(all, select_bits(dom, bits.take(n)), body, se, sls)
@@ -1032,6 +996,26 @@ pub proof fn lemma_select_all(dom: Seq<SVal>, n: nat)
         assert(bits.drop_last() =~= Seq::new((n - 1) as nat, |i: int| true));
         lemma_select_all(dom, (n - 1) as nat);
         assert(dom.take(n - 1).push(dom[n - 1]) =~= dom.take(n as int));
+    } else {
+        assert(dom.take(0) =~= Seq::<SVal>::empty());
+    }
+}
+
+/// 先頭の `len` 個の位置を選ぶと、列の先頭になる。
+pub proof fn lemma_select_prefix(dom: Seq<SVal>, m: nat, len: nat)
+    requires
+        m <= dom.len(),
+    ensures
+        select_bits(dom, Seq::new(m, |i: int| i < len)) == dom.take(if m <= len { m as int } else { len as int }),
+    decreases m,
+{
+    if m > 0 {
+        let bits = Seq::new(m, |i: int| i < len);
+        assert(bits.drop_last() =~= Seq::new((m - 1) as nat, |i: int| i < len));
+        lemma_select_prefix(dom, (m - 1) as nat, len);
+        if m <= len {
+            assert(dom.take(m - 1).push(dom[m - 1]) =~= dom.take(m as int));
+        }
     } else {
         assert(dom.take(0) =~= Seq::<SVal>::empty());
     }

@@ -183,12 +183,12 @@ proof fn lemma_con(
             let s = so->Some_0;
             let ot = sty(s.ty);
             let oo = mo->Some_0;
-            assert(oo.ty == crate::lower_types::slot_tys(ot, enums)[0]);
+            assert(oo.ty == crate::slot_types::slot_tys(ot, enums)[0]);
             assert(width(ot, enums) == 1);
             assert(crate::encoding::wf_stype(ot, enums)) by {
                 crate::encoding::lemma_enc_len(v, ot, enums);
             }
-            crate::canon::lemma_member_in(v, ot, enums);
+            crate::members::lemma_member_in(v, ot, enums);
             lemma_code_in(oo.ty, enc(v, ot, enums)[0], enums);
             assert(env.out == Some(decode(oo.ty, c)));
         },

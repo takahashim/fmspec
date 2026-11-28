@@ -1,14 +1,15 @@
 //! Tuple、Record、Option の下ろし（`low_struct`）。意味の保存は `preserve_tuple` にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_defaults_typed;
+use crate::block::lemma_extends_refl;
+use crate::block::{check, need};
 use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, lemma_default_len, lemma_xtys, lemma_xwidth_of, sty};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xty, xty, xtys, xwidth, xwidth_sum, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, pure_below, split_ok, xoff};
+use crate::expr_build::{all_pure, lemma_all_pure_mono, pure_below, split_ok, xoff};
 use crate::expr_build::{cb, defaults, extend, split, sub_exprs};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
@@ -25,6 +26,8 @@ use crate::lower_types::{lemma_xetys_part, lenv, tok, typed, xetys, xetys_seq};
 use crate::lowering::low;
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
+#[cfg(verus_keep_ghost)]
+use crate::members::lemma_defaults_typed;
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_lits};
@@ -32,16 +35,12 @@ use crate::preserve::{lemma_extends_trans, lemma_lits};
 use crate::preserve_tuple::{lemma_is_some, lemma_none, lemma_part, lemma_seq_base, lemma_seq_step};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_tuple::{lemma_some, lemma_tuple_done, lemma_unwrap, lowers_seq};
-#[cfg(verus_keep_ghost)]
-use crate::slots::lemma_extends_refl;
-use crate::slots::{check, copy_exprs, need, not};
+use crate::slots::{copy_exprs, not};
 use crate::source::{TExpr, FAIL_NONE};
 use crate::state_enc::copy_usizes;
 use crate::stype_exec::{copy_xtype, to_xtype};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_sc_wf_mono};
-#[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok, sctx, tpre};
+use crate::total::{bound_tys, here_ok, lemma_lim_ok_seq_at, lemma_sc_wf_mono, lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]

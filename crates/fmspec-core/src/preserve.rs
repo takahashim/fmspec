@@ -18,18 +18,17 @@ use crate::encoding::{width, xty, xwidth, xwidth_sum, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, concat, ite_s, join_s, lits, or_s, Join};
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, ite_s, join_s, lemma_pure_mono, Join};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{pure_below, tree_s, xoff};
+use crate::expr_build::{lits, or_s, pure_below, tree_s, xoff};
 #[cfg(verus_keep_ghost)]
 use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{in_slots, slot_tys};
-use crate::model::Expr;
+use crate::model::{Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::model::{Type, Value};
+use crate::slot_types::{in_slots, slot_tys};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, of_value, src_bool, to_value, SEnv, TExpr};
 use vstd::prelude::*;
@@ -58,42 +57,6 @@ pub proof fn lemma_prefix_trans(a: Seq<Value>, b: Seq<Value>, c: Seq<Value>)
 {
     assert forall|i: int| 0 <= i < a.len() implies #[trigger] c[i] == a[i] by {
         assert(b[i] == a[i]);
-    }
-}
-
-pub proof fn lemma_pure_mono(e: Expr, n: nat, m: nat)
-    requires
-        pure_below(e, n),
-        n <= m,
-    ensures
-        pure_below(e, m),
-    decreases e,
-{
-    match e {
-        Expr::Bin(_, a, b) => {
-            lemma_pure_mono(*a, n, m);
-            lemma_pure_mono(*b, n, m);
-        },
-        Expr::And(a, b) => {
-            lemma_pure_mono(*a, n, m);
-            lemma_pure_mono(*b, n, m);
-        },
-        Expr::Or(a, b) => {
-            lemma_pure_mono(*a, n, m);
-            lemma_pure_mono(*b, n, m);
-        },
-        Expr::Implies(a, b) => {
-            lemma_pure_mono(*a, n, m);
-            lemma_pure_mono(*b, n, m);
-        },
-        Expr::Not(a) => lemma_pure_mono(*a, n, m),
-        Expr::Code(a) => lemma_pure_mono(*a, n, m),
-        Expr::Ite(c, a, b) => {
-            lemma_pure_mono(*c, n, m);
-            lemma_pure_mono(*a, n, m);
-            lemma_pure_mono(*b, n, m);
-        },
-        _ => {},
     }
 }
 
@@ -1317,28 +1280,6 @@ pub proof fn lemma_extends_trans(a: Block, b: Block, c: Block)
 {
     assert forall|i: int| 0 <= i < a.binds@.len() implies #[trigger] c.binds@[i] == a.binds@[i] by {
         assert(c.binds@[i] == b.binds@[i]);
-    }
-}
-
-/// 式 `e` は、局所変数 `n` 個のもとで純粋である（[`pure_below`]）。
-pub fn pure_exec(e: &Expr, n: usize) -> (r: bool)
-    ensures
-        r == pure_below(*e, n as nat),
-    decreases e,
-{
-    match e {
-        Expr::Local(i) => *i < n,
-        Expr::Bin(_, a, b) => pure_exec(a, n) && pure_exec(b, n),
-        Expr::And(a, b) => pure_exec(a, n) && pure_exec(b, n),
-        Expr::Or(a, b) => pure_exec(a, n) && pure_exec(b, n),
-        Expr::Implies(a, b) => pure_exec(a, n) && pure_exec(b, n),
-        Expr::Not(a) => pure_exec(a, n),
-        Expr::Code(a) => pure_exec(a, n),
-        Expr::Ite(c, a, b) => pure_exec(c, n) && pure_exec(a, n) && pure_exec(b, n),
-        Expr::Let(_, _) => false,
-        Expr::Forall(_, _, _, _) => false,
-        Expr::Exists(_, _, _, _) => false,
-        _ => true,
     }
 }
 

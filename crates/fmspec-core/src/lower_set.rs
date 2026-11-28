@@ -1,11 +1,13 @@
 //! Set のリテラル、所属、要素の追加と削除、和と積と差の下ろし。意味の保存は `preserve_set` にある。
 
+#[cfg(verus_keep_ghost)]
+use crate::block::lemma_extends_refl;
 use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys, keys_or_zero, sty, to_xty, wf_stype, wf_xtype, xty, STy, XTy};
 use crate::expr_build::{all_of, and, bin, cb, ci, eq, implies, or};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, mark_s, pure_below, setop_s, Join};
+use crate::expr_build::{all_pure, bool_lit, lemma_all_pure_mono, mark_s, pure_below, setop_s, Join};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_iff};
@@ -26,22 +28,18 @@ use crate::lowering::{element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 use crate::model::{BinOp, Expr};
+use crate::pick::pick_slot;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_tree_pure};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_insert, lemma_remove, lemma_set_contains, lemma_setbin};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_setlit_base, lemma_setlit_step, setlit_ok};
-use crate::quant::pick_slot;
-#[cfg(verus_keep_ghost)]
-use crate::slots::lemma_extends_refl;
 use crate::slots::not;
 use crate::source::{SetOp, TExpr};
 use crate::stype_exec::{copy_stype, keys_exec, keys_or_zero_exec, stype_eq, xtype_eq};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_sc_wf_mono};
-#[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok, sctx, tpre};
+use crate::total::{bound_tys, here_ok, lemma_lim_ok_seq_at, lemma_sc_wf_mono, lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -278,7 +276,7 @@ pub(crate) fn low_member(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                 }
                 if pre {
                     lemma_all_pure_mono(cs@, b1.depth_s(), blk.depth_s());
-                    crate::quant::lemma_hit_pure(rg, cs@, hg, blk.depth_s());
+                    crate::pick::lemma_hit_pure(rg, cs@, hg, blk.depth_s());
                     assert(out@[0] == crate::expr_build::and_s(
                         Expr::Bin(BinOp::Ge, Box::new(rg), Box::new(Expr::Const(Value::Int(0)))),
                         hg,

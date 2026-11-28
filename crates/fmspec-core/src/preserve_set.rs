@@ -13,11 +13,11 @@ use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, mark_s, pure_below, 
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{at_rank, lemma_bin_const, picks, vals_at};
-#[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Value};
+#[cfg(verus_keep_ghost)]
+use crate::pick::{at_rank, lemma_bin_const, picks, vals_at};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]

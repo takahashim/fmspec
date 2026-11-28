@@ -9,19 +9,15 @@ use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, XTy, XType};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::all_pure;
+use crate::expr_build::{all_pure, lemma_all_pure_mono};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, items_typed, lemma_items_typed_iff, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lim_s, lim_ss, lim_xs};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Bound, Constant, Fail, Layout, LowerCtx};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{layout_tys, ok_x, sc_wf, shaped};
+use crate::lower_ctx::{layout_tys, ok_x, sc_wf, shaped, Bound, Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::Expr;
-#[cfg(verus_keep_ghost)]
-use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
 use crate::source::{Item, Over, TExpr};
 use vstd::prelude::*;
@@ -89,18 +85,6 @@ pub open spec fn cx_wf(cx: LowerCtx) -> bool {
     &&& forall|i: int|
         0 <= i < cx.consts@.len() ==> ok_s(sty(#[trigger] cx.consts@[i].ty), enums) && cx.consts@[i].slots@.len()
             == width(sty(cx.consts@[i].ty), enums)
-}
-
-pub proof fn lemma_all_pure_mono(s: Seq<Expr>, n: nat, m: nat)
-    requires
-        all_pure(s, n),
-        n <= m,
-    ensures
-        all_pure(s, m),
-{
-    assert forall|j: int| 0 <= j < s.len() implies crate::expr_build::pure_below(#[trigger] s[j], m) by {
-        lemma_pure_mono(s[j], n, m);
-    }
 }
 
 pub proof fn lemma_sc_wf_mono(sc: Seq<Bound>, n: nat, m: nat, enums: Seq<i64>)
@@ -452,6 +436,23 @@ pub proof fn lemma_lim_ok_items_intro(items: Seq<Item>, c: crate::infer::SCtx, l
         }
         lemma_lim_ok_items_intro(items.drop_last(), c, lt);
     }
+}
+
+/// 型の付く `ite` の条件と枝は、より深い位置でも前提を満たし、枝の型は `ite` の型である。
+pub proof fn lemma_ite_tpre(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, m: nat)
+    requires
+        e is Ite,
+        tpre(e, cx, sc, n),
+        n <= m,
+    ensures
+        tpre(*e->Ite_0, cx, sc, n),
+        ir_type_of(*e->Ite_0, sctx(cx), bound_tys(sc)) == Some(XTy::Bool),
+        tpre(*e->Ite_1, cx, sc, m),
+        tpre(*e->Ite_2, cx, sc, m),
+        ir_type_of(*e->Ite_1, sctx(cx), bound_tys(sc)) == ir_type_of(e, sctx(cx), bound_tys(sc)),
+        ir_type_of(*e->Ite_2, sctx(cx), bound_tys(sc)) == ir_type_of(e, sctx(cx), bound_tys(sc)),
+{
+    lemma_sc_wf_mono(sc, n, m, cx.enums@);
 }
 
 } // verus!

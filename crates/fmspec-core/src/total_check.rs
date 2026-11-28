@@ -9,10 +9,14 @@ use crate::encoding::{lemma_stys, lemma_xtys, sty, stys, width, width_sum, xty, 
 use crate::encoding::{xwidth, xwidth_sum};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
+use crate::equality::lemma_smalls;
+#[cfg(verus_keep_ghost)]
 use crate::infer::{agrees, scope_view};
 use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
+#[cfg(verus_keep_ghost)]
+use crate::lower_types::lemma_smalls_at;
 use crate::source::{Item, Over, TExpr};
 use crate::stype_exec::wf_xtype_exec;
 use crate::stype_exec::{keys_exec, keys_or_zero_exec, stype_eq, to_xtype, wf_stype_exec};
@@ -652,6 +656,75 @@ fn check_lim_items(_parent: &TExpr, items: &Vec<Item>, s: &Scope, lt: &mut Vec<X
     }
     proof {
         lemma_lim_ok_items_intro(items@, scope_view(s), l);
+    }
+    true
+}
+
+/// 型の中のどのListも、長さの上限が `0x7fff_ffff` 以下かを判定する。
+pub fn small_stype(t: &SType) -> (r: bool)
+    ensures
+        r == small(sty(*t)),
+    decreases t,
+{
+    match t {
+        SType::Tuple(ts) => {
+            proof {
+                assert(decreases_to!(*t => *ts));
+            }
+            small_stypes(t, ts)
+        },
+        SType::Record(_, ts) => {
+            proof {
+                assert(decreases_to!(*t => *ts));
+            }
+            small_stypes(t, ts)
+        },
+        SType::Option(x) => small_stype(x),
+        SType::Map(_, v) => small_stype(v),
+        SType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),
+        _ => true,
+    }
+}
+
+pub(crate) fn small_stypes(_parent: &SType, ts: &Vec<SType>) -> (r: bool)
+    requires
+        decreases_to!(*_parent => *ts),
+    ensures
+        r == smalls(stys(ts@)),
+    decreases _parent, 0nat,
+{
+    proof {
+        lemma_stys(ts@);
+    }
+    let mut i = 0;
+    while i < ts.len()
+        invariant
+            decreases_to!(*_parent => *ts),
+            i <= ts.len(),
+            forall|j: int| 0 <= j < i ==> small(sty(#[trigger] ts@[j])),
+        decreases ts.len() - i,
+    {
+        proof {
+            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+        }
+        if !small_stype(&ts[i]) {
+            proof {
+                lemma_stys(ts@);
+                if smalls(stys(ts@)) {
+                    lemma_smalls_at(stys(ts@), i as int);
+                }
+            }
+            return false;
+        }
+        i += 1;
+    }
+    proof {
+        lemma_stys(ts@);
+        let ss = stys(ts@);
+        assert forall|j: int| 0 <= j < ss.len() implies small(#[trigger] ss[j]) by {
+            assert(ss[j] == sty(ts@[j]));
+        }
+        lemma_smalls(ss);
     }
     true
 }

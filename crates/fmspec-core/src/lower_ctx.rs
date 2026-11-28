@@ -1,10 +1,12 @@
 //! 下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）。下ろしの各モジュールと、その証明が共有する型。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, width, width_sum, STy};
+use crate::encoding::{sty, wf_xtype, width, width_sum, xty, xwidth, STy, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::limits::lemma_width_sum_prefix;
+use crate::expr_build::all_pure;
+#[cfg(verus_keep_ghost)]
+use crate::limits::{lemma_width_sum_prefix, lim_x};
 use crate::model::{Expr, Value};
 use crate::typing::ETy;
 use vstd::prelude::*;
@@ -143,6 +145,26 @@ pub proof fn lemma_layout_end(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>, i:
     assert(ts.take(i + 1).drop_last() =~= ts.take(i));
     assert(ts.take(i + 1).last() == ts[i]);
     lemma_width_sum_prefix(ts, enums, i + 1);
+}
+
+/// 式の型が整形式で、大きさの条件を満たす。
+pub open spec fn ok_x(t: XTy, enums: Seq<i64>) -> bool {
+    wf_xtype(t, enums) && lim_x(t, enums)
+}
+
+/// スロットの列は型 `t` の幅だけあり、深さ `n` 未満の局所変数だけを参照する純粋な式である。
+pub open spec fn shaped(slots: Seq<Expr>, t: XTy, n: nat, enums: Seq<i64>) -> bool {
+    slots.len() == xwidth(t, enums) && all_pure(slots, n)
+}
+
+pub open spec fn layout_tys(ls: Seq<Layout>) -> Seq<STy> {
+    Seq::new(ls.len(), |i: int| sty(ls[i].ty))
+}
+
+/// 局所変数の束縛が整形式である。
+pub open spec fn sc_wf(sc: Seq<Bound>, n: nat, enums: Seq<i64>) -> bool {
+    forall|i: int|
+        0 <= i < sc.len() ==> ok_x(xty(#[trigger] sc[i].ty), enums) && shaped(sc[i].slots@, xty(sc[i].ty), n, enums)
 }
 
 } // verus!

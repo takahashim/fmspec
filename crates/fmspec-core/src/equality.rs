@@ -7,16 +7,13 @@
 //! そのため、スロットを位置ごとに比べる式は、型の不一致で失敗しない。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::xwidth;
-use crate::encoding::SType;
-#[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys_or_zero, lemma_default_vals_len, lemma_enc_items_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_stys, list_items_member};
+use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, list_items_member, map_rows_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{map_rows_member, member, members, models_seq, sty, stys, STy, SVal, XTy};
+use crate::encoding::{member, members, models_seq, xwidth, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, same_kind, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
@@ -41,7 +38,7 @@ verus! {
 
 // ---- Listの長さの上限 ----
 
-proof fn lemma_smalls(ts: Seq<STy>)
+pub(crate) proof fn lemma_smalls(ts: Seq<STy>)
     requires
         forall|i: int| 0 <= i < ts.len() ==> small(#[trigger] ts[i]),
     ensures
@@ -51,75 +48,6 @@ proof fn lemma_smalls(ts: Seq<STy>)
     if ts.len() > 0 {
         lemma_smalls(ts.drop_last());
     }
-}
-
-/// 型の中のどのListも、長さの上限が `0x7fff_ffff` 以下かを判定する。
-pub fn small_stype(t: &SType) -> (r: bool)
-    ensures
-        r == small(sty(*t)),
-    decreases t,
-{
-    match t {
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            small_stypes(t, ts)
-        },
-        SType::Record(_, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            small_stypes(t, ts)
-        },
-        SType::Option(x) => small_stype(x),
-        SType::Map(_, v) => small_stype(v),
-        SType::List(e, max) => *max <= 0x7fff_ffffusize && small_stype(e),
-        _ => true,
-    }
-}
-
-fn small_stypes(_parent: &SType, ts: &Vec<SType>) -> (r: bool)
-    requires
-        decreases_to!(*_parent => *ts),
-    ensures
-        r == smalls(stys(ts@)),
-    decreases _parent, 0nat,
-{
-    proof {
-        lemma_stys(ts@);
-    }
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            forall|j: int| 0 <= j < i ==> small(sty(#[trigger] ts@[j])),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-        }
-        if !small_stype(&ts[i]) {
-            proof {
-                lemma_stys(ts@);
-                if smalls(stys(ts@)) {
-                    lemma_smalls_at(stys(ts@), i as int);
-                }
-            }
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        lemma_stys(ts@);
-        let ss = stys(ts@);
-        assert forall|j: int| 0 <= j < ss.len() implies small(#[trigger] ss[j]) by {
-            assert(ss[j] == sty(ts@[j]));
-        }
-        lemma_smalls(ss);
-    }
-    true
 }
 
 // ---- 列の分割 ----

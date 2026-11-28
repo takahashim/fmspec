@@ -15,11 +15,11 @@ use crate::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_spec::{action_at, contract_at, init_ok, init_src};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_slot_tys_seq_len, slot_tys, slot_tys_seq, ty_repeat};
-#[cfg(verus_keep_ghost)]
 use crate::model::{RawModel, Type, Update};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, model_typed};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{lemma_slot_tys_seq_len, slot_tys, slot_tys_seq, ty_repeat};
 #[cfg(verus_keep_ghost)]
 use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
@@ -333,11 +333,11 @@ pub proof fn lemma_layout_tys_eq(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>)
     requires
         layouts_at(ls, ts, enums),
     ensures
-        crate::lower_types::layout_tys(ls) == ts,
-        layouts_at(ls, crate::lower_types::layout_tys(ls), enums),
+        crate::lower_ctx::layout_tys(ls) == ts,
+        layouts_at(ls, crate::lower_ctx::layout_tys(ls), enums),
 {
-    assert(crate::lower_types::layout_tys(ls) =~= ts) by {
-        assert forall|i: int| 0 <= i < ts.len() implies crate::lower_types::layout_tys(ls)[i] == ts[i] by {
+    assert(crate::lower_ctx::layout_tys(ls) =~= ts) by {
+        assert forall|i: int| 0 <= i < ts.len() implies crate::lower_ctx::layout_tys(ls)[i] == ts[i] by {
             assert(layout_at(ls[i], ts, i, enums));
         }
     }
@@ -357,7 +357,7 @@ pub proof fn lemma_cx_tok(cx: LowerCtx, cv: Seq<SVal>, ts: Seq<STy>, ats: Seq<ST
     let enums = cx.enums@;
     lemma_layout_tys_eq(cx.states->Some_0@, ts, enums);
     lemma_layout_tys_eq(cx.args@, ats, enums);
-    assert forall|i: int| 0 <= i < cx.consts@.len() implies #[trigger] crate::lower_types::in_slots(
+    assert forall|i: int| 0 <= i < cx.consts@.len() implies #[trigger] crate::slot_types::in_slots(
         cx.consts@[i].slots@,
         slot_tys(sty(cx.consts@[i].ty), enums),
         enums,
@@ -365,7 +365,7 @@ pub proof fn lemma_cx_tok(cx: LowerCtx, cv: Seq<SVal>, ts: Seq<STy>, ats: Seq<ST
         let t = sty(cx.consts@[i].ty);
         assert(crate::total::ok_s(t, enums));
         crate::limits::lemma_lim_small(t, enums);
-        crate::canon::lemma_member_in(cv[i], t, enums);
+        crate::members::lemma_member_in(cv[i], t, enums);
     }
 }
 
@@ -447,7 +447,7 @@ pub proof fn lemma_inv_env(sm: SModel, cv: Seq<SVal>, stg: Seq<Layout>, sx: Lowe
         crate::lower_types::lenv(sx) == crate::typing::inv_tyenv(m),
 {
     lemma_layout_tys_eq(stg, stys(sm.states@), sm.enums@);
-    assert(crate::lower_types::layout_tys(sx.args@) =~= Seq::<STy>::empty());
+    assert(crate::lower_ctx::layout_tys(sx.args@) =~= Seq::<STy>::empty());
     assert(slot_tys_seq(Seq::<STy>::empty(), sm.enums@) =~= Seq::<Type>::empty());
     lemma_same_env(crate::lower_types::lenv(sx), crate::typing::inv_tyenv(m));
 }

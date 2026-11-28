@@ -8,13 +8,11 @@
 #[cfg(verus_keep_ghost)]
 use crate::action_lower::{lemma_encode_in, type_err, user_err};
 use crate::action_lower::{lower_action, Fault, LowerError};
-use crate::canon::{slot_types, slot_types_list};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, lemma_stys, lemma_width_pos, member, members, sty, stys, STy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xty, wf_stype, wf_stypes, width_sum, XTy};
 use crate::encoding::{SType, SVal};
-use crate::equality::small_stype;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{code_of, eval_l, eval_spec, prop_spec, Env, ErrKind};
 use crate::eval::{eval, eval_prop, Ctx};
@@ -28,8 +26,6 @@ use crate::lower_ctx::{Constant, Fail, Layout, LowerCtx};
 use crate::lower_spec::{action_at, action_low, contract_at, contract_low, ctx_is, init_ok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_spec::{init_src, model_ok, prop_low};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 use crate::lowering::{lower_prop, lower_stored};
 use crate::model::{Action, Contract, Expr, RawModel, Type, Value};
 #[cfg(verus_keep_ghost)]
@@ -45,6 +41,9 @@ use crate::model_wf::{lemma_model_frame, sm_wf, wf_frame};
 use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{inv_env, safe, Conditions};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
+use crate::slot_types::{slot_types, slot_types_list};
 use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::{consts_ok, s_cand, s_env, s_init, s_init_var, s_prop, s_safe, s_state_tys};
@@ -59,6 +58,7 @@ use crate::state_set::cmp_state;
 use crate::stype_exec::{copy_stype, stype_width, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
 use crate::total::{cx_wf, ok_s, sctx};
+use crate::total_check::small_stype;
 use vstd::prelude::*;
 
 verus! {
@@ -304,13 +304,13 @@ proof fn lemma_stored_val(
             }
             assert(e =~= vals);
             assert(cs =~= codes(vals));
-            assert(crate::lower_types::in_slots(e, tys, enums));
+            assert(crate::slot_types::in_slots(e, tys, enums));
         },
     }
 }
 
 spec fn in_slot_at(tys: Seq<Type>, vals: Seq<Value>, j: int, enums: Seq<i64>) -> bool {
-    crate::lower_types::in_slot(tys[j], vals[j], enums)
+    crate::slot_types::in_slot(tys[j], vals[j], enums)
 }
 
 /// 型 `t` の式を空の環境で評価する。値を `(slots, codes)` で返す。

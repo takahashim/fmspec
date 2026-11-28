@@ -1,9 +1,7 @@
 //! 中核の符号の列と、値の列の対応（`rel`）。中核の更新の列の意味（`c_apply`）と、引数の正規形の仕様。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_wf_index;
-#[cfg(verus_keep_ghost)]
-use crate::canon::{canon_ok, canon_wf, lemma_enc_seq_sub, lemma_member_in, lemma_seq_in};
+use crate::canon::{canon_ok, canon_wf};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, lemma_enc_len, member, members, sty, wf_stypes, STy, SVal};
 #[cfg(verus_keep_ghost)]
@@ -17,13 +15,15 @@ use crate::limits::smalls;
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{layout_at, layouts_at, Constant, Layout};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{in_slot, in_slots, lemma_slot_tys_len, lemma_slot_tys_seq_len};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
+use crate::members::{lemma_enc_seq_sub, lemma_member_in, lemma_seq_in, lemma_wf_index};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Type, Update, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{clean, layout_ok, layouts_ok, lemma_members, slot_vals};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{in_slot, in_slots, lemma_slot_tys_len, lemma_slot_tys_seq_len};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{encode_spec, in_type, vals_ok};
 use vstd::prelude::*;

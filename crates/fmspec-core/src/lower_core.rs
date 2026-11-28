@@ -1,7 +1,8 @@
 //! 葉（リテラル、変数、引数）、演算子、`let`、`all` と `any`、条件式の下ろし。意味の保存は `preserve_ops` にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_defaults_typed;
+use crate::block::lemma_extends_refl;
+use crate::block::{atom, atoms, bind, depth, need, new_block, wrap};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, lemma_default_len, lemma_enc_len, lemma_models_enc};
 #[cfg(verus_keep_ghost)]
@@ -12,15 +13,17 @@ use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, ite_s, kind_expr, lits, pure_below};
-use crate::expr_build::{bin, cb, defaults, extend, ite, tree, Join};
+use crate::expr_build::{all_pure, bool_lit, ite_s, kind_expr, lemma_all_pure_mono, lemma_pure_mono};
+use crate::expr_build::{bin, cb, defaults, extend, ite, pure_exec, tree, Join};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{lits, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_bool, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lemma_lim_xs_at, lim_xs};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::extends;
+use crate::lower_ctx::{extends, ok_x, sc_wf, shaped};
 use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, has_ty, lemma_added_typed, lemma_bind_typed};
@@ -31,39 +34,40 @@ use crate::lower_types::{lemma_lts_len, lemma_pure_type, lemma_tok_ext, lemma_tr
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_typed_blk, lemma_typed_concat, lemma_typed_ext, lemma_typed_sub};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_xetys_len, lemma_xetys_of, lenv, lts, ok_x, sc_typed, sc_wf, shaped};
+use crate::lower_types::{lemma_xetys_len, lemma_xetys_of, lenv, lts, sc_typed, tok, tok_in};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{slot_tys, tok, tok_in, ty_post, typed, xetys, xetys_seq};
+use crate::lower_types::{ty_post, typed, xetys, xetys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
-use crate::lowering::{atoms, bool_in, layout_slots, lit_type, low, sub_scalar};
+use crate::lowering::{bool_in, layout_slots, lit_type, low, sub_scalar};
+#[cfg(verus_keep_ghost)]
+use crate::members::lemma_defaults_typed;
 use crate::model::{BinOp, Expr, Value};
-use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{closed_lowers, closed_slots, ctx_ok, denotes, fresh, layout_ok, layouts_ok};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_fresh_refl, lemma_lits, lemma_models_len};
+use crate::preserve::{lemma_extends_trans, lemma_fresh_refl, lemma_lits, lemma_models_len, lowers};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_pure_mono, lowers, result_ok, run, slot_vals, slots_result, wraps};
+use crate::preserve::{result_ok, run, slot_vals, slots_result, wraps};
+#[cfg(verus_keep_ghost)]
+use crate::preserve_ops::pad_lets_seq;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_ops::{ite_binds, lemma_bin, lemma_eq, lemma_fold, lemma_fold_empty};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_ops::{lemma_implies, lemma_ite_binds_push, lemma_ite_bound, lemma_ite_out_pure};
 #[cfg(verus_keep_ghost)]
-use crate::preserve_ops::{lemma_ite_simple, lemma_ite_tpre, lemma_let, lemma_not};
+use crate::preserve_ops::{lemma_ite_simple, lemma_let, lemma_not, lemma_pads_closed, pad_lets_s};
 #[cfg(verus_keep_ghost)]
-use crate::preserve_ops::{lemma_pads_closed, pad_lets_s, pad_lets_seq};
-#[cfg(verus_keep_ghost)]
-use crate::slots::lemma_extends_refl;
-use crate::slots::{atom, bind, copy_exprs, depth, eq_slots, need, new_block, not, wrap};
+use crate::slot_types::slot_tys;
+use crate::slots::{copy_exprs, eq_slots, not};
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
 use crate::stype_exec::{copy_stype, copy_xtype, to_xtype, xtype_eq};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, cx_wf, deep, here_ok, layout_wf, lemma_all_pure_mono};
+use crate::total::{bound_tys, cx_wf, deep, here_ok, layout_wf, lemma_ite_tpre, lemma_lim_ok_seq_at};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_lim_ok_seq_at, lemma_sc_wf_mono, lim_ok, low_post, ok_s, sctx, tpre};
+use crate::total::{lemma_sc_wf_mono, lim_ok, low_post, ok_s, sctx, tpre};
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
 use crate::typing::{type_l, TyEnv};
@@ -426,7 +430,7 @@ fn low_arg(e: &TExpr, cx: &LowerCtx, _sc: &Vec<Bound>, _blk: &Block) -> (r: Resu
             proof {
                 if tp {
                     lemma_xetys_of(sty(*st), enums@);
-                    crate::lower_types::lemma_slot_tys_len(sty(*st), enums@);
+                    crate::slot_types::lemma_slot_tys_len(sty(*st), enums@);
                     assert(has_ty(out@[0], tv, lt, xetys(xty(t), enums@)[0]));
                 }
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
@@ -531,7 +535,7 @@ fn low_named(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) -> (r: Res
                     assert(ok_s(sty(cx.consts@[*i as int].ty), enums));
                 }
                 if tp {
-                    assert(crate::lower_types::in_slots(c.slots@, slot_tys(sty(c.ty), enums), enums));
+                    assert(crate::slot_types::in_slots(c.slots@, slot_tys(sty(c.ty), enums), enums));
                     lemma_lits_typed(c.slots@, slot_tys(sty(c.ty), enums), tv, lt);
                     lemma_xetys_of(sty(c.ty), enums);
                 }

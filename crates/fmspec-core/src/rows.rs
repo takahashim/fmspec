@@ -1,4 +1,4 @@
-//! List と Map のスロットの、行への区切りの仕様（`parts_ok`、`mparts_ok` など）。exec の区切りは `lists` と `maps` にある。
+//! List と Map のスロットの、行への区切り。区切りの仕様（`parts_ok`、`mparts_ok`、`rows_view` など）と、行の先頭、行ごとの条件式、行のつなぎ直しの実行関数。区切る実行関数は `lists` と `maps` にある。
 
 #[cfg(verus_keep_ghost)]
 use crate::encoding::width;
@@ -7,9 +7,16 @@ use crate::encoding::{default_val, enc, enc_rows, lemma_default_len, lemma_enc_l
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, lemma_map_rows_member_index, map_rows_member, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::ite_s;
+use crate::eval::Env;
+use crate::expr_build::{ci, eq, ite};
 #[cfg(verus_keep_ghost)]
-use crate::model::{BinOp, Expr, Value};
+use crate::expr_build::{concat, ite_s};
+use crate::expr_copy::copy_expr;
+use crate::model::Expr;
+#[cfg(verus_keep_ghost)]
+use crate::model::{BinOp, Value};
+#[cfg(verus_keep_ghost)]
+use crate::preserve::{clean, slot_vals};
 use vstd::prelude::*;
 
 verus! {
@@ -126,6 +133,220 @@ pub proof fn lemma_enc_rows_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i6
         assert(r * w == (n - 1) * w);
         assert(rows.last() == rows[r]);
     }
+}
+
+/// 各行のスロットは純粋で、値は `vals` である。
+pub open spec fn rows_at(rows: Seq<Seq<Expr>>, vals: Seq<Seq<Value>>, env: Env, l: Seq<Value>) -> bool {
+    &&& rows.len() == vals.len()
+    &&& forall|p: int| 0 <= p < rows.len() ==> clean(#[trigger] rows[p], env, l) && slot_vals(rows[p], env, l) == vals[p]
+}
+
+/// 行の列を、`Vec` の列から作る。
+pub open spec fn rows_view(rows: Seq<Vec<Expr>>) -> Seq<Seq<Expr>> {
+    Seq::new(rows.len(), |i: int| rows[i]@)
+}
+
+pub fn heads(rows: &Vec<Vec<Expr>>) -> (r: Option<Vec<Expr>>)
+    ensures
+        r matches Some(h) ==> heads_ok(h@, rows_view(rows@)),
+        (forall|q: int| 0 <= q < rows@.len() ==> (#[trigger] rows@[q])@.len() > 0) ==> r is Some,
+{
+    let mut h: Vec<Expr> = Vec::new();
+    let mut i = 0;
+    while i < rows.len()
+        invariant
+            i <= rows@.len(),
+            h@.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] head_at(h@[q], rows@[q]@),
+        decreases rows.len() - i,
+    {
+        if rows[i].len() == 0 {
+            return None;
+        }
+        let ghost h1 = h@;
+        let x = copy_expr(&rows[i][0]);
+        h.push(x);
+        proof {
+            assert(x == rows@[i as int]@[0]);
+            assert forall|q: int| 0 <= q <= i implies #[trigger] head_at(h@[q], rows@[q]@) by {
+                if q < i {
+                    assert(h@[q] == h1[q]);
+                }
+            }
+        }
+        i += 1;
+    }
+    proof {
+        let rv = rows_view(rows@);
+        assert forall|q: int| 0 <= q < rv.len() implies #[trigger] head_at(h@[q], rv[q]) by {
+            assert(rv[q] == rows@[q]@);
+        }
+    }
+    Some(h)
+}
+
+/// 各行のスロットを、`k` が行の番号なら `alt` のスロットに置き換える。
+pub fn ite_rows(rows: &Vec<Vec<Expr>>, k: &Expr, alt: &Vec<Expr>) -> (r: Option<Vec<Vec<Expr>>>)
+    ensures
+        r matches Some(out) ==> ite_rows_ok(rows_view(out@), rows_view(rows@), *k, alt@),
+        rows@.len() <= 0x7fff_ffff && (forall|q: int| 0 <= q < rows@.len() ==> (#[trigger] rows@[q])@.len() == alt@.len())
+            ==> r is Some,
+{
+    if rows.len() > 0x7fff_ffffusize {
+        return None;
+    }
+    let mut out: Vec<Vec<Expr>> = Vec::new();
+    let mut p = 0;
+    while p < rows.len()
+        invariant
+            rows@.len() <= 0x7fff_ffff,
+            p <= rows@.len(),
+            out@.len() == p,
+            forall|q: int| 0 <= q < p ==> #[trigger] ite_row(out@[q]@, rows@[q]@, *k, alt@, q),
+        decreases rows.len() - p,
+    {
+        if rows[p].len() != alt.len() {
+            return None;
+        }
+        let mut vs: Vec<Expr> = Vec::new();
+        let mut j = 0;
+        while j < alt.len()
+            invariant
+                p < rows@.len(),
+                rows@.len() <= 0x7fff_ffff,
+                rows@[p as int]@.len() == alt@.len(),
+                j <= alt@.len(),
+                vs@.len() == j,
+                forall|i: int|
+                    0 <= i < j ==> #[trigger] vs@[i] == ite_s(
+                        Expr::Bin(BinOp::Eq, Box::new(*k), Box::new(Expr::Const(Value::Int(p as i64)))),
+                        alt@[i],
+                        rows@[p as int]@[i],
+                    ),
+            decreases alt.len() - j,
+        {
+            vs.push(ite(eq(copy_expr(k), ci(p as i64)), copy_expr(&alt[j]), copy_expr(&rows[p][j])));
+            j += 1;
+        }
+        let ghost o1 = out@;
+        out.push(vs);
+        proof {
+            assert(ite_row(out@[p as int]@, rows@[p as int]@, *k, alt@, p as int));
+            assert forall|q: int| 0 <= q < p implies #[trigger] ite_row(out@[q]@, rows@[q]@, *k, alt@, q) by {
+                assert(out@[q] == o1[q]);
+            }
+        }
+        p += 1;
+    }
+    proof {
+        let ov = rows_view(out@);
+        let rv = rows_view(rows@);
+        assert forall|q: int| 0 <= q < rv.len() implies #[trigger] ite_row(ov[q], rv[q], *k, alt@, q) by {
+            assert(ov[q] == out@[q]@);
+            assert(rv[q] == rows@[q]@);
+        }
+    }
+    Some(out)
+}
+
+/// 行をつなげる。
+pub fn join_rows(items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
+    ensures
+        r@ == concat(rows_view(items@)),
+{
+    let ghost rv = rows_view(items@);
+    let mut out: Vec<Expr> = Vec::new();
+    proof {
+        assert(rv.take(0) =~= Seq::<Seq<Expr>>::empty());
+        assert(out@ =~= concat(rv.take(0)));
+    }
+    let mut i = 0;
+    while i < items.len()
+        invariant
+            i <= items@.len(),
+            rv == rows_view(items@),
+            out@ == concat(rv.take(i as int)),
+        decreases items.len() - i,
+    {
+        let ghost o1 = out@;
+        let mut j = 0;
+        while j < items[i].len()
+            invariant
+                i < items.len(),
+                j <= items@[i as int]@.len(),
+                out@ == o1 + items@[i as int]@.take(j as int),
+            decreases items@[i as int]@.len() - j,
+        {
+            out.push(copy_expr(&items[i][j]));
+            proof {
+                assert(o1 + items@[i as int]@.take(j + 1) =~= (o1 + items@[i as int]@.take(j as int)).push(
+                    items@[i as int]@[j as int],
+                ));
+            }
+            j += 1;
+        }
+        proof {
+            assert(rv.take(i + 1).drop_last() =~= rv.take(i as int));
+            assert(rv.take(i + 1).last() == items@[i as int]@);
+            assert(items@[i as int]@.take(items@[i as int]@.len() as int) =~= items@[i as int]@);
+        }
+        i += 1;
+    }
+    proof {
+        assert(rv.take(items@.len() as int) =~= rv);
+    }
+    out
+}
+
+pub fn list_join(len: Expr, items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
+    ensures
+        r@ == seq![len] + concat(rows_view(items@)),
+{
+    let ghost l0 = len;
+    let ghost rv = rows_view(items@);
+    let mut out: Vec<Expr> = Vec::new();
+    out.push(len);
+    proof {
+        assert(rv.take(0) =~= Seq::<Seq<Expr>>::empty());
+        assert(out@ =~= seq![l0] + concat(rv.take(0)));
+    }
+    let mut i = 0;
+    while i < items.len()
+        invariant
+            i <= items@.len(),
+            rv == rows_view(items@),
+            out@ == seq![l0] + concat(rv.take(i as int)),
+        decreases items.len() - i,
+    {
+        let ghost o1 = out@;
+        let mut j = 0;
+        while j < items[i].len()
+            invariant
+                i < items.len(),
+                j <= items@[i as int]@.len(),
+                out@ == o1 + items@[i as int]@.take(j as int),
+            decreases items@[i as int]@.len() - j,
+        {
+            out.push(copy_expr(&items[i][j]));
+            proof {
+                assert(o1 + items@[i as int]@.take(j + 1) =~= (o1 + items@[i as int]@.take(j as int)).push(
+                    items@[i as int]@[j as int],
+                ));
+            }
+            j += 1;
+        }
+        proof {
+            assert(rv.take(i + 1).drop_last() =~= rv.take(i as int));
+            assert(rv.take(i + 1).last() == items@[i as int]@);
+            assert(items@[i as int]@.take(items@[i as int]@.len() as int) =~= items@[i as int]@);
+            assert(seq![l0] + concat(rv.take(i + 1)) =~= (seq![l0] + concat(rv.take(i as int))) + items@[i as int]@);
+        }
+        i += 1;
+    }
+    proof {
+        assert(rv.take(items@.len() as int) =~= rv);
+    }
+    out
 }
 
 } // verus!

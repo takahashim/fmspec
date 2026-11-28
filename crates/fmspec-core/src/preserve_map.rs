@@ -11,11 +11,11 @@ use crate::encoding::{to_xty, width, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, concat, lits, pure_below};
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, lemma_pure_mono, lits, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{at_rank, lemma_ite_rows, lemma_rows_weaken, picks};
+use crate::lists::{lemma_ite_rows, lemma_rows_weaken};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
@@ -24,6 +24,8 @@ use crate::map_lookup::{flat_slot, flat_slot_int, key_rank, MISSING_KEY};
 use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, lemma_rows_update, row_vals};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Value};
+#[cfg(verus_keep_ghost)]
+use crate::pick::{at_rank, picks};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]

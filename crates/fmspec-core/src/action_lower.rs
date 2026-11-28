@@ -1,8 +1,6 @@
 //! 操作の下ろし。名前を解決したIRの操作（`SAction`）を、中核の操作に下ろす。
 
-use crate::canon::{canonical, slot_types_list};
-#[cfg(verus_keep_ghost)]
-use crate::canon::{lemma_member_in, lemma_wf_index};
+use crate::canon::canonical;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, lemma_enc_len, lemma_width_pos, member, sty, stys, to_xty, SVal};
 #[cfg(verus_keep_ghost)]
@@ -15,13 +13,13 @@ use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lim_s, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{layout_at, layouts_at};
+use crate::lower_ctx::{layout_at, layout_tys, layouts_at};
 use crate::lower_ctx::{Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{has_ty, in_slot, in_slots, layout_tys, lemma_slot_tys_len};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_slot_tys_seq_len, lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
+use crate::lower_types::has_ty;
 use crate::lowering::{lower_prop, lower_stored};
+#[cfg(verus_keep_ghost)]
+use crate::members::{lemma_member_in, lemma_wf_index};
 use crate::model::{Action, Expr, Output, Type, Update};
 #[cfg(verus_keep_ghost)]
 use crate::model::{RawModel, Value};
@@ -29,6 +27,11 @@ use crate::model::{RawModel, Value};
 use crate::model_total::{sa_typed, styped};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{env_rel, layout_ok, prop_result, stored_result, top_ok};
+use crate::slot_types::slot_types_list;
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{in_slot, in_slots, lemma_slot_tys_len, lemma_slot_tys_seq_len};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
 use crate::smodel::SAction;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::SUpdate;

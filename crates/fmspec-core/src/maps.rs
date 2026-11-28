@@ -16,15 +16,13 @@ use crate::expr_build::concat;
 use crate::expr_build::sub_exprs;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_s;
-#[cfg(verus_keep_ghost)]
-use crate::lists::{rows_at, rows_view};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{lemma_enc_rows_index, mparts_ok, mrow_at, row_slots};
+use crate::rows::{lemma_enc_rows_index, mparts_ok, mrow_at, row_slots, rows_at, rows_view};
 use crate::stype_exec::{keys_or_zero_exec, stype_width};
 use vstd::prelude::*;
 

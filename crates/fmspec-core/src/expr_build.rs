@@ -627,4 +627,74 @@ pub open spec fn mark_s(on: bool, bit: Expr, r: Expr, k: i64) -> Expr {
     }
 }
 
+pub proof fn lemma_pure_mono(e: Expr, n: nat, m: nat)
+    requires
+        pure_below(e, n),
+        n <= m,
+    ensures
+        pure_below(e, m),
+    decreases e,
+{
+    match e {
+        Expr::Bin(_, a, b) => {
+            lemma_pure_mono(*a, n, m);
+            lemma_pure_mono(*b, n, m);
+        },
+        Expr::And(a, b) => {
+            lemma_pure_mono(*a, n, m);
+            lemma_pure_mono(*b, n, m);
+        },
+        Expr::Or(a, b) => {
+            lemma_pure_mono(*a, n, m);
+            lemma_pure_mono(*b, n, m);
+        },
+        Expr::Implies(a, b) => {
+            lemma_pure_mono(*a, n, m);
+            lemma_pure_mono(*b, n, m);
+        },
+        Expr::Not(a) => lemma_pure_mono(*a, n, m),
+        Expr::Code(a) => lemma_pure_mono(*a, n, m),
+        Expr::Ite(c, a, b) => {
+            lemma_pure_mono(*c, n, m);
+            lemma_pure_mono(*a, n, m);
+            lemma_pure_mono(*b, n, m);
+        },
+        _ => {},
+    }
+}
+
+/// 式 `e` は、局所変数 `n` 個のもとで純粋である（[`pure_below`]）。
+pub fn pure_exec(e: &Expr, n: usize) -> (r: bool)
+    ensures
+        r == pure_below(*e, n as nat),
+    decreases e,
+{
+    match e {
+        Expr::Local(i) => *i < n,
+        Expr::Bin(_, a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::And(a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::Or(a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::Implies(a, b) => pure_exec(a, n) && pure_exec(b, n),
+        Expr::Not(a) => pure_exec(a, n),
+        Expr::Code(a) => pure_exec(a, n),
+        Expr::Ite(c, a, b) => pure_exec(c, n) && pure_exec(a, n) && pure_exec(b, n),
+        Expr::Let(_, _) => false,
+        Expr::Forall(_, _, _, _) => false,
+        Expr::Exists(_, _, _, _) => false,
+        _ => true,
+    }
+}
+
+pub proof fn lemma_all_pure_mono(s: Seq<Expr>, n: nat, m: nat)
+    requires
+        all_pure(s, n),
+        n <= m,
+    ensures
+        all_pure(s, m),
+{
+    assert forall|j: int| 0 <= j < s.len() implies crate::expr_build::pure_below(#[trigger] s[j], m) by {
+        lemma_pure_mono(s[j], n, m);
+    }
+}
+
 } // verus!

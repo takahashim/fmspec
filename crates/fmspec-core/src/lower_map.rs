@@ -1,23 +1,22 @@
 //! Map のリテラル、参照、キーの有無、更新、削除、キーの集合の下ろし。意味の保存は `preserve_map` にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_defaults_typed;
+use crate::block::lemma_extends_refl;
+use crate::block::{bind, depth, need};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, keys, keys_or_zero, lemma_default_len, lemma_xwidth_of};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{sty, to_xty, wf_stype, width, xty, STy, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, pure_below};
+use crate::expr_build::{all_pure, lemma_all_pure_mono, lemma_pure_mono, pure_below};
 use crate::expr_build::{and, bin, cb, ci, defaults, extend};
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lemma_lim_small;
 #[cfg(verus_keep_ghost)]
-use crate::lists::rows_view;
-#[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{added, extends};
+use crate::lower_ctx::{added, extends, shaped};
 use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, etys, has_ty, lemma_and_typed, lemma_bind_typed};
@@ -28,37 +27,39 @@ use crate::lower_types::{lemma_ge0_typed, lemma_has_ty_blk, lemma_ite_rows_typed
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_map_rows_typed, lemma_mrows_typed, lemma_tok_ext, lemma_typed_blk};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_xetys_of, lenv, shaped, slot_tys, tok, typed, xetys};
+use crate::lower_types::{lemma_xetys_of, lenv, tok, typed, xetys};
 use crate::lowering::{element, element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::{lemma_flat_shape, lemma_ite_rows_shape, low_ok};
 use crate::map_lookup::select_flat_map_lookup;
 use crate::maps::map_rows;
+#[cfg(verus_keep_ghost)]
+use crate::members::lemma_defaults_typed;
 use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};
+use crate::pick::pick_slot;
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_fresh_push, lemma_lits, lemma_pure_mono};
+use crate::preserve::{lemma_extends_trans, lemma_fresh_push, lemma_lits};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_map::{lemma_delete, lemma_get, lemma_has_key, lemma_keys, lemma_maplit_base};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_map::{lemma_maplit_step, lemma_put, lemma_put_expr, maplit_ok, put_lowers};
-use crate::quant::pick_slot;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{head_at, heads_ok, mparts_ok, mrow_at};
+use crate::rows::{head_at, heads_ok, mparts_ok, mrow_at, rows_view};
+use crate::rows::{heads, ite_rows, join_rows};
 #[cfg(verus_keep_ghost)]
-use crate::slots::lemma_extends_refl;
-use crate::slots::{bind, depth, heads, ite_rows, join_rows, need};
+use crate::slot_types::slot_tys;
 #[cfg(verus_keep_ghost)]
 use crate::source::Item;
 use crate::source::TExpr;
 use crate::stype_exec::{copy_stype, keys_exec, keys_or_zero_exec, stype_eq, stype_width, to_xtype};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, deep, here_ok, items_ok, lemma_all_pure_mono, lemma_items_ok_at};
+use crate::total::{bound_tys, deep, here_ok, items_ok, lemma_items_ok_at, lemma_items_ok_intro};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_items_ok_intro, lemma_ok_map, lemma_put_pre, lemma_sc_wf_mono, lim_ok};
+use crate::total::{lemma_ok_map, lemma_put_pre, lemma_sc_wf_mono, lim_ok, ok_s, ok_s_o, put_pre};
 #[cfg(verus_keep_ghost)]
-use crate::total::{ok_s, ok_s_o, put_pre, sctx, tpre};
+use crate::total::{sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
@@ -123,8 +124,8 @@ pub(crate) fn put(
     proof {
         reveal(put_pre);
         if tq {
-            crate::lower_types::lemma_slot_tys_len(sty(*v), cx.enums@);
-            assert(xetys(XTy::Map(Box::new(sty(*k)), Box::new(sty(*v))), cx.enums@) == etys(crate::lower_types::ty_repeat(rowt, nk)));
+            crate::slot_types::lemma_slot_tys_len(sty(*v), cx.enums@);
+            assert(xetys(XTy::Map(Box::new(sty(*k)), Box::new(sty(*v))), cx.enums@) == etys(crate::slot_types::ty_repeat(rowt, nk)));
             assert(wf_stype(sty(*k), cx.enums@) && wf_stype(sty(*v), cx.enums@));
             lemma_lim_small(sty(*k), cx.enums@);
             lemma_lim_small(sty(*v), cx.enums@);
@@ -466,10 +467,10 @@ pub(crate) fn low_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
             let mt = STy::Map(Box::new(sty(k)), Box::new(sv));
             lemma_xetys_of(mt, cx.enums@);
             assert(tmx == to_xty(mt));
-            crate::lower_types::lemma_slot_tys_len(sv, cx.enums@);
+            crate::slot_types::lemma_slot_tys_len(sv, cx.enums@);
             lemma_extends_trans(b1, b2, b3);
             lemma_typed_blk(ms@, xetys(tmx, cx.enums@), *cx, b1, b3);
-            assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, rows as nat));
+            assert(slot_tys(mt, cx.enums@) == crate::slot_types::ty_repeat(row, rows as nat));
             lemma_cols_typed(ms@, row, rows, width, tv, blt(b3, *cx));
             lemma_defaults_typed(sv, tv, blt(b3, *cx));
             assert(ys.subrange(1, 1 + width as int) =~= etys(slot_tys(sv, cx.enums@)));
@@ -656,7 +657,7 @@ pub(crate) fn low_has_key(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
             proof {
                 if pre {
                     lemma_all_pure_mono(present@, b1.depth_s(), blk.depth_s());
-                    crate::quant::lemma_hit_pure(rg, present@, hg, blk.depth_s());
+                    crate::pick::lemma_hit_pure(rg, present@, hg, blk.depth_s());
                     if tp {
                         assert(all_ty(present@, ETy::Bool, tv, blt(b1, *cx)));
                         assert forall|q: int| 0 <= q < present@.len() implies #[trigger] has_ty(present@[q], tv, blt(*blk, *cx), ETy::Bool) by {
@@ -803,7 +804,7 @@ pub(crate) fn low_delete(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                     let mt = STy::Map(Box::new(sty(k)), Box::new(sv));
                     lemma_xetys_of(mt, cx.enums@);
                     assert(xty(tm) == to_xty(mt));
-                    assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, keys_or_zero(sty(k), cx.enums@)));
+                    assert(slot_tys(mt, cx.enums@) == crate::slot_types::ty_repeat(row, keys_or_zero(sty(k), cx.enums@)));
                 }
             }
             proof {

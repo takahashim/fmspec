@@ -11,8 +11,6 @@ use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, bool_lit, ite_s, join_s, pure_below, tree_s, Join};
 #[cfg(verus_keep_ghost)]
-use crate::infer::ir_type_of;
-#[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Value};
@@ -20,8 +18,6 @@ use crate::model::{Expr, Value};
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_fold, eval_src, src_bool, SEnv, TExpr};
-#[cfg(verus_keep_ghost)]
-use crate::total::*;
 use vstd::prelude::*;
 
 verus! {
@@ -41,23 +37,6 @@ pub proof fn lemma_ite_out_pure(c: Expr, xs: Seq<Expr>, ys: Seq<Expr>, out: Seq<
         assert(out[i] == ite_s(c, xs[i], ys[i]));
         assert(pure_below(xs[i], n) && pure_below(ys[i], n));
     }
-}
-
-/// 型の付く `ite` の条件と枝は、より深い位置でも前提を満たし、枝の型は `ite` の型である。
-pub proof fn lemma_ite_tpre(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, n: nat, m: nat)
-    requires
-        e is Ite,
-        tpre(e, cx, sc, n),
-        n <= m,
-    ensures
-        tpre(*e->Ite_0, cx, sc, n),
-        ir_type_of(*e->Ite_0, sctx(cx), bound_tys(sc)) == Some(XTy::Bool),
-        tpre(*e->Ite_1, cx, sc, m),
-        tpre(*e->Ite_2, cx, sc, m),
-        ir_type_of(*e->Ite_1, sctx(cx), bound_tys(sc)) == ir_type_of(e, sctx(cx), bound_tys(sc)),
-        ir_type_of(*e->Ite_2, sctx(cx), bound_tys(sc)) == ir_type_of(e, sctx(cx), bound_tys(sc)),
-{
-    lemma_sc_wf_mono(sc, n, m, cx.enums@);
 }
 
 /// 空の `all` と `any` は、単位元になる。

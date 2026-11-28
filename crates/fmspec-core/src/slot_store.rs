@@ -1,8 +1,6 @@
 //! 格納の型の値を、正規形のスロットの列に置く式（`store`）と、キーの番号の式（`rank_expr`）。その契約（`store_spec`、`rank_spec` など）も置く。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_defaults_typed;
-#[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_seq, keys, keys_product, lemma_default_len, lemma_stys};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_xtys, member, members, models_seq, sty, stys, wf_stype, STy, SVal};
@@ -30,6 +28,8 @@ use crate::lower_types::{has_ty, lemma_concat_typed, lemma_econcat_xetys, lemma_
 use crate::lower_types::{lemma_smalls_at, lemma_tree_typed, lemma_typed_sub, lemma_xetys_part};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{typed, xetys, xetys_seq};
+#[cfg(verus_keep_ghost)]
+use crate::members::lemma_defaults_typed;
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 use crate::model::{BinOp, Expr};

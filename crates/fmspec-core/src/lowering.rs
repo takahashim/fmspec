@@ -18,7 +18,8 @@
 //! 下ろしが意味を保存することの補題は、[`crate::preserve`] と、式の種類ごとの `preserve_*.rs` にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::{lemma_in_member, lemma_models_has, lemma_shaped_len};
+use crate::block::lemma_extends_refl;
+use crate::block::{atom, atoms, check, keep, need, new_block, wrap};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, keys, keys_or_zero, lemma_xwidth_of, member, sty, to_xty, STy, SVal};
 #[cfg(verus_keep_ghost)]
@@ -27,10 +28,10 @@ use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::tree_s;
-#[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, concat, int_lit, ite_s, kind_expr, pure_below, Join};
+use crate::expr_build::{all_pure, bool_lit, concat, int_lit, ite_s, kind_expr, Join};
 use crate::expr_build::{ci, eq};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{lemma_all_pure_mono, lemma_pure_mono, pure_below, tree_s};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::fits::{lemma_fits_to, lemma_to_fits};
@@ -52,6 +53,8 @@ use crate::lower_struct::low_struct;
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
 #[cfg(verus_keep_ghost)]
+use crate::members::{lemma_in_member, lemma_models_has, lemma_shaped_len};
+#[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Type};
 use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
@@ -67,6 +70,8 @@ use crate::rows::{ite_row, ite_rows_ok};
 #[cfg(verus_keep_ghost)]
 use crate::slot_store::store_ok;
 use crate::slot_store::{rank_expr, rank_or_neg, store};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::{in_slots, slot_tys};
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
@@ -152,106 +157,6 @@ pub(crate) fn lit_type(v: &Value) -> (r: XType)
         Value::Int(_) => XType::Int,
         Value::Enum(id, _) => XType::Enum(*id),
     }
-}
-
-/// `xs` の各スロットを、何度も参照できるように束縛する。
-pub(crate) fn atoms(xs: Vec<Expr>, blk: &mut Block, Ghost(cx): Ghost<LowerCtx>, Ghost(ys): Ghost<Seq<ETy>>) -> (r: Result<Vec<Expr>, Fail>)
-    requires
-        old(blk).wf(),
-    ensures
-        all_pure(xs@, old(blk).depth_s()) && old(blk).outer@.len() == old(blk).base && binds_typed(
-            old(blk).outer@,
-            old(blk).binds@,
-            lenv(cx),
-        ) && typed(xs@, ys, lenv(cx), blt(*old(blk), cx)) ==> binds_typed(final(blk).outer@, final(blk).binds@, lenv(cx))
-            && (r matches Ok(out) ==> typed(out@, ys, lenv(cx), blt(*final(blk), cx))),
-        extends(*old(blk), *final(blk)),
-        r matches Ok(out) ==> atoms_ok(xs@, out@, *old(blk), *final(blk)),
-        deep(r),
-        r matches Ok(out) ==> out@.len() == xs@.len() && (all_pure(xs@, old(blk).depth_s()) ==> all_pure(
-            out@,
-            final(blk).depth_s(),
-        )),
-{
-    let ghost b0 = *blk;
-    let ghost p0 = all_pure(xs@, b0.depth_s());
-    let ghost q0 = p0 && b0.outer@.len() == b0.base && binds_typed(b0.outer@, b0.binds@, lenv(cx)) && typed(
-        xs@,
-        ys,
-        lenv(cx),
-        blt(b0, cx),
-    );
-    let mut out: Vec<Expr> = Vec::new();
-    proof {
-        lemma_extends_refl(*blk);
-        lemma_atoms_empty(*blk);
-        assert(xs@.take(0) =~= Seq::<Expr>::empty());
-    }
-    let mut i = 0;
-    while i < xs.len()
-        invariant
-            i <= xs@.len(),
-            extends(b0, *blk),
-            atoms_ok(xs@.take(i as int), out@, b0, *blk),
-            b0 == *old(blk),
-            out@.len() == i,
-            p0 == all_pure(xs@, b0.depth_s()),
-            p0 ==> all_pure(out@, blk.depth_s()),
-            q0 == (p0 && b0.outer@.len() == b0.base && binds_typed(b0.outer@, b0.binds@, lenv(cx)) && typed(
-                xs@,
-                ys,
-                lenv(cx),
-                blt(b0, cx),
-            )),
-            q0 ==> binds_typed(blk.outer@, blk.binds@, lenv(cx)) && forall|j: int|
-                0 <= j < i ==> #[trigger] has_ty(out@[j], lenv(cx), blt(*blk, cx), ys[j]),
-        decreases xs.len() - i,
-    {
-        let ghost b1 = *blk;
-        let ghost o1 = out@;
-        let x = copy_expr(&xs[i]);
-        let y = atom(blk, x)?;
-        out.push(y);
-        proof {
-            if p0 {
-                assert(pure_below(xs@[i as int], b0.depth_s()));
-                lemma_all_pure_mono(o1, b1.depth_s(), blk.depth_s());
-                if y == x {
-                    lemma_pure_mono(x, b0.depth_s(), blk.depth_s());
-                }
-                assert forall|j: int| 0 <= j < out@.len() implies pure_below(#[trigger] out@[j], blk.depth_s()) by {
-                    if j < o1.len() {
-                        assert(out@[j] == o1[j]);
-                    }
-                }
-            }
-        }
-        proof {
-            if q0 {
-                assert(has_ty(xs@[i as int], lenv(cx), blt(b0, cx), ys[i as int]));
-                lemma_has_ty_blk(x, ys[i as int], cx, b0, b1);
-                lemma_added_typed(b1, *blk, x, y, cx, ys[i as int]);
-                assert forall|j: int| 0 <= j < i + 1 implies #[trigger] has_ty(out@[j], lenv(cx), blt(*blk, cx), ys[j]) by {
-                    if j < i {
-                        assert(out@[j] == o1[j]);
-                        assert(has_ty(o1[j], lenv(cx), blt(b1, cx), ys[j]));
-                        assert(pure_below(o1[j], b1.depth_s()));
-                        lemma_has_ty_blk(o1[j], ys[j], cx, b1, *blk);
-                    }
-                }
-            }
-            lemma_atoms_step(xs@.take(i as int), x, o1, y, b0, b1, *blk);
-            assert(xs@.take(i as int).push(x) =~= xs@.take(i + 1));
-        }
-        i += 1;
-    }
-    proof {
-        assert(xs@.take(xs.len() as int) =~= xs@);
-        if q0 {
-            assert(out@.len() == ys.len());
-        }
-    }
-    Ok(out)
 }
 
 /// 式を `blk` の中に下ろす。部分式の束縛は評価の順に `blk` に追加し、失敗しないスロットの式を返す。
@@ -770,11 +675,11 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                             let mt = STy::Map(Box::new(sty(**k)), Box::new(sty(**v)));
                             lemma_xetys_of(mt, cx.enums@);
                             assert(xty(t) == to_xty(mt));
-                            crate::lower_types::lemma_slot_tys_len(sty(**v), cx.enums@);
+                            crate::slot_types::lemma_slot_tys_len(sty(**v), cx.enums@);
                             lemma_xwidth_of(sty(**v), cx.enums@);
                             let row = seq![Type::Bool] + slot_tys(sty(**v), cx.enums@);
                             assert(row[0] == Type::Bool);
-                            assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, keys_or_zero(sty(**k), cx.enums@)));
+                            assert(slot_tys(mt, cx.enums@) == crate::slot_types::ty_repeat(row, keys_or_zero(sty(**k), cx.enums@)));
                             lemma_map_flags_typed(s@, fs@, row, keys_or_zero(sty(**k), cx.enums@), stride as int, tv, blt(b1, *cx));
                         }
                     }

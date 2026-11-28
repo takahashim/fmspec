@@ -11,11 +11,11 @@ use crate::limits::smalls;
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::slot_tys_seq;
-#[cfg(verus_keep_ghost)]
 use crate::model::{Action, Contract, Expr, RawModel, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{env_rel, prop_result};
+#[cfg(verus_keep_ghost)]
+use crate::slot_types::slot_tys_seq;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::{s_arg_tys, s_init, s_state_tys, SModel, SOutput};
 #[cfg(verus_keep_ghost)]

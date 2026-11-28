@@ -1,7 +1,8 @@
 //! 量化（`forall`、`exists`）の下ろし。たどる値の型、Set、Map、List ごとの展開。意味の保存は `preserve_quant` にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::lemma_defaults_typed;
+use crate::block::lemma_extends_refl;
+use crate::block::{bind, depth, need};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, keys_or_zero, lemma_default_len, lemma_xwidth_of, sty, STy};
 #[cfg(verus_keep_ghost)]
@@ -10,7 +11,7 @@ use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, lits, pure_below};
+use crate::expr_build::{all_pure, bool_lit, lemma_all_pure_mono, lemma_pure_mono, lits, pure_below};
 use crate::expr_build::{bin, cb, defaults, is_bool_lit};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
@@ -18,9 +19,7 @@ use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lim_s, small};
 #[cfg(verus_keep_ghost)]
-use crate::lists::picks;
-#[cfg(verus_keep_ghost)]
-use crate::lower_ctx::extends;
+use crate::lower_ctx::{extends, ok_x, sc_wf, shaped};
 use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, etys, has_ty, lemma_all_ty_push};
@@ -29,33 +28,33 @@ use crate::lower_types::{lemma_bind_typed, lemma_has_ty_push, lemma_list_col_typ
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_map_flags_typed, lemma_tok_ext, lemma_top_typed, lemma_typed_bools};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_typed_ext, lemma_xetys_of, lenv, ok_x, sc_wf, shaped, slot_tys, tok};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{tok_in, typed, xetys};
+use crate::lower_types::{lemma_typed_ext, lemma_xetys_of, lenv, tok, tok_in, typed, xetys};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
 use crate::lowering::{bool_in, low};
 #[cfg(verus_keep_ghost)]
+use crate::members::lemma_defaults_typed;
+#[cfg(verus_keep_ghost)]
 use crate::model::Value;
 use crate::model::{BinOp, Expr, Type};
+use crate::pick::pick_slot;
 #[cfg(verus_keep_ghost)]
-use crate::preserve::lemma_pure_mono;
+use crate::pick::picks;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{combine_ok, lemma_over_list, lemma_over_map, lemma_over_set};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{lemma_over_type, lemma_quant, list_col, over_ok, quant_s};
+use crate::quant::unrank;
 #[cfg(verus_keep_ghost)]
 use crate::quant::unrank_ok;
-use crate::quant::{pick_slot, unrank};
 #[cfg(verus_keep_ghost)]
-use crate::slots::lemma_extends_refl;
-use crate::slots::{bind, depth, need};
+use crate::slot_types::slot_tys;
 use crate::source::{Over, TExpr};
 use crate::stype_exec::{copy_stype, keys_exec, stype_eq, stype_width, to_xtype};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, deep, here_ok, lemma_all_pure_mono, lemma_ok_to_x, lemma_sc_wf_mono};
+use crate::total::{bound_tys, deep, here_ok, lemma_ok_to_x, lemma_sc_wf_mono, lim_ok, n_ok_set};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok, n_ok_set, ok_s, quant_bound, sctx, tpre};
+use crate::total::{ok_s, quant_bound, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -475,10 +474,10 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                     lemma_lim_small(sty(*t), cx.enums@);
                     lemma_xetys_of(mt, cx.enums@);
                     assert(xty(ty) == to_xty(mt));
-                    crate::lower_types::lemma_slot_tys_len(sty(*vt), cx.enums@);
+                    crate::slot_types::lemma_slot_tys_len(sty(*vt), cx.enums@);
                     let row = seq![Type::Bool] + slot_tys(sty(*vt), cx.enums@);
                     assert(row[0] == Type::Bool);
-                    assert(slot_tys(mt, cx.enums@) == crate::lower_types::ty_repeat(row, keys_or_zero(sty(*kt), cx.enums@)));
+                    assert(slot_tys(mt, cx.enums@) == crate::slot_types::ty_repeat(row, keys_or_zero(sty(*kt), cx.enums@)));
                     lemma_map_flags_typed(cs@, fs@, row, keys_or_zero(sty(*kt), cx.enums@), stride as int, tv, lt);
                     lemma_all_ty_push(fs@, ETy::Bool, tv, lt, ETy::Int);
                     assert(typed(us@, etys(slot_tys(sty(*t), cx.enums@)), tv, lt.push(ETy::Int)));
@@ -590,7 +589,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                     lemma_lim_small(sty(*u), cx.enums@);
                     lemma_xetys_of(lt0, cx.enums@);
                     assert(xty(ty) == to_xty(lt0));
-                    crate::lower_types::lemma_slot_tys_len(sty(*u), cx.enums@);
+                    crate::slot_types::lemma_slot_tys_len(sty(*u), cx.enums@);
                     lemma_defaults_typed(sty(*u), tv, lt1);
                 }
             }
@@ -615,7 +614,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                     tv == lenv(*cx),
                     et == slot_tys(sty(*u), cx.enums@),
                     lt1 == blt(b1, *cx).push(ETy::Int),
-                    tp ==> et.len() == w && typed(cs@, etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max as nat)), tv, blt(b1, *cx)),
+                    tp ==> et.len() == w && typed(cs@, etys(seq![Type::Int(0, max as i64)] + crate::slot_types::ty_repeat(et, max as nat)), tv, blt(b1, *cx)),
                     tp ==> typed(dv@, etys(et), tv, lt1),
                     tp ==> forall|q: int| 0 <= q < j ==> #[trigger] has_ty(us@[q], tv, lt1, etys(et)[q]),
                     tp ==> blt(b1, *cx).len() == d,
@@ -730,7 +729,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             proof {
                 if tp {
                     assert(has_ty(cs@[0], tv, blt(b1, *cx), ETy::Int)) by {
-                        assert(etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max as nat))[0] == ETy::Int);
+                        assert(etys(seq![Type::Int(0, max as i64)] + crate::slot_types::ty_repeat(et, max as nat))[0] == ETy::Int);
                     }
                     lemma_has_ty_push(cs@[0], ETy::Int, tv, blt(b1, *cx), ETy::Int);
                     lemma_lt_typed(Expr::Local(d), cs@[0], tv, lt1);

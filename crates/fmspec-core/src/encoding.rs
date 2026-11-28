@@ -1185,4 +1185,40 @@ pub proof fn lemma_map_rows_member_index(rows: Seq<Option<SVal>>, t: STy, enums:
     }
 }
 
+/// Listの要素の符号化の、`k` 番目の要素の `j` 番目のスロット。
+pub proof fn lemma_items_index(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int, j: int)
+    requires
+        list_items_member(items, t, enums),
+        0 <= k < items.len(),
+        0 <= j < width(t, enums),
+    ensures
+        member(items[k], t, enums),
+        enc_items(items, t, enums).len() == items.len() * width(t, enums),
+        0 <= k * width(t, enums) + j < items.len() * width(t, enums),
+        enc_items(items, t, enums)[k * width(t, enums) + j] == enc(items[k], t, enums)[j],
+    decreases items.len(),
+{
+    let n = items.len() as int;
+    let w = width(t, enums) as int;
+    lemma_enc_items_len(items, t, enums);
+    lemma_enc_items_len(items.drop_last(), t, enums);
+    assert(k * w + j < n * w) by (nonlinear_arith)
+        requires
+            0 <= k < n,
+            0 <= j < w,
+    ;
+    assert(0 <= k * w) by (nonlinear_arith)
+        requires
+            0 <= k,
+            0 <= w,
+    ;
+    lemma_enc_len(items.last(), t, enums);
+    if k == n - 1 {
+        assert((n - 1) * w + j - (n - 1) * w == j);
+    } else {
+        lemma_items_index(items.drop_last(), t, enums, k, j);
+        assert(items.drop_last()[k] == items[k]);
+    }
+}
+
 } // verus!

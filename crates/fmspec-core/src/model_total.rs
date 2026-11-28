@@ -14,9 +14,9 @@ use crate::infer::{ir_type_of, scope_view, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{layout_at, layouts_at, lemma_layout_end, Constant, Layout, LowerCtx};
+use crate::lower_ctx::LowerCtx;
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::layout_tys;
+use crate::lower_ctx::{layout_at, layout_tys, layouts_at, lemma_layout_end, Constant, Layout};
 #[cfg(verus_keep_ghost)]
 use crate::smodel::SAction;
 use crate::smodel::SModel;
