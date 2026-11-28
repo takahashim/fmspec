@@ -314,7 +314,7 @@ VERUS_MUTANTS = [
   ["model_lower.rs", "        Err(Fail::Depth) => return Err(Fault::Depth),", "        Err(Fail::Depth) => return Err(Fault::Lower),", "値の式の深さの上限を内部の誤りにする"],
   ["action_lower.rs", "        Err(Fail::Depth) => return Err(LowerError::Depth),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "        Err(Fail::Depth) => return Err(LowerError::Guard(a)),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "guardの深さの上限を内部の誤りにする"],
   ["lower_list.rs", "                    if rows.len() > 0 {\n                        out.push(defs);\n                    }", "                    out.push(defs);", "上限0のListの `shift` に既定の行を加える"],
-  ["refine.rs", "                if !is_initial(a, &x) {\n                    return Some(Reject::InitialNotMapped(i));\n                }\n", "",
+  ["refine.rs", "                if !is_initial(a, &x) {\n                    return Some(Reject::Refine(RefReject::InitialNotMapped(i)));\n                }\n", "",
    "初期状態の写り先が抽象モデルの初期状態かを確かめない"],
   ["refine.rs", "                        Move::Yes => {},", "                        Move::Yes | Move::Unknown(_) => {},",
    "抽象モデルの遷移列挙の失敗を、移れるとみなす"],

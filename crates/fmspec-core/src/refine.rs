@@ -375,15 +375,15 @@ fn check_ref_action(
             {
                 match map_state(b, a, f, &ts[i].state) {
                     Mapped::Arity => {
-                        return Some(Reject::MappingFailed(k, f.len()));
+                        return Some(Reject::Refine(RefReject::MappingFailed(k, f.len())));
                     },
                     Mapped::Fail(slot, _) => {
-                        return Some(Reject::MappingFailed(k, slot));
+                        return Some(Reject::Refine(RefReject::MappingFailed(k, slot)));
                     },
                     Mapped::Ok(y) => match find_move(a, x, &y) {
                         Move::Yes => {},
                         _ => {
-                            return Some(Reject::StepNotMapped(k, ac));
+                            return Some(Reject::Refine(RefReject::StepNotMapped(k, ac)));
                         },
                     },
                 }
@@ -417,10 +417,10 @@ fn check_ref_state(b: &RawModel, cb: &Conditions, a: &RawModel, f: &Vec<Expr>, c
     let s = &cert[k];
     let x = match map_state(b, a, f, s) {
         Mapped::Arity => {
-            return Some(Reject::MappingFailed(k, f.len()));
+            return Some(Reject::Refine(RefReject::MappingFailed(k, f.len())));
         },
         Mapped::Fail(slot, _) => {
-            return Some(Reject::MappingFailed(k, slot));
+            return Some(Reject::Refine(RefReject::MappingFailed(k, slot)));
         },
         Mapped::Ok(x) => x,
     };
@@ -478,14 +478,14 @@ fn check_ref_initials(b: &RawModel, a: &RawModel, f: &Vec<Expr>) -> (r: Option<R
     {
         match map_state(b, a, f, &b.inits[i]) {
             Mapped::Arity => {
-                return Some(Reject::InitialMappingFailed(i, f.len()));
+                return Some(Reject::Refine(RefReject::InitialMappingFailed(i, f.len())));
             },
             Mapped::Fail(slot, _) => {
-                return Some(Reject::InitialMappingFailed(i, slot));
+                return Some(Reject::Refine(RefReject::InitialMappingFailed(i, slot)));
             },
             Mapped::Ok(x) => {
                 if !is_initial(a, &x) {
-                    return Some(Reject::InitialNotMapped(i));
+                    return Some(Reject::Refine(RefReject::InitialNotMapped(i)));
                 }
             },
         }

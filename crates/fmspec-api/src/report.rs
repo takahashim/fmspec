@@ -7,7 +7,7 @@ mod refine;
 
 pub(crate) use refine::{describe_refinement, refine_report};
 
-use fmspec_core::evidence::{Claim, Evidence, Limit, Reject};
+use fmspec_core::evidence::{Claim, Evidence, Limit, RefReject, Reject};
 use fmspec_core::gate::{Verdict, VerdictKind};
 use fmspec_core::semantics::Conditions;
 use fmspec_core::typing::InvalidModel;
@@ -149,19 +149,19 @@ fn reject_json_in(model: &Model, states: Option<&Vec<Vec<i64>>>, reject: Reject)
             "reason": "claim_not_reproduced",
             "message": "トレースの末尾で、主張どおりの事象が起きません",
         }),
-        Reject::MappingFailed(k, _) => json!({
+        Reject::Refine(RefReject::MappingFailed(k, _)) => json!({
             "reason": "mapping_failed", "state": state(k),
             "message": "証明書の状態、またはその遷移先で、写像の評価が失敗します",
         }),
-        Reject::StepNotMapped(k, a) => json!({
+        Reject::Refine(RefReject::StepNotMapped(k, a)) => json!({
             "reason": "step_not_mapped", "state": state(k), "action": action(a),
             "message": "証明書の状態からの遷移が、抽象モデルの遷移にも、状態の変わらないステップにも写りません",
         }),
-        Reject::InitialMappingFailed(_, _) => json!({
+        Reject::Refine(RefReject::InitialMappingFailed(_, _)) => json!({
             "reason": "initial_mapping_failed",
             "message": "初期状態で写像の評価が失敗します",
         }),
-        Reject::InitialNotMapped(_) => json!({
+        Reject::Refine(RefReject::InitialNotMapped(_)) => json!({
             "reason": "initial_not_mapped",
             "message": "初期状態が、抽象モデルの初期状態に写りません",
         }),
