@@ -945,4 +945,47 @@ pub(crate) fn fits_all(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>) -> (r:
     true
 }
 
+/// 型の列の各型のスロットの位置。位置は、それより前の型の幅の和である（中核の下ろしの配置 `layouts_at` と同じ定義）。
+/// 幅の和が `usize` に収まらなければ `None`。
+pub fn slot_offsets(ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Option<Vec<usize>>)
+    ensures
+        r matches Some(os) ==> os@.len() == ts@.len() && forall|i: int|
+            0 <= i < ts@.len() ==> #[trigger] os@[i] == width_sum(stys(ts@).take(i), enums@),
+{
+    proof {
+        lemma_stys(ts@);
+        assert(stys(ts@).take(0) =~= Seq::<STy>::empty());
+    }
+    let mut os: Vec<usize> = Vec::new();
+    let mut off: usize = 0;
+    let mut i = 0;
+    while i < ts.len()
+        invariant
+            i <= ts.len(),
+            stys(ts@).len() == ts@.len(),
+            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] stys(ts@)[j] == sty(ts@[j]),
+            os@.len() == i,
+            off == width_sum(stys(ts@).take(i as int), enums@),
+            forall|j: int| 0 <= j < i ==> #[trigger] os@[j] == width_sum(stys(ts@).take(j), enums@),
+        decreases ts.len() - i,
+    {
+        let w = match stype_width(&ts[i], enums) {
+            Some(w) => w,
+            None => return None,
+        };
+        os.push(off);
+        proof {
+            let xs = stys(ts@);
+            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
+            assert(xs.take(i + 1).last() == xs[i as int]);
+        }
+        off = match off.checked_add(w) {
+            Some(n) => n,
+            None => return None,
+        };
+        i += 1;
+    }
+    Some(os)
+}
+
 } // verus!

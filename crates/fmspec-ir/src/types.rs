@@ -24,7 +24,7 @@ use crate::model::EnumNames;
 use fmspec_core::kernel::model::Type;
 use fmspec_core::value::encoding::SType as CoreSType;
 use fmspec_core::value::rank_code::{rank_codes, unrank_codes};
-use fmspec_core::value::stype_exec::{keys_exec, stype_width};
+use fmspec_core::value::stype_exec::{keys_exec, slot_offsets, stype_width};
 use fmspec_core::value::val_codec::{decode_val, encode_val, Val};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
@@ -180,6 +180,13 @@ impl SType {
             SType::List(t, n) => CoreSType::List(Box::new(t.core_stype()), *n),
         }
     }
+}
+
+/// 型の列の各型のスロットの位置。中核の [`slot_offsets`] で求める（位置は、それより前の型の幅の和で、
+/// 中核の下ろしの配置と同じ定義）。幅の和が `usize` に収まらなければ `None`。
+pub fn offsets(enums: &[EnumNames], types: &[SType]) -> Option<Vec<usize>> {
+    let ts = types.iter().map(SType::core_stype).collect();
+    slot_offsets(&ts, &label_counts(enums))
 }
 
 /// 各列挙型のラベルの数（中核の `enums`）。
