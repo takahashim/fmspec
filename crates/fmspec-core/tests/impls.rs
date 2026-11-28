@@ -4,11 +4,11 @@
 //! 他のcrateのテストは `assert_eq!` でこれらの `PartialEq` を使って結果を比べるので、
 //! 等しさが値を区別しないと、それらのテストが何も確かめなくなる。
 
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
-use fmspec_core::model::{BinOp, Expr, Type, Value};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Site;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
+use fmspec_core::kernel::model::{BinOp, Expr, Type, Value};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Site;
 
 /// どの2つも等しくない値の列について、`PartialEq` と `Clone` を確かめる。
 fn distinct<T: PartialEq + Clone + std::fmt::Debug>(xs: &[T]) {

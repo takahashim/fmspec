@@ -33,7 +33,7 @@ pub open spec fn in_cert(cert: Seq<Vec<i64>>, s: Seq<i64>) -> bool {
 ```
 
 `verus!` の外には、`use`、属性、コメントしか置かない（`rake verus:coverage` が確かめる）。
-`lib.rs` はモジュールの宣言だけを持つので、この検査の対象外である。
+`lib.rs` と各フォルダの `mod.rs` はモジュールの宣言だけを持つので、この検査の対象外である（宣言しか置いていないことは別に確かめる）。
 例外は `impls.rs` で、`Clone` や `PartialEq` などの標準トレイトを `verus!` の外に手で書いている。
 Verusは、再帰的な型や `Vec` を持つ型の `derive` に仕様を付けられないためである。
 `impls.rs` は証明の対象外で、判定の経路からは呼ばない。
@@ -507,7 +507,7 @@ Verusは、未検証のコードからの呼び出しについて、`requires` �
 コードを書き換えて元の文字列が見つからなくなったら、一覧を更新する。
 
 ```ruby
-["cert.rs", "元のコード", "壊したコード", "遷移先が証明書にあることを検査しない"],
+["kernel/cert.rs", "元のコード", "壊したコード", "遷移先が証明書にあることを検査しない"],
 ```
 
 検査を足したら、それを壊す変異も足す。
@@ -525,17 +525,18 @@ Verusは、未検証のコードからの呼び出しについて、`requires` �
 ```sh
 export VERUS=/path/to/verus        # なければ PATH の verus
 rake verus                          # = rake verus:proof
-VERUS_MUTANTS_FILES=cert.rs rake verus:mutants
+VERUS_MUTANTS_FILES=cert.rs rake verus:mutants   # src からのパス（kernel/cert.rs）でもよい
 ```
 
 `rake verus:proof` は、次を順に行う。
 
 1. `verus:version`：Verusの版と、`Cargo.lock` の `vstd` などの版が、固定したものと一致する。
 2. `verus:trusted`：信頼する項目がない。
-3. `verus:coverage`：`verus!` の外にコードがない（`impls.rs` を除く）。
-4. `verus:contract`：公開関数が `requires` を持たない。
-5. `verus:imports`：使われない `use` がない（ghost コードでだけ使う `use` も含む）。
-6. `verus --crate-type=lib crates/fmspec-core/src/lib.rs` で証明を検査し、エラーも警告もない。
+3. `verus:coverage`：`verus!` の外にコードがない（`kernel/impls.rs` を除く）。`lib.rs` と各フォルダの `mod.rs` には、モジュールの宣言しか置かない。
+4. `verus:layers`：中核のフォルダ（`kernel` → `value` → `slot` → `preserve` → `lower` → `model` → `ir`）の中のファイルが、自分より上の層を参照しない。
+5. `verus:contract`：公開関数が `requires` を持たない。
+6. `verus:imports`：使われない `use` がない（ghost コードでだけ使う `use` も含む）。
+7. `verus --crate-type=lib crates/fmspec-core/src/lib.rs` で証明を検査し、エラーも警告もない。
 
 Verusの版は `rakelib/verus.rake` の `VERUS_VERSION` に固定している。
 リリースは [Verusのリリースページ](https://github.com/verus-lang/verus/releases) から取得する。

@@ -3,7 +3,7 @@
 //! オプションのJSONを、探索器と判定ゲートのオプション（`BfsOptions`、`GateOptions`）にする変換もここに置く。
 
 use crate::Interrupt;
-use fmspec_core::semantics::Conditions;
+use fmspec_core::kernel::semantics::Conditions;
 use fmspec_ir::{default_conditions, Model};
 use fmspec_search::{BfsOptions, GateOptions};
 use serde_json::{Map, Value};

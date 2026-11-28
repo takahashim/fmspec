@@ -2,12 +2,12 @@
 //!
 //! `cargo test -p fmspec-core --test lowering_size -- --nocapture` で、深さごとの大きさを表示する。
 
-use fmspec_core::encoding::SType;
-use fmspec_core::eval::{eval, Ctx};
-use fmspec_core::lower_ctx::{Layout, LowerCtx};
-use fmspec_core::lowering::lower_stored;
-use fmspec_core::model::{BinOp, Expr, Type, Value};
-use fmspec_core::source::TExpr;
+use fmspec_core::kernel::eval::{eval, Ctx};
+use fmspec_core::kernel::model::{BinOp, Expr, Type, Value};
+use fmspec_core::lower::lowering::lower_stored;
+use fmspec_core::slot::lower_ctx::{Layout, LowerCtx};
+use fmspec_core::value::encoding::SType;
+use fmspec_core::value::source::TExpr;
 
 fn size(e: &Expr) -> usize {
     match e {

@@ -1,147 +1,23 @@
 //! fmspec の検証済み中核。
 //!
-//! このcrateは Verus で検証する。判定（[`gate::Verdict`]）を返す経路は、すべてここにある。
+//! このcrateは Verus で検証する。判定（[`kernel::gate::Verdict`]）を返す経路は、すべてここにある。
 //! 探索器（BFS など）は別crateに置き、証拠を生成するだけで判定を直接返さない（仕様書 §3.1）。
 //!
-//! - [`model`]：IR検証前のモデル、値、型、式
-//! - [`encoding`]：IRの複合型と値の意味、スロットの列への符号化（仕様）
-//! - [`stype_exec`]：型（`SType`、`XType`）の上の実行関数（複製、比較、値の数、整形式性、幅）
-//! - [`fits`]：値の型を、格納の型の場所に置けるか（`fits_s`）の仕様と補題
-//! - [`keys`]：キーの型の値の正規順と番号（仕様）
-//! - [`ranking`]：Setの要素とMapのキーに付ける番号（rank）の計算
-//! - [`rank_code`]：`fmspec-ir` が値に付ける番号（u64）の計算
-//! - [`map_encoding`]：キーに番号を付けたあとの、Mapの符号化
-//! - [`source`]：IRの式の型付き構文木と、値の上の意味論（仕様）
-//! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
-//! - [`ir`]、[`ir_check`]：IRのJSONと名前を解決したモデルの対応（仕様）と、その検査
-//! - [`ir_json`]：IRのJSONの木（`Json`）の読み方と、名前の表
-//! - [`slots`]：下ろしで使う、スロットの式の操作と、束縛の列（`Block`）の操作
-//! - [`slot_store`]：格納の型の値を正規形のスロットに置く式（`store`）と、キーの番号の式
-//! - [`lower_ctx`]：下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）
-//! - [`block`]：束縛の列（`Block`）の操作
-//! - [`expr_build`]：中核の式の組み立て（spec の構築子と、対応する exec の構築子）
-//! - [`rows`]：ListとMapのスロットの、行への区切りの仕様
-//! - [`pick`]：番号の位置の値を選ぶ部品（`pick_slot`）と、その仕様
-//! - [`bindings`]：評価の順に並べた束縛の列を、中核の `let` の入れ子にする
-//! - [`expr_copy`]：中核の式の複製
-//! - [`canon`]：正規形の判定
-//! - [`slot_types`]：スロットの型（`slot_tys`）の仕様と実行関数
-//! - [`members`]：値の符号化が型に属すことの補題
-//! - [`lower_types`]：スロットの型と、下ろした中核の式の型
-//! - [`lists`]：Listのスロットの補題（行への区切り、行の選択、行のつなぎ直し）
-//! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
-//! - [`map_lookup`]：Mapの参照の下ろし
-//! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
-//! - [`lower_core`]、[`lower_struct`]、[`lower_quant`]、[`lower_set`]、[`lower_map`]、[`lower_list`]：
-//!   葉と演算子と条件式、Tuple と Record と Option、量化、Set、Map、List の下ろし（`lowering` の `low` が振り分ける）
-//! - [`state_set`]：状態の集合への所属（`in_cert`）と、整列した列の二分探索
-//! - [`preserve`]：下ろしが意味を保存することの仕様と補題
-//! - [`preserve_ops`]、[`preserve_tuple`]、[`preserve_list`]、[`preserve_set`]、[`preserve_map`]、[`preserve_quant`]：
-//!   演算子と `let` と条件式、Tuple と Record と Option、List、Set と大きさ、Map、量化の下ろしが意味を保存することの補題
-//! - [`preserve_elem`]：要素とキーの下ろしが意味を保存することの補題
-//! - [`limits`]：下ろしが大きさの理由で失敗しないための条件（仕様）
-//! - [`total`]：下ろしの全域性の仕様
-//! - [`total_check`]：下ろしの全域性の前提を、実行時に確かめる検査
-//! - [`smodel`]：名前を解決したIRのモデルと、値の上の意味論
-//! - [`srel`]：中核の符号の列と値の列の対応（`rel`）
-//! - [`action_lower`]：操作の下ろし
-//! - [`lower_error`]：モデルの下ろしが返す誤り（`LowerError`）
-//! - [`model_lower`]：モデル全体の下ろし
-//! - [`model_init`]：初期状態の計算（定数と初期値の評価、候補の直積、初期条件）
-//! - [`lower_spec`]：モデルの下ろしの結果の性質（仕様）
-//! - [`model_safe`]：モデル全体の下ろしが安全性を保存することの証明
-//! - [`model_total`]：モデル全体の型付けと大きさの条件
-//! - [`model_wf`]：下ろしたモデルの整形式性
-//! - [`equality`]：等しさの下ろしの補題（符号化の単射性と、値の種類）
-//! - [`quant`]：量化の下ろしの部品（値の番号から正規形のスロットを作る式）
-//! - [`eval`]：式の形式意味論（spec）と実行Evaluator
-//! - [`typing`]：型規則、整形式性、`validate`、型健全性
-//! - [`step`]：遷移の意味論と遷移列挙
-//! - [`state_enc`]：状態と引数の符号化列（各スロットが型に属すこと、値の符号化）
-//! - [`semantics`]：検査条件、到達可能性、安全性の定義
-//! - [`evidence`]：証拠（証明書、トレース、主張）の型
-//! - [`cert`]：安全性証明書の検査器
-//! - [`checked`]：IR検証を通ったモデル（`CheckedModel`）
-//! - [`trace`]：トレースの検査器
-//! - [`gate`]：判定ゲートと、未検証コード向けの公開API
-//! - [`refine`]：詳細化の検査器と判定
-//! - [`sym`]：対称性による状態の削減（入れ替えの検査と代表元）
-//! - [`sym_check`]：入れ替えが対称性であることの検査と、状態の正規化
-//! - [`mbt`]：Model-Based Testing の候補集合
-//! - `impls`：未検証コードが使う、標準トレイトの手書きの実装（証明の対象外）
+//! モジュールは、層ごとのフォルダに分けてある。下の層から順に、次のとおりである。
+//! フォルダの中のモジュールは、自分より上の層を参照しない（`rake verus:layers` が確かめる）。
+//!
+//! - [`kernel`]：判定の核。判定（`Verdict`）を作る経路のすべて：中核のモデルと式の意味論、遷移列挙、検査条件、証拠とその検査器、判定ゲート、詳細化、対称性、Model-Based Testing の候補集合。ほかのフォルダに依存しない。
+//! - [`value`]：IRの側の値と型。名前を解決したIRのモデル（`SModel`）と値の上の意味論、式の型付け、値の符号化と番号、型の上の実行関数と大きさの条件。
+//! - [`slot`]：スロットの式。下ろしの部品（式の組み立て、束縛の列、格納、行、番号で選ぶ部品）と、その意味の語彙（`preserve`）、型、等しさ、全域性の条件。
+//! - [`preserve`]：下ろしが意味を保存することの補題。式の種類ごとに、`lower` の対応するモジュールの証明を置く。
+//! - [`lower`]：IRの式から中核の式への下ろし。`lowering` の `low` が式の種類ごとのモジュールに振り分ける相互再帰で、このフォルダの中だけで互いを参照する。
+//! - [`model`]：モデル全体の下ろし。定数、初期状態、不変条件、操作、遷移契約を下ろし、下ろした中核のモデルの安全性が名前を解決したモデルの安全性と同値であることを示す。
+//! - [`ir`]：IRのJSONと、名前を解決したモデルの対応。JSONの読み方、対応の仕様、その検査。IR検証（`crate::kernel::checked::validate`）とは別である。
 
-pub mod action_lower;
-pub mod bindings;
-pub mod block;
-pub mod canon;
-pub mod cert;
-pub mod checked;
-pub mod encoding;
-pub mod equality;
-pub mod eval;
-pub mod evidence;
-pub mod expr_build;
-pub mod expr_copy;
-pub mod fits;
-pub mod gate;
-mod impls;
-pub mod infer;
 pub mod ir;
-pub mod ir_check;
-pub mod ir_json;
-pub mod keys;
-pub mod limits;
-pub mod lists;
-pub mod lower_core;
-pub mod lower_ctx;
-pub mod lower_error;
-pub mod lower_list;
-pub mod lower_map;
-pub mod lower_quant;
-pub mod lower_set;
-pub mod lower_spec;
-pub mod lower_struct;
-pub mod lower_types;
-pub mod lowering;
-pub mod map_encoding;
-pub mod map_lookup;
-pub mod maps;
-pub mod mbt;
-pub mod members;
+pub mod kernel;
+pub mod lower;
 pub mod model;
-pub mod model_init;
-pub mod model_lower;
-pub mod model_safe;
-pub mod model_total;
-pub mod model_wf;
-pub mod pick;
 pub mod preserve;
-pub mod preserve_elem;
-pub mod preserve_list;
-pub mod preserve_map;
-pub mod preserve_ops;
-pub mod preserve_quant;
-pub mod preserve_set;
-pub mod preserve_tuple;
-pub mod quant;
-pub mod rank_code;
-pub mod ranking;
-pub mod refine;
-pub mod rows;
-pub mod semantics;
-pub mod slot_store;
-pub mod slot_types;
-pub mod slots;
-pub mod smodel;
-pub mod source;
-pub mod srel;
-pub mod state_enc;
-pub mod state_set;
-pub mod step;
-pub mod stype_exec;
-pub mod sym;
-pub mod sym_check;
-pub mod total;
-pub mod total_check;
-pub mod trace;
-pub mod typing;
+pub mod slot;
+pub mod value;

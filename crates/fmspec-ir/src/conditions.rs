@@ -1,7 +1,7 @@
 //! 検査条件のJSON表現。対象の操作、不変条件、遷移契約を名前で並べる。
 
 use crate::model::{Model, Names};
-use fmspec_core::semantics::Conditions;
+use fmspec_core::kernel::semantics::Conditions;
 use serde_json::{json, Value};
 
 /// すべての操作、不変条件、遷移契約を対象とする検査条件。

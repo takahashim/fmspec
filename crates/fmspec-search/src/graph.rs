@@ -7,9 +7,9 @@
 use crate::claim::selected;
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Enumerated;
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Enumerated;
 use std::collections::HashMap;
 use std::time::Instant;
 

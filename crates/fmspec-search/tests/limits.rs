@@ -7,8 +7,8 @@
 mod common;
 
 use common::*;
-use fmspec_core::evidence::{Claim, Evidence, Limit};
-use fmspec_core::gate::VerdictKind;
+use fmspec_core::kernel::evidence::{Claim, Evidence, Limit};
+use fmspec_core::kernel::gate::VerdictKind;
 use fmspec_ir::Model;
 use fmspec_search::{check, sample, BfsOptions, Outcome, SimOptions, Status};
 use serde_json::json;

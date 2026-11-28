@@ -8,14 +8,14 @@ use crate::bfs::{BfsOptions, Stats};
 use crate::check::{inconsistent, status_of, Outcome};
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
-use fmspec_core::gate::decide_symmetric;
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Enumerated;
-use fmspec_core::sym::SwapMaps;
-use fmspec_core::sym_check::canonicalize;
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
+use fmspec_core::kernel::gate::decide_symmetric;
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Enumerated;
+use fmspec_core::kernel::sym::SwapMaps;
+use fmspec_core::kernel::sym_check::canonicalize;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
@@ -286,7 +286,7 @@ pub fn check_sym(
     swaps: &Vec<Vec<usize>>,
     opts: &BfsOptions,
 ) -> Result<Outcome, usize> {
-    let sw = fmspec_core::sym_check::symmetry_of(model, cond, swaps)?;
+    let sw = fmspec_core::kernel::sym_check::symmetry_of(model, cond, swaps)?;
     let started = Instant::now();
     let (found, stats) = bfs_sym(model, cond, &sw, opts);
     let search_time = started.elapsed();

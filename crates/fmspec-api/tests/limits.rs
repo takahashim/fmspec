@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use fmspec_api::{check, load, verify_certificate, Model};
-use fmspec_core::evidence::{Evidence, Limit};
-use fmspec_core::gate::VerdictKind;
+use fmspec_core::kernel::evidence::{Evidence, Limit};
+use fmspec_core::kernel::gate::VerdictKind;
 use fmspec_ir::default_conditions;
 use fmspec_search::{evidence_cost, judge, GateOptions};
 use serde_json::{json, Value};
@@ -106,7 +106,7 @@ fn a_certificate_check_stops_between_states_when_interrupted() {
     let m = counter(3, 1024);
     let cond = default_conditions(&m, false);
     let cert = || {
-        Evidence::Certificate(fmspec_core::evidence::Certificate {
+        Evidence::Certificate(fmspec_core::kernel::evidence::Certificate {
             conditions: cond.clone(),
             states: (0..=3).map(|n| vec![n]).collect(),
         })
@@ -142,7 +142,7 @@ fn a_certificate_check_stops_between_states_when_interrupted() {
 fn a_certificate_check_stops_between_states_at_the_deadline() {
     let m = counter(3, 1024);
     let cond = default_conditions(&m, false);
-    let cert = Evidence::Certificate(fmspec_core::evidence::Certificate {
+    let cert = Evidence::Certificate(fmspec_core::kernel::evidence::Certificate {
         conditions: cond.clone(),
         states: (0..=3).map(|n| vec![n]).collect(),
     });

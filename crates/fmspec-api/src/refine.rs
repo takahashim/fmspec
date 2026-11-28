@@ -3,7 +3,7 @@
 use crate::options::{bfs_options, options_only, select};
 use crate::report;
 use crate::Interrupt;
-use fmspec_core::semantics::Conditions;
+use fmspec_core::kernel::semantics::Conditions;
 use fmspec_ir::{Model, Refinement};
 use fmspec_search::refine as search_refine;
 use serde_json::{Map, Value};

@@ -7,16 +7,16 @@ use crate::resolve::{self, Constant, Ctx, Fields, Layout};
 use crate::type_syntax::parse_type;
 use crate::types::SType;
 use crate::IR_VERSION;
-use fmspec_core::checked::{validate, CheckedModel};
-use fmspec_core::expr_copy::copy_expr;
-use fmspec_core::ir_check::lower_checked;
-use fmspec_core::lower_error::LowerError;
-use fmspec_core::model::{Expr, RawModel, Value as CoreValue};
-use fmspec_core::model_lower::SMap;
-use fmspec_core::smodel::{SAction, SConst, SContract, SModel, SOutput, SUpdate};
-use fmspec_core::source::TExpr;
-use fmspec_core::sym_check::renamed_eq;
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::ir::ir_check::lower_checked;
+use fmspec_core::kernel::checked::{validate, CheckedModel};
+use fmspec_core::kernel::expr_copy::copy_expr;
+use fmspec_core::kernel::model::{Expr, RawModel, Value as CoreValue};
+use fmspec_core::kernel::sym_check::renamed_eq;
+use fmspec_core::kernel::typing::InvalidModel;
+use fmspec_core::model::lower_error::LowerError;
+use fmspec_core::model::model_lower::SMap;
+use fmspec_core::value::smodel::{SAction, SConst, SContract, SModel, SOutput, SUpdate};
+use fmspec_core::value::source::TExpr;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fmt;
@@ -456,7 +456,7 @@ pub(crate) struct Built {
     pub sm: SModel,
     pub smaps: Vec<SMap>,
     pub names: Names,
-    pub ir_names: fmspec_core::ir_json::IrNames,
+    pub ir_names: fmspec_core::ir::ir_json::IrNames,
     constants: Vec<Constant>,
     init_paths: Vec<Vec<String>>,
 }

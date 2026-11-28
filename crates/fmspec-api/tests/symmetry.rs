@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use fmspec_api::{check, load, Model};
-use fmspec_core::evidence::{Certificate, Evidence, Reject};
-use fmspec_core::gate::{decide_symmetric, VerdictKind};
+use fmspec_core::kernel::evidence::{Certificate, Evidence, Reject};
+use fmspec_core::kernel::gate::{decide_symmetric, VerdictKind};
 use fmspec_ir::default_conditions;
 use fmspec_search::{bfs, bfs_sym, BfsOptions};
 use serde_json::{json, Value};
@@ -50,7 +50,7 @@ fn the_gate_checks_the_symmetry_itself() {
 fn representatives_and_supersets_are_accepted_and_missing_representatives_are_rejected() {
     let m = pair(2, 2);
     let cond = default_conditions(&m, false);
-    let sw = fmspec_core::sym_check::symmetry_of(m.checked(), &cond, &m.names.symmetry).unwrap();
+    let sw = fmspec_core::kernel::sym_check::symmetry_of(m.checked(), &cond, &m.names.symmetry).unwrap();
     let (reduced, stats) = bfs_sym(m.checked(), &cond, &sw, &BfsOptions::default());
     let reduced = reduced.unwrap();
     assert_eq!(stats.visited_states, 6);

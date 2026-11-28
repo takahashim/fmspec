@@ -1,7 +1,7 @@
 //! Evaluator の演算ごとの意味論、型エラー、境界値（仕様書 §14 の表）。
 
-use fmspec_core::eval::{eval, eval_prop, Ctx, ErrKind};
-use fmspec_core::model::{BinOp, Expr, Type, Value};
+use fmspec_core::kernel::eval::{eval, eval_prop, Ctx, ErrKind};
+use fmspec_core::kernel::model::{BinOp, Expr, Type, Value};
 
 fn int(x: i64) -> Expr {
     Expr::Const(Value::Int(x))

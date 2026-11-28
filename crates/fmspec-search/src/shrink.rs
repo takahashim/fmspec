@@ -11,12 +11,12 @@
 //! 結果は局所最小であり、大域最小とは主張しない。打ち切った結果は、局所最小であることも主張しない。
 
 use crate::stop::stopped;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
-use fmspec_core::gate::{decide, VerdictKind};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::state_enc::type_range_exec;
-use fmspec_core::step::StepR;
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::evidence::{Claim, Evidence, Limit, TraceStep};
+use fmspec_core::kernel::gate::{decide, VerdictKind};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::state_enc::type_range_exec;
+use fmspec_core::kernel::step::StepR;
 use std::time::Instant;
 
 /// 縮小のオプション。

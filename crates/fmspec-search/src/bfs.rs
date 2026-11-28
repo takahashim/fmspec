@@ -12,10 +12,10 @@
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Enumerated;
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Enumerated;
 use hashbrown::HashTable;
 use rustc_hash::FxBuildHasher;
 use std::collections::VecDeque;
@@ -277,7 +277,7 @@ mod tests {
     use super::{bfs, search, BfsOptions};
     use crate::inconsistency::tests::counter;
     use crate::inconsistency::{successors, Inconsistency};
-    use fmspec_core::evidence::Evidence;
+    use fmspec_core::kernel::evidence::Evidence;
     use fmspec_ir::default_conditions;
 
     #[test]

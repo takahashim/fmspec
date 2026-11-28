@@ -2,7 +2,7 @@
 //!
 //! 名前を番号に解決し、型を検査する。
 //! 構文木は、意味論が必要とする要素の型を注釈として持つ。
-//! 構文木は、中核の検証済みの下ろし（[`fmspec_core::lowering`]）が型を検査し直してから中核の式にする。
+//! 構文木は、中核の検証済みの下ろし（[`fmspec_core::lower::lowering`]）が型を検査し直してから中核の式にする。
 //! したがって、この名前解決の型検査は信頼の基盤に入らない。信頼の基盤に入るのは、名前を正しい番号に
 //! 解決することだけである。
 //!
@@ -12,9 +12,9 @@ use crate::json::{array, index, int, object, operands, required, schema, single,
 use crate::model::{EnumNames, LoadError};
 use crate::type_syntax::{parse_type, type_name};
 use crate::types::{SType, XType, MAX_KEYS};
-use fmspec_core::encoding::SType as CS;
-use fmspec_core::model::{BinOp, Value as CV};
-use fmspec_core::source::{Item, Over, SetOp, TExpr};
+use fmspec_core::kernel::model::{BinOp, Value as CV};
+use fmspec_core::value::encoding::SType as CS;
+use fmspec_core::value::source::{Item, Over, SetOp, TExpr};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashSet;

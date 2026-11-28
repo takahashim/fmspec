@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(dead_code)]
 
-use fmspec_core::evidence::{Claim, Evidence, TraceStep};
-use fmspec_core::semantics::Conditions;
+use fmspec_core::kernel::evidence::{Claim, Evidence, TraceStep};
+use fmspec_core::kernel::semantics::Conditions;
 use fmspec_ir::{default_conditions, load, Model};
 use fmspec_search::{check, check_evidence, BfsOptions, Outcome, Stats};
 use serde_json::{json, Value};
@@ -109,7 +109,7 @@ pub fn truncating_search(m: &Model, limit: usize) -> Evidence {
     let mut queue = VecDeque::from([init]);
     while let Some(state) = queue.pop_front() {
         for a in 0..m.raw().actions.len() {
-            let Some(fmspec_core::step::Enumerated::Ok(ts)) = m.checked().successors(a, &state) else {
+            let Some(fmspec_core::kernel::step::Enumerated::Ok(ts)) = m.checked().successors(a, &state) else {
                 panic!("このテストのモデルでは評価エラーは起きない");
             };
             for t in ts {
@@ -121,7 +121,7 @@ pub fn truncating_search(m: &Model, limit: usize) -> Evidence {
     }
     let mut states: Vec<Vec<i64>> = visited.into_iter().collect();
     states.sort();
-    Evidence::Certificate(fmspec_core::evidence::Certificate {
+    Evidence::Certificate(fmspec_core::kernel::evidence::Certificate {
         conditions: cond,
         states,
     })

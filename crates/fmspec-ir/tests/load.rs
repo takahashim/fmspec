@@ -2,10 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, TraceStep};
-use fmspec_core::step::{Enumerated, Site};
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim, TraceStep};
+use fmspec_core::kernel::step::{Enumerated, Site};
+use fmspec_core::kernel::typing::InvalidModel;
 use fmspec_ir::{
     args_to_json, certificate_from_json, certificate_to_json, default_conditions, load, output_to_json,
     read_certificate, read_trace, state_to_json, trace_from_json, trace_to_json, value_from_json, LoadError, Trace,
@@ -503,7 +503,7 @@ fn map_encoding_and_get_agree_on_composite_key_rows() {
         Some(Enumerated::Fail(
             _,
             Site::Output,
-            ErrKind::Failed(fmspec_core::map_lookup::MISSING_KEY)
+            ErrKind::Failed(fmspec_core::slot::map_lookup::MISSING_KEY)
         ))
     ));
 }

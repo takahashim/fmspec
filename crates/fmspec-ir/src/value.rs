@@ -18,8 +18,8 @@
 
 use crate::model::{EnumNames, Model, Names};
 use crate::types::SType;
-use fmspec_core::map_encoding::encode_map_rows;
-use fmspec_core::model::Type;
+use fmspec_core::kernel::model::Type;
+use fmspec_core::value::map_encoding::encode_map_rows;
 use serde_json::{json, Map, Value};
 
 fn enum_name(names: &Names, id: usize) -> &str {

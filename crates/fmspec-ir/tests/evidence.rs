@@ -2,10 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim};
-use fmspec_core::source::FAIL_MISSING_KEY;
-use fmspec_core::step::Site;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim};
+use fmspec_core::kernel::step::Site;
+use fmspec_core::value::source::FAIL_MISSING_KEY;
 use fmspec_ir::{
     certificate_from_json, certificate_to_json, claim_to_json, conditions_from_json, default_conditions, load,
     trace_from_json, trace_to_json, Model, Trace, TraceError,
