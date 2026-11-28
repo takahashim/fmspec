@@ -24,9 +24,10 @@ use crate::model::EnumNames;
 use fmspec_core::kernel::model::Type;
 use fmspec_core::value::encoding::SType as CoreSType;
 use fmspec_core::value::rank_code::{rank_codes, unrank_codes};
+use fmspec_core::value::stype_exec::{keys_exec, stype_width};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
-pub const MAX_KEYS: u64 = 4096;
+pub const MAX_KEYS: u64 = fmspec_core::value::encoding::MAX_KEYS;
 /// Listの長さの上限。
 pub const MAX_LIST: usize = 1024;
 /// 1つの型のスロット数の上限。
@@ -87,37 +88,15 @@ impl SType {
     }
 
     /// 値の数。Setの要素とMapのキーになれない型（Set、Map、List を含む型）は `None`。
-    /// `MAX_KEYS` を超える場合も `None`。
+    /// `MAX_KEYS` を超える場合も `None`。中核の [`keys_exec`] で求める（仕様 `keys` に一致する）。
     pub fn keys(&self, enums: &[EnumNames]) -> Option<u64> {
-        let n = match self {
-            SType::Bool => 2,
-            SType::Int(lo, hi) => {
-                let n = i128::from(*hi) - i128::from(*lo) + 1;
-                if n < 1 || n > i128::from(MAX_KEYS) {
-                    return None;
-                }
-                n as u64
-            }
-            SType::Enum(id) => enums.get(*id)?.variants.len() as u64,
-            SType::Tuple(ts) => product(ts.iter().map(|t| t.keys(enums)))?,
-            SType::Record(fs) => product(fs.iter().map(|(_, t)| t.keys(enums)))?,
-            SType::Option(t) => t.keys(enums)?.checked_add(1)?,
-            SType::Set(_) | SType::Map(_, _) | SType::List(_, _) => return None,
-        };
-        (n <= MAX_KEYS).then_some(n)
+        keys_exec(&self.core_stype(), &label_counts(enums))
     }
 
-    /// スロット数。入れ子が深く `usize` に収まらない型では飽和する（`MAX_WIDTH` の検査で拒否する）。
+    /// スロット数。中核の [`stype_width`] で求める（仕様 `width` に一致する）。
+    /// 型か部分の型の幅が大きすぎて中核が計算しない型では `usize::MAX`（`MAX_WIDTH` の検査で拒否する）。
     pub fn width(&self, enums: &[EnumNames]) -> usize {
-        match self {
-            SType::Bool | SType::Int(_, _) | SType::Enum(_) => 1,
-            SType::Tuple(ts) => ts.iter().fold(0usize, |n, t| n.saturating_add(t.width(enums))),
-            SType::Record(fs) => fs.iter().fold(0usize, |n, (_, t)| n.saturating_add(t.width(enums))),
-            SType::Option(t) => t.width(enums).saturating_add(1),
-            SType::Set(t) => t.keys(enums).unwrap_or(0) as usize,
-            SType::Map(k, v) => (k.keys(enums).unwrap_or(0) as usize).saturating_mul(v.width(enums).saturating_add(1)),
-            SType::List(t, n) => n.saturating_mul(t.width(enums)).saturating_add(1),
-        }
+        stype_width(&self.core_stype(), &label_counts(enums)).unwrap_or(usize::MAX)
     }
 
     /// スロットの中核の型を `out` に追加する。
@@ -162,29 +141,30 @@ impl SType {
     /// 正規順で `r` 番目の値の符号。キーの型でないか、`r` が値の数以上なら `None`。
     /// 中核の [`unrank_codes`] で求める（番号 `r` の値の符号化であることが証明されている）。
     pub fn unrank(&self, enums: &[EnumNames], r: u64) -> Option<Vec<i64>> {
-        unrank_codes(&self.key_stype(), &label_counts(enums), r)
+        unrank_codes(&self.core_stype(), &label_counts(enums), r)
     }
 
     /// 符号の正規順での番号。値が型に属さなければ `None`。Option が空なら中身の符号は見ない。
     /// 中核の [`rank_codes`] で求める（値の符号化なら、値の番号であることが証明されている）。
     pub fn rank(&self, enums: &[EnumNames], codes: &[i64]) -> Option<u64> {
-        rank_codes(&self.key_stype(), &label_counts(enums), &codes.to_vec())
+        rank_codes(&self.core_stype(), &label_counts(enums), &codes.to_vec())
     }
 
-    /// 番号の計算に使う中核の型。Recordのフィールドの名前は番号に関わらないので、位置の番号を付ける。
-    fn key_stype(&self) -> CoreSType {
+    /// 値の数、幅、番号の計算に使う中核の型。Recordのフィールドの名前はこれらに関わらないので、位置の番号を付ける。
+    fn core_stype(&self) -> CoreSType {
         match self {
             SType::Bool => CoreSType::Bool,
             SType::Int(lo, hi) => CoreSType::Int(*lo, *hi),
             SType::Enum(id) => CoreSType::Enum(*id),
-            SType::Tuple(ts) => CoreSType::Tuple(ts.iter().map(SType::key_stype).collect()),
-            SType::Record(fs) => {
-                CoreSType::Record((0..fs.len()).collect(), fs.iter().map(|(_, t)| t.key_stype()).collect())
-            }
-            SType::Option(t) => CoreSType::Option(Box::new(t.key_stype())),
-            SType::Set(t) => CoreSType::Set(Box::new(t.key_stype())),
-            SType::Map(k, v) => CoreSType::Map(Box::new(k.key_stype()), Box::new(v.key_stype())),
-            SType::List(t, n) => CoreSType::List(Box::new(t.key_stype()), *n),
+            SType::Tuple(ts) => CoreSType::Tuple(ts.iter().map(SType::core_stype).collect()),
+            SType::Record(fs) => CoreSType::Record(
+                (0..fs.len()).collect(),
+                fs.iter().map(|(_, t)| t.core_stype()).collect(),
+            ),
+            SType::Option(t) => CoreSType::Option(Box::new(t.core_stype())),
+            SType::Set(t) => CoreSType::Set(Box::new(t.core_stype())),
+            SType::Map(k, v) => CoreSType::Map(Box::new(k.core_stype()), Box::new(v.core_stype())),
+            SType::List(t, n) => CoreSType::List(Box::new(t.core_stype()), *n),
         }
     }
 }
@@ -218,17 +198,6 @@ impl XType {
             _ => false,
         }
     }
-}
-
-fn product(it: impl Iterator<Item = Option<u64>>) -> Option<u64> {
-    let mut n: u64 = 1;
-    for k in it {
-        n = n.checked_mul(k?)?;
-        if n > MAX_KEYS {
-            return None;
-        }
-    }
-    Some(n)
 }
 
 /// 中核の型の既定値の符号。
