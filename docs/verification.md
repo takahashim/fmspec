@@ -80,8 +80,9 @@ MBTの「応答と矛盾しない」は、観測するスロットの値の一�
 - 到達点に置いた `assert(false)` 129件が、すべて証明に失敗する。
 
 変異と `assert(false)` の一覧は `rakelib/verus.rake` にある。
-変種ごとに crate 全体を検証し直すので、すべて回すと数時間かかる。
-CI では回さず、証明を変えたときに手元で、変えたファイルに絞って実行する（`VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants`）。
+変種ごとに、変えた関数、そのモジュール、crate 全体の順に検証し、証明に失敗した時点で次に進む。ふつうは変えた関数だけの検証で済み、すべて回すと4並列で1時間半ほどかかる。
+既定では main から変更したファイルの分だけを検査するので、証明を変えたときは `rake verus:mutants` を実行する。ファイルを指定するなら `VERUS_MUTANTS_FILES=cert.rs,trace.rs`、すべてなら `VERUS_MUTANTS_ALL=1` を付ける。
+すべての検査は、CI の定期実行（`.github/workflows/mutants.yml`、週に1回、4つに分けて並べる）で行う。
 
 ## テストで検査するもの
 
@@ -356,4 +357,4 @@ crates.ioの `vstd` は、Verusのリリースのコミットではなく、版�
 - 証拠の検査の資源上限は、評価回数の上限による事前の見積もりである。検査の途中で実際の評価回数を数えてはいない。判定ゲートの検査では、中断は証明書の検査の区切りでだけ確かめ、トレースの検査（`replay` と、`shrink` の各候補の検査）は中断できない。`shrink` は候補を試す前ごとに中断を確かめる。
 - 引数のドメインは値を1つずつ列挙する。広い整数範囲の引数や、要素の多いSetの引数を持つ操作は、列挙に時間がかかる。複合型の引数では、スロットの値の組を列挙して正規形でないものを除くので、正規形の値の数より多くの組を調べる。
 - 式の入れ子の深さは、JSONの読み込みの上限（128段）で抑えている。Rust APIから直接組み立てた極端に深い式は、再帰でスタックを使い切る可能性がある。
-- CI（`.github/workflows/ci.yml`）は、`rake` の検査をジョブに分けて実行する。push と PR ごとに `rake verus:proof` で証明を検査する。変異と `assert(false)` の検査（`rake verus:mutants`）は数時間かかるので、CI では行わない。
+- CI（`.github/workflows/ci.yml`）は、`rake` の検査をジョブに分けて実行する。push と PR ごとに `rake verus:proof` で証明を検査する。変異と `assert(false)` の検査（`rake verus:mutants`）は、`.github/workflows/mutants.yml` で週に1回すべて実行する。

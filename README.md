@@ -99,7 +99,7 @@ rake compile       # native extension をビルドして lib/fmspec に置く
 rake test          # Rustのテスト、参照実装のテスト、参照実装との比較テスト、Rubyのテスト、fmspec-railsのテスト
 rake verus         # 中核の証明（rake verus:proof と同じ。変異と assert(false) の検査を除く）
 rake test:tlc      # TLA+に変換したモデルと、第三者が書いたTLA+の仕様を、TLCで検査した結果との比較（Javaが要る）
-rake verus:mutants # 変異と assert(false) が証明に失敗することの検査（すべて回すと数時間かかる）
+rake verus:mutants # 変異と assert(false) が証明に失敗することの検査（既定は main から変更したファイルの分）
 rake lint          # rustfmt と clippy
 rake nupur:check   # Nupurの写しが、記録した内容（vendor/nupur.sha256）と一致することの検査
 rake nupur:upstream # Nupurの写しが、Makiriの固定したコミットの内容と一致することの検査
@@ -108,7 +108,7 @@ rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 
 `rake test:tlc` は `rake test` に含めない。tla2tools.jar を環境変数 `TLA2TOOLS` で指定しなければ、固定したリリースを `tmp/tlc` に取得する。
 `rake test:rails` の前に、`fmspec-rails` で `bundle install` を実行しておく。
-`rake verus:mutants` は変種ごとに crate 全体を検証し直すので、証明を変えたときに、変えたファイルに絞って実行する（例：`VERUS_MUTANTS_FILES=cert.rs,trace.rs rake verus:mutants`）。
+`rake verus:mutants` は、既定では main から変更したファイルの変異と assert(false) だけを検査する。証明を変えたときに実行する。ファイルを指定するなら `VERUS_MUTANTS_FILES=cert.rs,trace.rs`、すべてなら `VERUS_MUTANTS_ALL=1`（4並列で1時間半ほど）を付ける。
 `rake verus` には Verus 0.2026.11.02.8bf68ee が必要で、実行ファイルを環境変数 `VERUS` で指定する。
 `rake nupur:upstream` と `rake nupur:lint` には、Makiriのチェックアウト（環境変数 `MAKIRI`、既定は `../makiri`）が必要である。`rake nupur:lint` には、さらに cargo-dylint が必要である。
 何を証明し、何を信頼しているかは [docs/verification.md](docs/verification.md) にある。
@@ -117,7 +117,7 @@ rake nupur:lint    # Makiriの nupur_lints を拡張に対して実行する
 
 ## CI
 
-GitHub Actions（`.github/workflows/ci.yml`）で、上の検査を実行する。`rake verus:mutants` は数時間かかるので、CI では回さない。
+GitHub Actions（`.github/workflows/ci.yml`）で、上の検査を実行する。`rake verus:mutants` は、`.github/workflows/mutants.yml` で週に1回すべて実行する。
 
 | ジョブ | 内容 |
 |---|---|

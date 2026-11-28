@@ -1,0 +1,42 @@
+# 変異と assert(false) の検査（rake verus:mutants）を、週に1回すべて実行する。
+#
+# 変異を入れた関数だけを検証し、証明が通ってしまったときだけモジュール、crate 全体と範囲を広げる。
+# 証明を変えた PR では、手元で `rake verus:mutants`（main から変更したファイルだけ）を実行する。
+# ここでは、変更していないファイルの変異が、ほかの変更で捉えられなくなっていないかを定期的に確かめる。
+#
+# 4つに分けて並べて実行する（VERUS_MUTANTS_SHARD）。手動でも実行できる。
+name: Mutants
+
+on:
+  schedule:
+    - cron: "17 18 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  RUBY_VERSION: "4.0"
+
+jobs:
+  mutants:
+    name: Verus (mutants ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+      - run: gem install --no-document rake
+      - uses: ./.github/actions/setup-verus
+      - run: rake verus:mutants
+        env:
+          VERUS_MUTANTS_ALL: "1"
+          VERUS_MUTANTS_SHARD: ${{ matrix.shard }}/4

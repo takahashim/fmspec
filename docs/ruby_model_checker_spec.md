@@ -719,7 +719,7 @@ native extensionの境界では、Nupur、その下の `nupur_sys` と rb-sys、
 - 中核の `assume` / `admit` を禁止し、`external_body` 等の信頼境界は一覧化・レビューする。
 - 証明を通すための契約弱体化を禁止する。意味論・証明義務変更は別途レビューする。
 - Verusの実行をCIで必須とし、Verusのリリースと、それが指定するRustツールチェーンを固定する。VerusはAPIの変更が続いているため、更新は証明の再確認とあわせて行う。
-- 証明が空虚でないことを検査する。各ファイルが信頼する項目（`external_body`、`assume_specification` など）の数を固定し、検査を1つ壊した変異と、到達点に `assert(false)` を置いた変種が証明に失敗することを `rake verus:mutants` で確認する。この検査は数時間かかるので、CIでは回さず、証明を変えたときに手元で実行する。Makiriの `rake verus` の運用を踏襲する。
+- 証明が空虚でないことを検査する。各ファイルが信頼する項目（`external_body`、`assume_specification` など）の数を固定し、検査を1つ壊した変異と、到達点に `assert(false)` を置いた変種が証明に失敗することを `rake verus:mutants` で確認する。証明を変えたときは変更したファイルの分を手元で実行し、すべての検査はCIで週に1回実行する。Makiriの `rake verus` の運用を踏襲する。
 - Nupurの規則のうち型で表せないものは、Makiriの `nupur_lints` を拡張に対して実行して検査する。同梱するNupurの写しが固定したコミットと一致することも検査する（§3.2）。
 - 独立した小規模参照Evaluator・グラフ列挙との比較、境界値、負例、mutation testingを併用する。変異が必ず証明失敗するとは限らないので、対象契約・テストで検出できるかを評価する。
 - 証明済みの関数・定理・未検証部分をリリースごとに公開する。

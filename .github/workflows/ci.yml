@@ -7,8 +7,8 @@
 #   verus  rake verus:proof（中核の証明、信頼する項目、公開関数の前提条件、使われない use）
 #   nupur  rake nupur:upstream、nupur:lint（Makiri の固定コミットと nupur_lints）
 #
-# 変異と assert(false) の検査（rake verus:mutants）は、変種ごとに crate 全体を検証し直すので数時間かかる。
-# CI では回さず、証明を変えたときに手元で、変えたファイルに絞って実行する（VERUS_MUTANTS_FILES）。
+# 変異と assert(false) の検査（rake verus:mutants）は、mutants.yml で週に1回すべて実行する。
+# 証明を変えたときは、手元で `rake verus:mutants`（main から変更したファイルの分）を実行する。
 #
 # バージョンは docs/verification.md の表に合わせる。Verus と Nupur のバージョンは rakelib から読む。
 name: CI
