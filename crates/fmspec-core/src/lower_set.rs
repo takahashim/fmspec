@@ -25,7 +25,7 @@ use crate::lowering::{element_rank, lookup_rank, low};
 use crate::model::Value;
 use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{frag, lemma_extends_trans, lemma_frag_seq, lemma_tree_pure, lowers};
+use crate::preserve::{lemma_extends_trans, lemma_tree_pure, lowers};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_insert, lemma_remove, lemma_set_contains, lemma_setbin};
 #[cfg(verus_keep_ghost)]
@@ -80,7 +80,7 @@ pub(crate) fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -146,7 +146,7 @@ pub(crate) fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                     bits@.len() == n,
                     n <= 0x7fff_ffff,
                     e is SetLit && e->SetLit_1 == *es && e->SetLit_0 == *t,
-                    frag(*e) ==> setlit_ok(es@.take(i as int), *cx, sc0, b0, *blk, sty(*t), bits@),
+                    setlit_ok(es@.take(i as int), *cx, sc0, b0, *blk, sty(*t), bits@),
                     pre == tpre(*e, *cx, sc0, b0.depth_s()),
                     sc0 == old(sc)@,
                     c == sctx(*cx),
@@ -192,10 +192,7 @@ pub(crate) fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                 proof {
                     lemma_extends_trans(*old(blk), b1, *blk);
                     assert(es@.take(i + 1).drop_last() =~= es@.take(i as int));
-                    if frag(*e) {
-                        lemma_frag_seq(es@, i as int);
-                        lemma_setlit_step(es@.take(i + 1), *cx, sc0, b0, b1, *blk, sty(*t), bv, r, bits@);
-                    }
+                    lemma_setlit_step(es@.take(i + 1), *cx, sc0, b0, b1, *blk, sty(*t), bv, r, bits@);
                 }
                 i += 1;
             }
@@ -227,7 +224,7 @@ pub(crate) fn low_member(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s());
@@ -295,9 +292,7 @@ pub(crate) fn low_member(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                 }
             }
             proof {
-                if frag(*e) {
-                    lemma_set_contains(*e, *t, **a, **x, *cx, sc@, b0, b1, *blk, cs@, rg, hg, out@);
-                }
+                lemma_set_contains(*e, *t, **a, **x, *cx, sc@, b0, b1, *blk, cs@, rg, hg, out@);
             }
             Ok((XType::Bool, out))
         },
@@ -316,7 +311,7 @@ pub(crate) fn low_setop(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s());
@@ -367,9 +362,7 @@ pub(crate) fn low_setop(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                         }
                     }
                     proof {
-                        if frag(*e) {
-                            lemma_insert(*e, *t, **a, **x, *cx, sc@, b0, b1, *blk, bits@, r, out@);
-                        }
+                        lemma_insert(*e, *t, **a, **x, *cx, sc@, b0, b1, *blk, bits@, r, out@);
                     }
                     out
                 },
@@ -389,9 +382,7 @@ pub(crate) fn low_setop(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                         }
                     }
                     proof {
-                        if frag(*e) {
-                            lemma_remove(*e, *t, **a, **x, *cx, sc@, b0, b1, *blk, bits@, r, out@);
-                        }
+                        lemma_remove(*e, *t, **a, **x, *cx, sc@, b0, b1, *blk, bits@, r, out@);
                     }
                     out
                 },
@@ -490,9 +481,7 @@ pub(crate) fn low_setop(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                 i += 1;
             }
             proof {
-                if frag(*e) {
-                    lemma_setbin(*e, *op, **a, **b, *cx, sc@, b0, b1, b2, xty(ta), xs@, ys@, out@);
-                }
+                lemma_setbin(*e, *op, **a, **b, *cx, sc@, b0, b1, b2, xty(ta), xs@, ys@, out@);
             }
             match op {
                 SetOp::Subset => {

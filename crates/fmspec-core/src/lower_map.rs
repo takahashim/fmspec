@@ -36,9 +36,7 @@ use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{frag, lemma_extends_trans, lemma_frag_items, lemma_fresh_push, lemma_lits};
-#[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_pure_mono, lowers};
+use crate::preserve::{lemma_extends_trans, lemma_fresh_push, lemma_lits, lemma_pure_mono, lowers};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_map::{lemma_delete, lemma_get, lemma_has_key, lemma_keys, lemma_maplit_base};
 #[cfg(verus_keep_ghost)]
@@ -88,7 +86,7 @@ pub(crate) fn put(
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok(out) ==> frag(*key) && frag(*value) ==> put_lowers(
+        r matches Ok(out) ==> put_lowers(
             *key,
             *value,
             *cx,
@@ -219,9 +217,7 @@ pub(crate) fn put(
     }
     proof {
         lemma_extends_trans(b0, b1, *blk);
-        if frag(*key) && frag(*value) {
-            lemma_put(*key, *value, *cx, sc@, b0, b1, *blk, sty(*k), sty(*v), ms@, rows_view(rows@), r, xs@, alt@, rows_view(out@), res@);
-        }
+        lemma_put(*key, *value, *cx, sc@, b0, b1, *blk, sty(*k), sty(*v), ms@, rows_view(rows@), r, xs@, alt@, rows_view(out@), res@);
     }
     Ok(res)
 }
@@ -238,7 +234,7 @@ pub(crate) fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -299,7 +295,7 @@ pub(crate) fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                     kt == sty(*k),
                     vt == sty(*v),
                     e is MapLit && e->MapLit_2 == *items,
-                    frag(*e) ==> maplit_ok(items@.take(i as int), *cx, sc0, b0, *blk, kt, vt, slots@),
+                    maplit_ok(items@.take(i as int), *cx, sc0, b0, *blk, kt, vt, slots@),
                     pre == tpre(*e, *cx, sc0, b0.depth_s()),
                     sc0 == old(sc)@,
                     c == sctx(*cx),
@@ -353,10 +349,7 @@ pub(crate) fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                     if pre {
                         lemma_xwidth_of(STy::Map(Box::new(kt), Box::new(vt)), cx.enums@);
                     }
-                    if frag(*e) {
-                        lemma_frag_items(items@, i as int);
-                        lemma_maplit_step(items@.take(i + 1), *cx, sc0, b0, b1, *blk, kt, vt, s1, slots@);
-                    }
+                    lemma_maplit_step(items@.take(i + 1), *cx, sc0, b0, b1, *blk, kt, vt, s1, slots@);
                 }
                 i += 1;
             }
@@ -386,7 +379,7 @@ pub(crate) fn low_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -509,12 +502,10 @@ pub(crate) fn low_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
     proof {
         assert(added(b2, b3, rr, Expr::Local(rank_local)));
         lemma_fresh_push(b3, *blk, c);
-        if frag(*e) {
-            lemma_get(
-                *e, *cx, sc@, b0, b1, b2, b3, *blk, **a, **x, ms@, sty(k), sty(v), rr, rank_local, c, slots@,
-                fallback@, rows, width,
-            );
-        }
+        lemma_get(
+            *e, *cx, sc@, b0, b1, b2, b3, *blk, **a, **x, ms@, sty(k), sty(v), rr, rank_local, c, slots@,
+            fallback@, rows, width,
+        );
     }
     Ok((ty, slots))
 }
@@ -531,7 +522,7 @@ pub(crate) fn low_map_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk:
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -579,9 +570,7 @@ pub(crate) fn low_map_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk:
             }
             let slots = put(e, &ms, &k, &v, x, y, cx, sc, blk)?;
             proof {
-                if frag(*e) {
-                    lemma_put_expr(*e, *cx, sc@, b0, b1, *blk, sty(k), sty(v), ms@, slots@);
-                }
+                lemma_put_expr(*e, *cx, sc@, b0, b1, *blk, sty(k), sty(v), ms@, slots@);
             }
             Ok((tm, slots))
         },
@@ -601,7 +590,7 @@ pub(crate) fn low_has_key(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -707,9 +696,7 @@ pub(crate) fn low_has_key(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                 }
             }
             proof {
-                if frag(*e) {
-                    lemma_has_key(*e, *cx, sc@, b0, b1, *blk, sty(v), ms@, rows_view(rows@), present@, rg, hg, out@);
-                }
+                lemma_has_key(*e, *cx, sc@, b0, b1, *blk, sty(v), ms@, rows_view(rows@), present@, rg, hg, out@);
             }
             Ok((XType::Bool, out))
         },
@@ -728,7 +715,7 @@ pub(crate) fn low_delete(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -838,9 +825,7 @@ pub(crate) fn low_delete(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                 }
             }
             proof {
-                if frag(*e) {
-                    lemma_delete(*e, *cx, sc@, b0, b1, *blk, sty(v), ms@, rows_view(rows@), r, alt@, rows_view(out@), res@);
-                }
+                lemma_delete(*e, *cx, sc@, b0, b1, *blk, sty(v), ms@, rows_view(rows@), r, alt@, rows_view(out@), res@);
             }
             Ok((tm, res))
         },
@@ -859,7 +844,7 @@ pub(crate) fn low_keys(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -917,9 +902,7 @@ pub(crate) fn low_keys(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                 }
             }
             proof {
-                if frag(*e) {
-                    lemma_keys(*e, *cx, sc@, b0, *blk, sty(k), sty(v), ms@, rows_view(rows@), present@);
-                }
+                lemma_keys(*e, *cx, sc@, b0, *blk, sty(k), sty(v), ms@, rows_view(rows@), present@);
             }
             Ok((XType::Set(Box::new(k)), present))
         },

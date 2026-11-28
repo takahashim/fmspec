@@ -404,7 +404,7 @@ VERUS_CANARIES = [
   ["preserve_ops.rs", "                lemma_fold_eq(all, es@, terms, se, sls, env, l);", "lemma_fold の値の場合"],
   ["preserve_ops.rs", "                    assert(lk.take((d + j) as int) =~= lj);", "lemma_ite_prefix の帰納"],
   ["preserve_ops.rs", "            lemma_pad_eval(ds, xs[j], env, ls);", "lemma_pads_closed の各スロット"],
-  ["lower_core.rs", "                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), xa@);", "low_ite のスロットの束縛"],
+  ["lower_core.rs", "            lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), xa@);", "low_ite のスロットの束縛"],
   ["preserve_ops.rs", "        assert(s.skip(cut) =~= mix2(a.skip(cut), b.skip(cut), m.skip(cut)));", "lemma_models_seq_mix の帰納"],
   ["slot_store.rs", "        assert(v1.drop_last() =~= v0);", "lemma_mixed_eval の帰納"],
   ["preserve_quant.rs", "            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, 0);", "lemma_quant の値の場合"],

@@ -264,7 +264,7 @@ pub(crate) fn low(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 3nat,
 {
     match e {
@@ -295,7 +295,7 @@ pub(crate) fn sub_scalar(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok(x) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(*want), seq![x]),
+        r matches Ok(x) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(*want), seq![x]),
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*want))
             && scalar_x(xty(*want)) ==> deep(r) && (r matches Ok(x) ==> pure_below(x, final(blk).depth_s())),
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> binds_typed(
@@ -321,7 +321,7 @@ pub(crate) fn sub_scalar(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
 fn scalar_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize, outer: Ghost<Seq<ETy>>) -> (r: Result<(XType, Expr), Fail>)
     ensures
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, x)) ==> frag(*e) ==> closed_lowers(*e, *cx, old(sc)@, depth as nat, xty(t), x),
+        r matches Ok((t, x)) ==> closed_lowers(*e, *cx, old(sc)@, depth as nat, xty(t), x),
         tpre(*e, *cx, old(sc)@, depth as nat) && scalar_x(ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@))->0) ==> deep(r) && (
         r matches Ok((t, _)) ==> Some(xty(t)) == ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@))),
         tpre(*e, *cx, old(sc)@, depth as nat) && tok_in(*cx, old(sc)@, outer@, depth as nat) ==> (r matches Ok((t, x))
@@ -346,7 +346,7 @@ fn scalar_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize, outer:
         }
         assert(fresh(b0, blk) =~= blk.binds@);
         assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-            #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == depth as nat && frag(*e) implies scalar_result(
+            #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == depth as nat implies scalar_result(
             eval_src(*e, se, sls),
             eval_l(x, env, ls),
             xty(t),
@@ -369,7 +369,7 @@ fn scalar_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize, outer:
 pub(crate) fn bool_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize, outer: Ghost<Seq<ETy>>) -> (r: Result<Expr, Fail>)
     ensures
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok(x) ==> frag(*e) ==> closed_lowers(*e, *cx, old(sc)@, depth as nat, XTy::Bool, x),
+        r matches Ok(x) ==> closed_lowers(*e, *cx, old(sc)@, depth as nat, XTy::Bool, x),
         tpre(*e, *cx, old(sc)@, depth as nat) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(XTy::Bool) ==> deep(r),
         tpre(*e, *cx, old(sc)@, depth as nat) && tok_in(*cx, old(sc)@, outer@, depth as nat) ==> (r matches Ok(x) ==> has_ty(
             x,
@@ -393,7 +393,7 @@ pub(crate) fn element(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok(xs) ==> frag(*e) ==> elem_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), xs@),
+        r matches Ok(xs) ==> elem_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), xs@),
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) ==> deep(r) && (r matches Ok(xs) ==> xs@.len() == width(sty(*st), cx.enums@) && all_pure(
@@ -453,9 +453,7 @@ pub(crate) fn element(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
     let xs = atoms(stored, blk, Ghost(*cx), Ghost(etys(slot_tys(sty(*st), cx.enums@))))?;
     proof {
         lemma_extends_trans(b0, b1, b2);
-        if frag(*e) {
-            lemma_element(*e, *cx, sc@, b0, b1, b2, *blk, xty(t), slots@, sty(*st), cg, sg, xs@);
-        }
+        lemma_element(*e, *cx, sc@, b0, b1, b2, *blk, xty(t), slots@, sty(*st), cg, sg, xs@);
     }
     Ok(xs)
 }
@@ -467,7 +465,7 @@ pub(crate) fn element_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok(x) ==> frag(*e) ==> elem_rank_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), x),
+        r matches Ok(x) ==> elem_rank_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), x),
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && keys(sty(*st), cx.enums@) is Some ==> deep(r) && (r matches Ok(x) ==> pure_below(x, final(blk).depth_s())),
@@ -541,9 +539,7 @@ pub(crate) fn element_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
     }
     proof {
         lemma_extends_trans(b0, b1, b2);
-        if frag(*e) {
-            lemma_elem_rank(*e, *cx, sc@, b0, b1, b2, *blk, xty(t), slots@, sty(*st), cg, _out@, rg, x);
-        }
+        lemma_elem_rank(*e, *cx, sc@, b0, b1, b2, *blk, xty(t), slots@, sty(*st), cg, _out@, rg, x);
     }
     Ok(x)
 }
@@ -555,7 +551,7 @@ pub(crate) fn lookup_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok(x) ==> frag(*e) ==> rank_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), x),
+        r matches Ok(x) ==> rank_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), x),
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && keys(sty(*st), cx.enums@) is Some ==> deep(r) && (r matches Ok(x) ==> pure_below(x, final(blk).depth_s())),
@@ -617,7 +613,7 @@ pub(crate) fn lookup_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
     proof {
         let enums = cx.enums@;
         assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-            #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == b0.depth_s() && frag(*e) implies rank_result(
+            #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == b0.depth_s() implies rank_result(
             eval_src(*e, se, sls),
             run(fresh(b0, *blk), env, ls),
             x,
@@ -662,7 +658,7 @@ fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 1nat,
 {
     match e {
@@ -684,7 +680,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -718,9 +714,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
             let flags: Vec<Expr> = match &t {
                 XType::Set(_u) => {
                     proof {
-                        if frag(*e) {
-                            lemma_flags_set(**a, *cx, sc@, b0, b1, sty(**_u), s@);
-                        }
+                        lemma_flags_set(**a, *cx, sc@, b0, b1, sty(**_u), s@);
                         if tp {
                             lemma_typed_bools(s@, keys_or_zero(sty(**_u), cx.enums@), tv, blt(b1, *cx));
                         }
@@ -784,9 +778,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                         j += 1;
                     }
                     proof {
-                        if frag(*e) {
-                            lemma_flags_map(**a, *cx, sc@, b0, b1, sty(**k), sty(**v), stride as int, s@, fs@, n as nat);
-                        }
+                        lemma_flags_map(**a, *cx, sc@, b0, b1, sty(**k), sty(**v), stride as int, s@, fs@, n as nat);
                         if tp {
                             let mt = STy::Map(Box::new(sty(**k)), Box::new(sty(**v)));
                             lemma_xetys_of(mt, cx.enums@);
@@ -833,9 +825,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                         out.push(eq(len, ci(0)));
                     }
                     proof {
-                        if frag(*e) {
-                            lemma_list_size(*e, **a, *cx, sc@, b0, b1, sty(**_u), *max, s@, out@);
-                        }
+                        lemma_list_size(*e, **a, *cx, sc@, b0, b1, sty(**_u), *max, s@, out@);
                     }
                     return Ok((if is_size { XType::Int } else { XType::Bool }, out));
                 },
@@ -901,9 +891,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                     }
                 }
                 proof {
-                    if frag(*e) {
-                        lemma_size(*e, **a, *cx, sc@, b0, b1, *blk, flags@, codes@, x);
-                    }
+                    lemma_size(*e, **a, *cx, sc@, b0, b1, *blk, flags@, codes@, x);
                 }
                 out.push(x);
                 Ok((XType::Int, out))
@@ -918,9 +906,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
                     }
                 }
                 proof {
-                    if frag(*e) {
-                        lemma_is_empty(*e, **a, *cx, sc@, b0, b1, flags@);
-                    }
+                    lemma_is_empty(*e, **a, *cx, sc@, b0, b1, flags@);
                 }
                 Ok((XType::Bool, out))
             }
@@ -939,7 +925,7 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 2nat,
 {
     match e {
@@ -979,17 +965,14 @@ pub fn lower_prop(e: &TExpr, cx: &LowerCtx) -> (r: Result<Expr, Fail>)
     }
     let r = bool_in(e, cx, &mut sc, 0, Ghost(Seq::empty()));
     proof {
-        lemma_frag_total(*e);
         if r is Ok {
             let c = r->Ok_0;
-            if frag(*e) {
-                assert forall|env: Env, se: SEnv| #[trigger] env_rel(*cx, env, se) implies prop_result(
-                    eval_src(*e, se, Seq::empty()),
-                    eval_l(c, env, Seq::empty()),
-                ) by {
-                    assert(ctx_ok(*cx, Seq::empty(), env, se, Seq::empty(), Seq::empty()));
-                    assert(sc@ =~= Seq::<Bound>::empty());
-                }
+            assert forall|env: Env, se: SEnv| #[trigger] env_rel(*cx, env, se) implies prop_result(
+                eval_src(*e, se, Seq::empty()),
+                eval_l(c, env, Seq::empty()),
+            ) by {
+                assert(ctx_ok(*cx, Seq::empty(), env, se, Seq::empty(), Seq::empty()));
+                assert(sc@ =~= Seq::<Bound>::empty());
             }
         }
     }
@@ -1089,8 +1072,7 @@ pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: R
     }
     proof {
         assert(fresh(b0, blk) =~= blk.binds@);
-        lemma_frag_total(*e);
-        if frag(*e) {
+        {
             assert forall|env: Env, se: SEnv, ls: Seq<Value>| #[trigger] top_ok(*cx, env, se, ls, depth as nat) implies stored_result(
                 eval_src(*e, se, Seq::empty()),
                 out@,

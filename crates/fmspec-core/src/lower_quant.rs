@@ -37,7 +37,7 @@ use crate::lowering::{bool_in, low};
 use crate::model::Value;
 use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{frag, lemma_pure_mono, lowers};
+use crate::preserve::{lemma_pure_mono, lowers};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{combine_ok, lemma_over_list, lemma_over_map, lemma_over_set};
 #[cfg(verus_keep_ghost)]
@@ -73,7 +73,7 @@ pub(crate) fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (frag(*e) ==> over_ok(
+        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -123,7 +123,7 @@ pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (frag(*e) ==> over_ok(
+        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -219,7 +219,7 @@ pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (frag(*e) ==> over_ok(
+        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -312,9 +312,7 @@ pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                         assert(all_ty(cs@, ETy::Bool, tv, lt.push(ETy::Int)));
                     }
                 }
-                if frag(*e) {
-                    lemma_over_set(*over, *t, **s, *cx, sc@, b0, *blk, cs@, g, n as nat, us@);
-                }
+                lemma_over_set(*over, *t, **s, *cx, sc@, b0, *blk, cs@, g, n as nat, us@);
             }
             Ok((copy_stype(t), g, n as usize, us))
         },
@@ -334,7 +332,7 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (frag(*e) ==> over_ok(
+        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -485,9 +483,7 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                         assert(all_ty(fs@, ETy::Bool, tv, lt.push(ETy::Int)));
                     }
                 }
-                if frag(*e) {
-                    lemma_over_map(*over, *t, **m, *cx, sc@, b0, *blk, sty(*vt), stride as int, cs@, fs@, g, n as nat, us@);
-                }
+                lemma_over_map(*over, *t, **m, *cx, sc@, b0, *blk, sty(*vt), stride as int, cs@, fs@, g, n as nat, us@);
             }
             Ok((copy_stype(t), g, n as usize, us))
         },
@@ -507,7 +503,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (frag(*e) ==> over_ok(
+        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -740,9 +736,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                     lemma_lt_typed(Expr::Local(d), cs@[0], tv, lt1);
                     assert(typed(us@, etys(et), tv, lt1));
                 }
-                if frag(*e) {
-                    lemma_over_list(*over, **li, *cx, sc@, b0, *blk, sty(*u), max as nat, w as int, cs@, us@, g);
-                }
+                lemma_over_list(*over, **li, *cx, sc@, b0, *blk, sty(*u), max as nat, w as int, cs@, us@, g);
             }
             Ok((copy_stype(&u), g, max, us))
         },
@@ -766,7 +760,7 @@ pub(crate) fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 2nat,
 {
     let (all, _over, body) = match e {
@@ -879,9 +873,7 @@ pub(crate) fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
         }
     }
     proof {
-        if frag(*e) {
-            lemma_quant(*e, all, *_over, **body, *cx, before, b0, b1, *blk, n as nat, g, bg, b, qb, q);
-        }
+        lemma_quant(*e, all, *_over, **body, *cx, before, b0, b1, *blk, n as nat, g, bg, b, qb, q);
     }
     Ok((XType::Bool, out))
 }

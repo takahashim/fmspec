@@ -38,13 +38,11 @@ use crate::lowering::{atoms, bool_in, layout_slots, lit_type, low, sub_scalar};
 use crate::model::{BinOp, Expr, Value};
 use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{closed_lowers, closed_slots, ctx_ok, denotes, frag, fresh, layout_ok};
+use crate::preserve::{closed_lowers, closed_slots, ctx_ok, denotes, fresh, layout_ok, layouts_ok};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{layouts_ok, lemma_extends_trans, lemma_frag_seq, lemma_fresh_refl};
+use crate::preserve::{lemma_extends_trans, lemma_fresh_refl, lemma_lits, lemma_models_len};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_lits, lemma_models_len, lemma_pure_mono, lowers, result_ok, run};
-#[cfg(verus_keep_ghost)]
-use crate::preserve::{slot_vals, slots_result, wraps};
+use crate::preserve::{lemma_pure_mono, lowers, result_ok, run, slot_vals, slots_result, wraps};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_ops::{ite_binds, lemma_bin, lemma_eq, lemma_fold, lemma_fold_empty};
 #[cfg(verus_keep_ghost)]
@@ -77,7 +75,7 @@ verus! {
 pub(crate) fn closed_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize, outer: Ghost<Seq<ETy>>) -> (r: Result<(XType, Vec<Expr>), Fail>)
     ensures
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, xs)) ==> frag(*e) ==> closed_slots(*e, *cx, old(sc)@, depth as nat, xty(t), xs@),
+        r matches Ok((t, xs)) ==> closed_slots(*e, *cx, old(sc)@, depth as nat, xty(t), xs@),
         tpre(*e, *cx, old(sc)@, depth as nat) ==> deep(r) && (r matches Ok((t, xs)) ==> Some(xty(t)) == ir_type_of(
             *e,
             sctx(*cx),
@@ -137,7 +135,7 @@ pub(crate) fn closed_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: us
                 assert(has_ty(slots@[j], lenv(*cx), blt(blk, *cx), xetys(xty(t), cx.enums@)[j]));
             }
         }
-        if frag(*e) {
+        {
             assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
                 #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == depth as nat implies slots_result(
                 eval_src(*e, se, sls),
@@ -486,7 +484,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 2nat,
 {
     let enums = &cx.enums;
@@ -535,9 +533,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                         if tp {
                             lemma_bind_typed(b2, *blk, z, out@[0], *cx, ETy::Int);
                         }
-                        if frag(*e) {
-                            lemma_bin(*e, *cx, sc@, b0, b1, b2, *blk, x, y, XTy::Int, out@);
-                        }
+                        lemma_bin(*e, *cx, sc@, b0, b1, b2, *blk, x, y, XTy::Int, out@);
                     }
                     Ok((XType::Int, out))
                 },
@@ -550,9 +546,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                     }
                     proof {
                         lemma_extends_refl(*blk);
-                        if frag(*e) {
-                            lemma_bin(*e, *cx, sc@, b0, b1, b2, *blk, x, y, XTy::Bool, out@);
-                        }
+                        lemma_bin(*e, *cx, sc@, b0, b1, b2, *blk, x, y, XTy::Bool, out@);
                     }
                     Ok((XType::Bool, out))
                 },
@@ -603,9 +597,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                 },
             );
             proof {
-                if frag(*e) {
-                    lemma_eq(*e, *cx, sc@, b0, b1, *blk, xty(tx), x@, y@, cg, out@);
-                }
+                lemma_eq(*e, *cx, sc@, b0, b1, *blk, xty(tx), x@, y@, cg, out@);
             }
             proof {
                 if pre {
@@ -633,9 +625,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                 }
             }
             proof {
-                if frag(*e) {
-                    lemma_not(*e, *cx, sc@, b0, *blk, x);
-                }
+                lemma_not(*e, *cx, sc@, b0, *blk, x);
             }
             Ok((XType::Bool, out))
         },
@@ -664,9 +654,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                     assert(has_ty(z, tv, blt(b1, *cx), ETy::Bool));
                     lemma_bind_typed(b1, *blk, z, out@[0], *cx, ETy::Bool);
                 }
-                if frag(*e) {
-                    lemma_implies(*e, *cx, sc@, b0, b1, *blk, p, q);
-                }
+                lemma_implies(*e, *cx, sc@, b0, b1, *blk, p, q);
             }
             Ok((XType::Bool, out))
         },
@@ -739,7 +727,7 @@ pub(crate) fn low_core(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             proof {
                 assert(sc@ =~= before);
                 assert(sc1 == before.push(bound));
-                if frag(*e) {
+                {
                     let (tb, out) = r->Ok_0;
                     lemma_let(*e, *cx, before, b0, b1, b2, *blk, s0, bound, xty(tb), out@);
                 }
@@ -762,7 +750,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 0nat,
 {
     let (all, es) = match e {
@@ -799,9 +787,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         }
         out.push(cb(all));
         proof {
-            if frag(*e) {
-                lemma_fold_empty(*e, *cx, sc@, *blk, out@);
-            }
+            lemma_fold_empty(*e, *cx, sc@, *blk, out@);
         }
         return Ok((XType::Bool, out));
     }
@@ -839,7 +825,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             b0 == *old(blk),
             extends(b0, b1),
             d == b1.depth_s(),
-            frag(es@[0]) ==> lowers(es@[0], *cx, sc0, b0, b1, XTy::Bool, seq![x]),
+            lowers(es@[0], *cx, sc0, b0, b1, XTy::Bool, seq![x]),
             terms@.len() == i,
             terms@[0] == x,
             pre == tpre(*e, *cx, sc0, b0.depth_s()),
@@ -852,7 +838,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                 c,
                 bt,
             ),
-            frag(*e) ==> forall|j: int|
+            forall|j: int|
                 1 <= j < i ==> #[trigger] closed_lowers(es@[j], *cx, sc0, d as nat, XTy::Bool, terms@[j]),
             tp == (pre && tok(*cx, sc0, b0)),
             tv == lenv(*cx),
@@ -880,19 +866,16 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                     }
                 }
             }
-            if frag(*e) {
-                lemma_frag_seq(es@, i as int);
-                assert forall|j: int| 1 <= j < i + 1 implies #[trigger] closed_lowers(
-                    es@[j],
-                    *cx,
-                    sc0,
-                    d as nat,
-                    XTy::Bool,
-                    terms@[j],
-                ) by {
-                    if j < i {
-                        assert(terms@[j] == t0[j]);
-                    }
+            assert forall|j: int| 1 <= j < i + 1 implies #[trigger] closed_lowers(
+                es@[j],
+                *cx,
+                sc0,
+                d as nat,
+                XTy::Bool,
+                terms@[j],
+            ) by {
+                if j < i {
+                    assert(terms@[j] == t0[j]);
                 }
             }
         }
@@ -911,10 +894,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         if tp {
             lemma_bind_typed(b1, *blk, jg, out@[0], *cx, ETy::Bool);
         }
-        if frag(*e) {
-            lemma_frag_seq(es@, 0);
-            lemma_fold(*e, *cx, sc0, b0, b1, *blk, terms@);
-        }
+        lemma_fold(*e, *cx, sc0, b0, b1, *blk, terms@);
     }
     Ok((XType::Bool, out))
 }
@@ -995,9 +975,9 @@ pub(crate) fn low_ite_slots(
             &&& fa@.len() == w
             &&& fb@.len() == w
             &&& out@ == Seq::new(w as nat, |i: int| Expr::Local((d + i) as usize))
-            &&& frag(*a) ==> forall|i: int|
+            &&& forall|i: int|
                 0 <= i < w ==> #[trigger] closed_slots(*a, *cx, old(sc)@, (d + i) as nat, xty(*tx), fa@[i])
-            &&& frag(*b) ==> forall|i: int|
+            &&& forall|i: int|
                 0 <= i < w ==> #[trigger] closed_slots(*b, *cx, old(sc)@, (d + i) as nat, xty(*tx), fb@[i])
             &&& forall|i: int| 0 <= i < w ==> i < (#[trigger] fa@[i]).len() && i < fb@[i].len()
         },
@@ -1100,11 +1080,11 @@ pub(crate) fn low_ite_slots(
             fa.len() == j,
             fb.len() == j,
             out@ == Seq::new(j as nat, |i: int| Expr::Local((d + i) as usize)),
-            frag(*a) ==> closed_slots(*a, *cx, sc0, top as nat, xty(*tx), xa@),
-            frag(*b) ==> closed_slots(*b, *cx, sc0, top as nat, xty(*tx), yb@),
-            frag(*a) ==> forall|i: int|
+            closed_slots(*a, *cx, sc0, top as nat, xty(*tx), xa@),
+            closed_slots(*b, *cx, sc0, top as nat, xty(*tx), yb@),
+            forall|i: int|
                 0 <= i < j ==> #[trigger] closed_slots(*a, *cx, sc0, (d + i) as nat, xty(*tx), fa[i]),
-            frag(*b) ==> forall|i: int|
+            forall|i: int|
                 0 <= i < j ==> #[trigger] closed_slots(*b, *cx, sc0, (d + i) as nat, xty(*tx), fb[i]),
             forall|i: int| 0 <= i < fa.len() ==> i < (#[trigger] fa[i]).len(),
             forall|i: int| 0 <= i < fb.len() ==> i < (#[trigger] fb[i]).len(),
@@ -1181,34 +1161,30 @@ pub(crate) fn low_ite_slots(
                     assert(fb[i] == pb);
                 }
             }
-            if frag(*a) {
-                lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), xa@);
-                assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
-                    *a,
-                    *cx,
-                    sc0,
-                    (d + i) as nat,
-                    xty(*tx),
-                    fa[i],
-                ) by {
-                    if i < j {
-                        assert(fa[i] == fa0[i]);
-                    }
+            lemma_pads_closed(*a, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), xa@);
+            assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
+                *a,
+                *cx,
+                sc0,
+                (d + i) as nat,
+                xty(*tx),
+                fa[i],
+            ) by {
+                if i < j {
+                    assert(fa[i] == fa0[i]);
                 }
             }
-            if frag(*b) {
-                lemma_pads_closed(*b, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), yb@);
-                assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
-                    *b,
-                    *cx,
-                    sc0,
-                    (d + i) as nat,
-                    xty(*tx),
-                    fb[i],
-                ) by {
-                    if i < j {
-                        assert(fb[i] == fb0[i]);
-                    }
+            lemma_pads_closed(*b, *cx, sc0, top as nat, (d + j) as nat, dj, xty(*tx), yb@);
+            assert forall|i: int| 0 <= i < j + 1 implies #[trigger] closed_slots(
+                *b,
+                *cx,
+                sc0,
+                (d + i) as nat,
+                xty(*tx),
+                fb[i],
+            ) by {
+                if i < j {
+                    assert(fb[i] == fb0[i]);
                 }
             }
         }
@@ -1243,7 +1219,7 @@ pub(crate) fn low_ite(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
     decreases e, 1nat,
 {
     let (p, a, b) = match e {
@@ -1344,9 +1320,7 @@ pub(crate) fn low_ite(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         }
         proof {
             lemma_extends_refl(*blk);
-            if frag(*e) {
-                lemma_ite_simple(*e, *cx, sc@, b0, b1, b2, c0, c, ba0, ba, bb0, bb, xty(tx), xs@, ys@, out@);
-            }
+            lemma_ite_simple(*e, *cx, sc@, b0, b1, b2, c0, c, ba0, ba, bb0, bb, xty(tx), xs@, ys@, out@);
         }
         return Ok((tx, out));
     }
@@ -1374,9 +1348,7 @@ pub(crate) fn low_ite(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         lemma_extends_trans(b0, b2, *blk);
     }
     proof {
-        if frag(*e) {
-            lemma_ite_bound(*e, *cx, sc0, b0, b1, b2, *blk, c0, c, ba0, ba, bb0, bb, xty(tx), xs@, ys@, fa, fb, out@);
-        }
+        lemma_ite_bound(*e, *cx, sc0, b0, b1, b2, *blk, c0, c, ba0, ba, bb0, bb, xty(tx), xs@, ys@, fa, fb, out@);
         if pre {
             assert(all_pure(out@, blk.depth_s())) by {
                 assert forall|i: int| 0 <= i < out@.len() implies pure_below(#[trigger] out@[i], blk.depth_s()) by {
