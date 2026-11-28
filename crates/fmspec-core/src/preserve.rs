@@ -26,8 +26,6 @@ use crate::expr_build::{pure_below, tree_s, xoff};
 #[cfg(verus_keep_ghost)]
 use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
-use crate::limits::{fits_all_s, fits_s};
-#[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{in_slots, slot_tys};
@@ -931,33 +929,6 @@ pub proof fn lemma_enc_rows_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i6
 }
 
 // ---- 型の適合 ----
-
-pub proof fn lemma_fits_all(xs: Seq<XTy>, ts: Seq<STy>)
-    ensures
-        fits_all_s(xs, ts) <==> (xs.len() == ts.len() && forall|i: int|
-            0 <= i < xs.len() ==> #[trigger] fits_s(xs[i], ts[i])),
-    decreases xs.len(),
-{
-    if xs.len() > 0 {
-        lemma_fits_all(xs.drop_last(), ts.drop_last());
-        if xs.len() == ts.len() && forall|i: int| 0 <= i < xs.len() ==> #[trigger] fits_s(xs[i], ts[i]) {
-            assert forall|i: int| 0 <= i < xs.drop_last().len() implies #[trigger] fits_s(
-                xs.drop_last()[i],
-                ts.drop_last()[i],
-            ) by {
-                assert(fits_s(xs[i], ts[i]));
-            }
-            assert(fits_s(xs[xs.len() - 1], ts[ts.len() - 1]));
-        }
-        if fits_all_s(xs, ts) {
-            assert forall|i: int| 0 <= i < xs.len() implies #[trigger] fits_s(xs[i], ts[i]) by {
-                if i < xs.len() - 1 {
-                    assert(fits_s(xs.drop_last()[i], ts.drop_last()[i]));
-                }
-            }
-        }
-    }
-}
 
 // ---- 環境の対応 ----
 

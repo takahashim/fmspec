@@ -9,7 +9,7 @@ use crate::encoding::{sty, to_xty, wf_stype, width, xty, STy, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, pure_below};
-use crate::expr_build::{and, bin, cb, ci, defaults};
+use crate::expr_build::{and, bin, cb, ci, defaults, extend};
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
@@ -29,7 +29,7 @@ use crate::lower_types::{lemma_ge0_typed, lemma_has_ty_blk, lemma_ite_rows_typed
 use crate::lower_types::{lemma_map_rows_typed, lemma_mrows_typed, lemma_tok_ext, lemma_typed_blk};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_xetys_of, lenv, shaped, slot_tys, tok, ty_post, typed, xetys};
-use crate::lowering::{append, element, element_rank, lookup_rank, low};
+use crate::lowering::{element, element_rank, lookup_rank, low};
 use crate::map_lookup::select_flat_map_lookup;
 use crate::maps::map_rows;
 use crate::model::{BinOp, Expr};
@@ -159,7 +159,7 @@ pub(crate) fn put(
     let xs = element(value, cx, sc, blk, v)?;
     let mut alt: Vec<Expr> = Vec::new();
     alt.push(cb(true));
-    append(&mut alt, &xs);
+    extend(&mut alt, &xs);
     proof {
         if pre {
             let w1 = (1 + width(sty(*v), cx.enums@)) as nat;
@@ -787,7 +787,7 @@ pub(crate) fn low_delete(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             let mut alt: Vec<Expr> = Vec::new();
             alt.push(cb(false));
             let dv = defaults(&v, enums);
-            append(&mut alt, &dv);
+            extend(&mut alt, &dv);
             proof {
                 lemma_default_len(sty(v), enums@);
                 lemma_lits(enc(default_val(sty(v), enums@), sty(v), enums@), arbitrary(), Seq::empty());

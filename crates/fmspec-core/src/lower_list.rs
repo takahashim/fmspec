@@ -9,7 +9,7 @@ use crate::encoding::{default_val, enc, enc_repeat, lemma_default_len, lemma_xwi
 use crate::encoding::{to_xty, wf_stype, width, xty, xwidth, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, bool_lit, lits, pure_below, Join};
-use crate::expr_build::{and, bin, ci, defaults};
+use crate::expr_build::{and, bin, ci, defaults, extend};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_iff};
@@ -33,7 +33,7 @@ use crate::lower_types::{lemma_list_join_typed, lemma_lrows_typed, lemma_lt_type
 use crate::lower_types::{lemma_tok_ext, lemma_tree_typed, lemma_typed_blk, lemma_typed_concat};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_xetys_of, lenv, slot_tys, tok, ty_post, typed, xetys};
-use crate::lowering::{append, element, low, sub_scalar};
+use crate::lowering::{element, low, sub_scalar};
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{frag, lemma_extends_trans, lemma_frag_seq, lemma_join_pure, lemma_lits};
@@ -105,7 +105,7 @@ pub(crate) fn append_rows(
         decreases n - p,
     {
         let ghost o3 = out@;
-        append(out, defs);
+        extend(out, defs);
         proof {
             lemma_lits(dv, arbitrary(), Seq::empty());
             assert(p * dv.len() + dv.len() == (p + 1) * dv.len()) by (nonlinear_arith);
@@ -236,7 +236,7 @@ pub(crate) fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
                     }
                 }
                 let x = element(&es[i], cx, sc, blk, t)?;
-                append(&mut out, &x);
+                extend(&mut out, &x);
                 proof {
                     if pre {
                         lemma_all_pure_mono(o1, b1.depth_s(), blk.depth_s());

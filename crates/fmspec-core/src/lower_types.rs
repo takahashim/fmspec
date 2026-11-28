@@ -146,7 +146,7 @@ pub proof fn lemma_xetys_seq_of(ts: Seq<STy>, enums: Seq<i64>)
 /// 式の型が格納の型に合うなら、スロットの中核の型は等しい。
 pub proof fn lemma_fits_etys(t: XTy, st: STy, enums: Seq<i64>)
     requires
-        crate::limits::fits_s(t, st),
+        crate::fits::fits_s(t, st),
     ensures
         xetys(t, enums) == etys(slot_tys(st, enums)),
     decreases t, 1nat,
@@ -168,7 +168,7 @@ pub proof fn lemma_fits_etys(t: XTy, st: STy, enums: Seq<i64>)
 
 pub proof fn lemma_fits_etys_seq(xs: Seq<XTy>, ts: Seq<STy>, enums: Seq<i64>)
     requires
-        crate::limits::fits_all_s(xs, ts),
+        crate::fits::fits_all_s(xs, ts),
     ensures
         xetys_seq(xs, enums) == etys(slot_tys_seq(ts, enums)),
     decreases xs, 0nat,

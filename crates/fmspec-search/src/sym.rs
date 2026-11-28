@@ -285,7 +285,7 @@ pub fn check_sym(
     swaps: &Vec<Vec<usize>>,
     opts: &BfsOptions,
 ) -> Result<Outcome, usize> {
-    let sw = fmspec_core::sym::symmetry(model.raw(), cond, swaps)?;
+    let sw = fmspec_core::sym::symmetry_of(model, cond, swaps)?;
     let started = Instant::now();
     let (found, stats) = bfs_sym(model, cond, &sw, opts);
     let search_time = started.elapsed();

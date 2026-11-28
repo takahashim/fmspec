@@ -9,7 +9,7 @@ use crate::encoding::{default_val, enc, lemma_default_len, lemma_xtys, lemma_xwi
 use crate::encoding::{to_xty, xty, xtys, xwidth, xwidth_sum, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, pure_below, split_ok, xoff};
-use crate::expr_build::{cb, defaults, split, sub_exprs};
+use crate::expr_build::{cb, defaults, extend, split, sub_exprs};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_types_of_iff, types_of};
@@ -22,7 +22,7 @@ use crate::lower_types::{blt, has_ty, lemma_check_typed, lemma_lim_x_small, lemm
 use crate::lower_types::{lemma_typed_blk, lemma_typed_concat, lemma_typed_sub, lemma_xetys_of};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_xetys_part, lenv, tok, ty_post, typed, xetys, xetys_seq};
-use crate::lowering::{append, copy_usizes, low};
+use crate::lowering::{copy_usizes, low};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{frag, lemma_extends_trans, lemma_frag_seq, lemma_lits, lowers};
@@ -155,7 +155,7 @@ pub(crate) fn low_tuple(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                 let (t, s) = low(&es[i], cx, sc, blk)?;
                 let ghost tg = t;
                 ts.push(t);
-                append(&mut out, &s);
+                extend(&mut out, &s);
                 proof {
                     assert(ts@.drop_last() == t1);
                     assert(xtys(ts@) == xtys(t1).push(xty(t)));
@@ -407,7 +407,7 @@ pub(crate) fn low_none(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             let mut out: Vec<Expr> = Vec::new();
             out.push(cb(false));
             let ds = defaults(t, enums);
-            append(&mut out, &ds);
+            extend(&mut out, &ds);
             let u = to_xtype(t);
             proof {
                 lemma_default_len(sty(*t), enums@);
@@ -481,7 +481,7 @@ pub(crate) fn low_some(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             let (t, s) = low(a, cx, sc, blk)?;
             let mut out: Vec<Expr> = Vec::new();
             out.push(cb(true));
-            append(&mut out, &s);
+            extend(&mut out, &s);
             proof {
                 if pre {
                     assert(all_pure(out@, blk.depth_s())) by {

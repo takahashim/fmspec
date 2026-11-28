@@ -19,11 +19,11 @@ use crate::expr_build::{split, sub_exprs};
 use crate::expr_build::{split_ok, xoff};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
+use crate::fits::{fits_all_s, fits_s, lemma_fits_all};
+#[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
 #[cfg(verus_keep_ghost)]
-use crate::limits::{fits_all_s, fits_s, lemma_fits_width, lemma_lim_xs_at, lim, lim_x, lim_xs};
-#[cfg(verus_keep_ghost)]
-use crate::limits::{small, smalls};
+use crate::limits::{lemma_fits_width, lemma_lim_xs_at, lim, lim_x, lim_xs, small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{has_ty, lemma_concat_typed, lemma_econcat_xetys, lemma_fits_etys};
 #[cfg(verus_keep_ghost)]
@@ -38,11 +38,11 @@ use crate::preserve::{all_true, bool_val, clean, denotes, lemma_all_of, lemma_an
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_clean_pure, lemma_clean_sub, lemma_concat_enc, lemma_concat_pure};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_concat_push, lemma_denotes_part, lemma_fits_all, lemma_join_pure};
+use crate::preserve::{lemma_concat_push, lemma_denotes_part, lemma_join_pure, lemma_lits};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_lits, lemma_members, lemma_models_seq_parts, lemma_option_out_pure};
+use crate::preserve::{lemma_members, lemma_models_seq_parts, lemma_option_out_pure, lemma_sub_pure};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_sub_pure, lemma_tree_pure, mixed_rank_eval, ranks_pure, slot_vals};
+use crate::preserve::{lemma_tree_pure, mixed_rank_eval, ranks_pure, slot_vals};
 use crate::ranking::{mixed_rank_expr, offset_rank, option_rank};
 use crate::slots::copy_exprs;
 use crate::stype_exec::keys_exec;

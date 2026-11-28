@@ -20,9 +20,9 @@
 #[cfg(verus_keep_ghost)]
 use crate::canon::{lemma_in_member, lemma_models_has, lemma_shaped_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, keys, keys_or_zero, lemma_stys, lemma_xtys, lemma_xwidth_of, member};
+use crate::encoding::{enc, keys, keys_or_zero, lemma_xwidth_of, member, sty, to_xty, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, stys, to_xty, wf_stype, width, xty, xtys, STy, SVal, XTy};
+use crate::encoding::{wf_stype, width, xty, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
@@ -30,6 +30,8 @@ use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_build::{all_pure, bool_lit, int_lit, kind_expr, pure_below, tree_s, Join};
 use crate::expr_build::{ci, eq};
 use crate::expr_copy::copy_expr;
+#[cfg(verus_keep_ghost)]
+use crate::fits::{lemma_fits_to, lemma_to_fits};
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
@@ -65,92 +67,13 @@ use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
 use crate::source::{TExpr, FAIL_NOT_IN_DOMAIN};
-use crate::stype_exec::{keys_exec, stype_eq, stype_width, to_xtype, usizes_eq, xtype_eq};
+use crate::stype_exec::{fits, keys_exec, stype_width, to_xtype, xtype_eq};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;
 use crate::typing::ETy;
 use vstd::prelude::*;
 
 verus! {
-
-/// 値を型 `st` の場所に置けるか。整数の範囲は問わない（値ごとに検査する）。
-pub fn fits(t: &XType, st: &SType) -> (r: bool)
-    ensures
-        r == fits_s(xty(*t), sty(*st)),
-    decreases t, 1nat,
-{
-    match (t, st) {
-        (XType::Bool, SType::Bool) => true,
-        (XType::Int, SType::Int(_, _)) => true,
-        (XType::Enum(a), SType::Enum(b)) => *a == *b,
-        (XType::Tuple(xs), SType::Tuple(ts)) => {
-            proof {
-                assert(decreases_to!(*t => *xs));
-            }
-            fits_all(t, xs, ts)
-        },
-        (XType::Record(a, xs), SType::Record(b, ts)) => {
-            proof {
-                assert(decreases_to!(*t => *xs));
-            }
-            usizes_eq(a, b) && fits_all(t, xs, ts)
-        },
-        (XType::Option(x), SType::Option(u)) => fits(x, u),
-        (XType::Set(a), SType::Set(b)) => stype_eq(a, b),
-        (XType::Map(ka, va), SType::Map(kb, vb)) => stype_eq(ka, kb) && stype_eq(va, vb),
-        (XType::List(a, n), SType::List(b, m)) => *n == *m && stype_eq(a, b),
-        _ => false,
-    }
-}
-
-fn fits_all(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>) -> (r: bool)
-    requires
-        decreases_to!(*_parent => *xs),
-    ensures
-        r == fits_all_s(xtys(xs@), stys(ts@)),
-    decreases _parent, 0nat,
-{
-    proof {
-        lemma_xtys(xs@);
-        lemma_stys(ts@);
-        lemma_fits_all(xtys(xs@), stys(ts@));
-    }
-    if xs.len() != ts.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < xs.len()
-        invariant
-            decreases_to!(*_parent => *xs),
-            xs.len() == ts.len(),
-            i <= xs.len(),
-            forall|j: int| 0 <= j < i ==> fits_s(#[trigger] xty(xs@[j]), sty(ts@[j])),
-        decreases xs.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
-        }
-        if !fits(&xs[i], &ts[i]) {
-            proof {
-                lemma_xtys(xs@);
-                lemma_stys(ts@);
-                lemma_fits_all(xtys(xs@), stys(ts@));
-                assert(!fits_s(xtys(xs@)[i as int], stys(ts@)[i as int]));
-            }
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        lemma_xtys(xs@);
-        lemma_stys(ts@);
-        lemma_fits_all(xtys(xs@), stys(ts@));
-        assert forall|j: int| 0 <= j < xs@.len() implies #[trigger] fits_s(xtys(xs@)[j], stys(ts@)[j]) by {
-            assert(fits_s(xty(xs@[j]), sty(ts@[j])));
-        }
-    }
-    true
-}
 
 /// 状態変数や引数のスロット。`kind` は 0 が遷移前の状態変数、1 が遷移後の状態変数、2 が引数。
 pub(crate) fn layout_slots(l: &Layout, kind: u8, enums: &Vec<i64>) -> (r: Option<(XType, Vec<Expr>)>)
@@ -306,29 +229,6 @@ pub(crate) fn atoms(xs: Vec<Expr>, blk: &mut Block, Ghost(cx): Ghost<LowerCtx>, 
         }
     }
     Ok(out)
-}
-
-pub(crate) fn append(out: &mut Vec<Expr>, xs: &Vec<Expr>)
-    ensures
-        final(out)@ == old(out)@ + xs@,
-{
-    let ghost o = out@;
-    let mut i = 0;
-    while i < xs.len()
-        invariant
-            i <= xs@.len(),
-            out@ == o + xs@.take(i as int),
-        decreases xs.len() - i,
-    {
-        out.push(copy_expr(&xs[i]));
-        proof {
-            assert(o + xs@.take(i + 1) =~= (o + xs@.take(i as int)).push(xs@[i as int]));
-        }
-        i += 1;
-    }
-    proof {
-        assert(xs@.take(xs@.len() as int) =~= xs@);
-    }
 }
 
 pub(crate) fn copy_usizes(xs: &Vec<usize>) -> (r: Vec<usize>)

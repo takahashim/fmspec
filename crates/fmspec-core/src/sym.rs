@@ -10,6 +10,7 @@
 //! 後続に入れ替えを並べて施した状態（`canonicalize`）が証明書に含まれることを確かめる。
 //! 正規化が一意であることは証明しない。正規化が探索器とずれても、拒否になるだけで、誤った `Verified` にはならない。
 
+use crate::checked::CheckedModel;
 use crate::eval::*;
 use crate::model::*;
 use crate::semantics::*;
@@ -1258,7 +1259,7 @@ pub fn canonicalize(sw: &Vec<SwapMaps>, s: &Vec<i64>) -> (r: (Vec<i64>, Vec<usiz
 
 /// 入れ替えの列 `swaps`（各要素はスロットの置換）が、どれもモデルと検査条件の対称性かを確かめる。
 /// 対称性でない最初の入れ替えの添字を `Err` で返す。
-pub fn symmetry(m: &RawModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Result<Vec<SwapMaps>, usize>)
+pub(crate) fn symmetry(m: &RawModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Result<Vec<SwapMaps>, usize>)
     ensures
         r matches Ok(sw) ==> sw@.len() == swaps@.len() && all_sym(*m, *c, sw@),
 {
@@ -1290,6 +1291,15 @@ pub fn symmetry(m: &RawModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Re
         i = i + 1;
     }
     Ok(sw)
+}
+
+
+/// 入れ替えの列が、どれもモデルと検査条件の対称性かを確かめる（`symmetry` と同じ）。未検証コード向け。
+pub fn symmetry_of(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Result<Vec<SwapMaps>, usize>)
+    ensures
+        r matches Ok(sw) ==> sw@.len() == swaps@.len() && all_sym(model@, *c, sw@),
+{
+    symmetry(model.raw(), c, swaps)
 }
 
 } // verus!

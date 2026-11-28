@@ -12,6 +12,8 @@ use crate::encoding::{to_xtys, wf_stype, wf_stypes, wf_xtype, wf_xtypes, width, 
 use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
 use crate::encoding::{SType, XType, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
+use crate::fits::{fits_all_s, fits_s, lemma_fits_all};
+#[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_ss_at, lemma_lim_xs_at, lemma_width_sum_prefix};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_xwidth_sum_prefix, lim, lim_s, lim_ss, lim_x, lim_xs};
@@ -862,6 +864,85 @@ pub(crate) fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>
         assert(xtys(ts@).take(ts@.len() as int) =~= xtys(ts@));
     }
     Some(acc)
+}
+
+/// 値を型 `st` の場所に置けるか。整数の範囲は問わない（値ごとに検査する）。
+pub fn fits(t: &XType, st: &SType) -> (r: bool)
+    ensures
+        r == fits_s(xty(*t), sty(*st)),
+    decreases t, 1nat,
+{
+    match (t, st) {
+        (XType::Bool, SType::Bool) => true,
+        (XType::Int, SType::Int(_, _)) => true,
+        (XType::Enum(a), SType::Enum(b)) => *a == *b,
+        (XType::Tuple(xs), SType::Tuple(ts)) => {
+            proof {
+                assert(decreases_to!(*t => *xs));
+            }
+            fits_all(t, xs, ts)
+        },
+        (XType::Record(a, xs), SType::Record(b, ts)) => {
+            proof {
+                assert(decreases_to!(*t => *xs));
+            }
+            usizes_eq(a, b) && fits_all(t, xs, ts)
+        },
+        (XType::Option(x), SType::Option(u)) => fits(x, u),
+        (XType::Set(a), SType::Set(b)) => stype_eq(a, b),
+        (XType::Map(ka, va), SType::Map(kb, vb)) => stype_eq(ka, kb) && stype_eq(va, vb),
+        (XType::List(a, n), SType::List(b, m)) => *n == *m && stype_eq(a, b),
+        _ => false,
+    }
+}
+
+pub(crate) fn fits_all(_parent: &XType, xs: &Vec<XType>, ts: &Vec<SType>) -> (r: bool)
+    requires
+        decreases_to!(*_parent => *xs),
+    ensures
+        r == fits_all_s(xtys(xs@), stys(ts@)),
+    decreases _parent, 0nat,
+{
+    proof {
+        lemma_xtys(xs@);
+        lemma_stys(ts@);
+        lemma_fits_all(xtys(xs@), stys(ts@));
+    }
+    if xs.len() != ts.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            decreases_to!(*_parent => *xs),
+            xs.len() == ts.len(),
+            i <= xs.len(),
+            forall|j: int| 0 <= j < i ==> fits_s(#[trigger] xty(xs@[j]), sty(ts@[j])),
+        decreases xs.len() - i,
+    {
+        proof {
+            vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
+        }
+        if !fits(&xs[i], &ts[i]) {
+            proof {
+                lemma_xtys(xs@);
+                lemma_stys(ts@);
+                lemma_fits_all(xtys(xs@), stys(ts@));
+                assert(!fits_s(xtys(xs@)[i as int], stys(ts@)[i as int]));
+            }
+            return false;
+        }
+        i += 1;
+    }
+    proof {
+        lemma_xtys(xs@);
+        lemma_stys(ts@);
+        lemma_fits_all(xtys(xs@), stys(ts@));
+        assert forall|j: int| 0 <= j < xs@.len() implies #[trigger] fits_s(xtys(xs@)[j], stys(ts@)[j]) by {
+            assert(fits_s(xty(xs@[j]), sty(ts@[j])));
+        }
+    }
+    true
 }
 
 } // verus!

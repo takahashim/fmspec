@@ -208,7 +208,7 @@ pub enum Mapped {
 }
 
 /// 状態 `s` を写す。
-pub fn map_state(b: &RawModel, a: &RawModel, f: &Vec<Expr>, s: &Vec<i64>) -> (r: Mapped)
+pub(crate) fn map_state(b: &RawModel, a: &RawModel, f: &Vec<Expr>, s: &Vec<i64>) -> (r: Mapped)
     ensures
         match r {
             Mapped::Ok(x) => maps_ok(*b, *a, f@, s@) && x@ == mapped(*b, *a, f@, s@),
@@ -265,7 +265,7 @@ pub enum Move {
 
 /// `x` から `y` へ、状態の変わらないステップか、抽象モデルの遷移で移れるか。
 #[verifier::loop_isolation(false)]
-pub fn find_move(a: &RawModel, x: &Vec<i64>, y: &Vec<i64>) -> (r: Move)
+pub(crate) fn find_move(a: &RawModel, x: &Vec<i64>, y: &Vec<i64>) -> (r: Move)
     ensures
         r is Yes ==> abs_move(*a, x@, y@),
         r is No ==> !abs_move(*a, x@, y@),
@@ -1012,6 +1012,30 @@ pub fn decide_refinement(
         },
         RefEvidence::Unavailable(limit) => RefVerdict { kind: RefVerdictKind::Inconclusive, reject: None, limit: Some(*limit) },
     }
+}
+
+
+// ---- 未検証コード向けの公開関数 ----
+
+/// 具体モデルの状態 `s` を、写像 `f` で抽象モデルの状態に写す（`map_state` と同じ）。
+pub fn map_state_of(b: &CheckedModel, a: &CheckedModel, f: &Vec<Expr>, s: &Vec<i64>) -> (r: Mapped)
+    ensures
+        match r {
+            Mapped::Ok(x) => maps_ok(b@, a@, f@, s@) && x@ == mapped(b@, a@, f@, s@),
+            Mapped::Fail(i, k) => i < f@.len() && map_slot(b@, a@, f@, s@, i as int) == Err::<i64, ErrKind>(k),
+            Mapped::Arity => !map_wf(a@, f@),
+        },
+{
+    map_state(b.raw(), a.raw(), f, s)
+}
+
+/// 抽象モデルで、状態 `x` から `y` へ、1つの遷移か状態の変わらないステップで移れるか（`find_move` と同じ）。
+pub fn find_move_of(a: &CheckedModel, x: &Vec<i64>, y: &Vec<i64>) -> (r: Move)
+    ensures
+        r is Yes ==> abs_move(a@, x@, y@),
+        r is No ==> !abs_move(a@, x@, y@),
+{
+    find_move(a.raw(), x, y)
 }
 
 } // verus!

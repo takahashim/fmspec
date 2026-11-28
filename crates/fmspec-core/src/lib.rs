@@ -60,6 +60,7 @@ pub mod eval;
 pub mod evidence;
 pub mod expr_build;
 pub mod expr_copy;
+pub mod fits;
 pub mod gate;
 mod impls;
 pub mod infer;

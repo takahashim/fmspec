@@ -50,7 +50,7 @@ fn the_gate_checks_the_symmetry_itself() {
 fn representatives_and_supersets_are_accepted_and_missing_representatives_are_rejected() {
     let m = pair(2, 2);
     let cond = default_conditions(&m, false);
-    let sw = fmspec_core::sym::symmetry(m.raw(), &cond, &m.names.symmetry).unwrap();
+    let sw = fmspec_core::sym::symmetry_of(m.checked(), &cond, &m.names.symmetry).unwrap();
     let (reduced, stats) = bfs_sym(m.checked(), &cond, &sw, &BfsOptions::default());
     let reduced = reduced.unwrap();
     assert_eq!(stats.visited_states, 6);

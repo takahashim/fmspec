@@ -2,7 +2,7 @@
 
 use super::{attach_bfs, inconsistency_json, limit_name, reject_json_in, INCONSISTENCY_MESSAGE, REJECTED_MESSAGE};
 use fmspec_core::evidence::TraceStep;
-use fmspec_core::refine::{map_state, Mapped, RefClaim, RefEvidence};
+use fmspec_core::refine::{map_state_of, Mapped, RefClaim, RefEvidence};
 use fmspec_core::semantics::Conditions;
 use fmspec_ir::{
     args_to_json, claim_to_json, conditions_to_json, error_to_json, output_to_json, state_to_json, Refinement,
@@ -23,8 +23,12 @@ fn status_name(status: &RefStatus) -> &'static str {
 
 /// 抽象モデルの状態の値。写像の評価が失敗すれば `null`。
 fn mapped_json(r: &Refinement, state: &[i64]) -> Value {
-    let (b, a) = (r.concrete.raw(), r.abstract_model.raw());
-    match map_state(b, a, &r.mapping, &state.to_vec()) {
+    match map_state_of(
+        r.concrete.checked(),
+        r.abstract_model.checked(),
+        &r.mapping,
+        &state.to_vec(),
+    ) {
         Mapped::Ok(x) => state_to_json(&r.abstract_model, &x),
         _ => Value::Null,
     }

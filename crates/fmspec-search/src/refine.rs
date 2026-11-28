@@ -12,7 +12,7 @@ use fmspec_core::checked::CheckedModel;
 use fmspec_core::evidence::{Certificate, Claim, Limit, TraceStep};
 use fmspec_core::model::Expr;
 use fmspec_core::refine::{
-    decide_refinement, find_move, map_state, Mapped, Move, RefClaim, RefEvidence, RefVerdict, RefVerdictOutcome,
+    decide_refinement, find_move_of, map_state_of, Mapped, Move, RefClaim, RefEvidence, RefVerdict, RefVerdictOutcome,
 };
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
@@ -74,7 +74,7 @@ fn search(
     f: &Vec<Expr>,
     opts: &BfsOptions,
 ) -> (Result<RefEvidence, Inconsistency>, Stats) {
-    let (bm, am) = (b.raw(), a.raw());
+    let bm = b.raw();
     let mut stats = Stats::default();
     let mut nodes: Vec<Node> = Vec::new();
     // 状態から、節点の添字と、写した抽象モデルの状態へ。
@@ -88,7 +88,7 @@ fn search(
         if opts.max_states.is_some_and(|max| seen.len() >= max) {
             return (Ok(RefEvidence::Unavailable(Limit::MaxStates)), stats);
         }
-        let x = match map_state(bm, am, f, init) {
+        let x = match map_state_of(b, a, f, init) {
             Mapped::Ok(x) => x,
             Mapped::Fail(slot, kind) => {
                 return (
@@ -149,7 +149,7 @@ fn search(
                 };
                 let y = match seen.get(&t.state) {
                     Some((_, y)) => y.clone(),
-                    None => match map_state(bm, am, f, &t.state) {
+                    None => match map_state_of(b, a, f, &t.state) {
                         Mapped::Ok(y) => y,
                         Mapped::Fail(_, _) if at_limit => {
                             truncated = true;
@@ -162,7 +162,7 @@ fn search(
                         Mapped::Arity => return (Ok(RefEvidence::Unavailable(Limit::Interrupted)), stats),
                     },
                 };
-                match find_move(am, &x, &y) {
+                match find_move_of(a, &x, &y) {
                     Move::Yes => {}
                     Move::No if at_limit => {
                         truncated = true;

@@ -7,9 +7,9 @@ use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{bool_lit, ite_s, pure_below};
 #[cfg(verus_keep_ghost)]
-use crate::keys::rank;
+use crate::fits::fits_s;
 #[cfg(verus_keep_ghost)]
-use crate::limits::fits_s;
+use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
