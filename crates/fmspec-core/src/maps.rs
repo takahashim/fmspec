@@ -6,9 +6,9 @@
 
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc_rows, keys, keys_or_zero, map_rows_member, member, STy, sty, SVal, width};
-#[cfg(verus_keep_ghost)]
 use crate::encoding::XTy;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{enc_rows, keys, keys_or_zero, map_rows_member, member, sty, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::Env;
 use crate::expr_build::sub_exprs;

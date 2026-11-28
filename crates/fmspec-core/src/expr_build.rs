@@ -1,12 +1,12 @@
 //! 中核の式の組み立て。spec の構築子（`ite_s`、`and_s` など）と、対応する exec の構築子。
 
-use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_default_vals_len, lemma_stys, lemma_xtys, STy, sty, stys, SVal, XTy};
+use crate::encoding::{lemma_default_vals_len, lemma_stys, lemma_xtys, sty, stys, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{SType, XType};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_xs_at, lemma_xwidth_sum_prefix, lim, lim_xs};

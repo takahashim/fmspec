@@ -4,12 +4,12 @@
 use crate::canon::lemma_defaults_typed;
 use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_repeat, lemma_default_len, lemma_xwidth_of, STy, sty};
+use crate::encoding::{default_val, enc, enc_repeat, lemma_default_len, lemma_xwidth_of, sty, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, wf_stype, width, XTy, xty, xwidth};
+use crate::encoding::{to_xty, wf_stype, width, xty, xwidth, XTy};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, bool_lit, lits, pure_below, Join};
 use crate::expr_build::{and, bin, ci, defaults, extend};
-#[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, Join, lits, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_iff};
@@ -17,10 +17,10 @@ use crate::infer::{ir_type_of, lemma_all_typed_iff};
 use crate::limits::{lemma_lim_small, lim_x, small};
 use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
-use crate::lists::{lemma_select_typed, rows_view};
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
+use crate::lists::{lemma_select_typed, picks, rows_view, select_ok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, blt, etys, has_ty, lemma_add_typed, lemma_added_typed};
 #[cfg(verus_keep_ghost)]
@@ -35,12 +35,12 @@ use crate::lower_types::{lemma_tok_ext, lemma_tree_typed, lemma_typed_blk, lemma
 use crate::lower_types::{lemma_xetys_of, lenv, slot_tys, tok, typed, xetys};
 use crate::lowering::{element, low, sub_scalar};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::low_ok;
+use crate::lowering::{lemma_flat_shape, lemma_ite_rows_shape, low_ok};
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_join_pure, lemma_lits, lemma_pure_mono};
-#[cfg(verus_keep_ghost)]
 use crate::preserve::lemma_tree_pure;
+#[cfg(verus_keep_ghost)]
+use crate::preserve::{lemma_extends_trans, lemma_join_pure, lemma_lits, lemma_pure_mono};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_list::{defaults_s, hit_at, lemma_at, lemma_first, lemma_last};
 #[cfg(verus_keep_ghost)]
@@ -48,19 +48,17 @@ use crate::preserve_list::{lemma_list_contains, lemma_listlit_base, lemma_listli
 #[cfg(verus_keep_ghost)]
 use crate::preserve_list::{lemma_listlit_step, lemma_pop, lemma_push, lemma_shift, listlit_ok};
 #[cfg(verus_keep_ghost)]
-use crate::rows::flat;
-use crate::slots::{any_of, atom, bind, check, copy_exprs, eq_slots, ite_rows, list_join, need};
-use crate::slots::select;
+use crate::rows::{col, flat, parts_ok, row_at};
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
-use crate::source::{FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, TExpr};
+use crate::slots::select;
+use crate::slots::{any_of, atom, bind, check, copy_exprs, eq_slots, ite_rows, list_join, need};
+use crate::source::{TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX};
 use crate::stype_exec::{copy_stype, stype_eq, to_xtype, xtype_eq};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_flat_shape, lemma_ite_rows_shape};
+use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_ok_list};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_lim_ok_seq_at, lemma_list_rows_shape, lemma_ok_list, lemma_ok_to_x};
-#[cfg(verus_keep_ghost)]
-use crate::total::{lemma_sc_wf_mono, lemma_select_shape, lim_ok, sctx, tpre};
+use crate::total::{lemma_ok_to_x, lemma_sc_wf_mono, lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 #[cfg(verus_keep_ghost)]
@@ -1188,6 +1186,50 @@ pub(crate) fn low_pop_shift(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: 
             }
         },
         _ => Err(Fail::Type),
+    }
+}
+
+/// Listのスロットを行に分けると、長さのスロットと各行は、元のスロットが純粋なら純粋である。
+pub proof fn lemma_list_rows_shape(slots: Seq<Expr>, len: Expr, rows: Seq<Seq<Expr>>, w: nat, max: nat, n: nat)
+    requires
+        parts_ok(slots, len, rows, w, max),
+        all_pure(slots, n),
+    ensures
+        pure_below(len, n),
+        rows.len() == max,
+        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
+{
+    assert(pure_below(slots[0], n));
+    assert forall|p: int| 0 <= p < rows.len() implies (#[trigger] rows[p]).len() == w && all_pure(rows[p], n) by {
+        assert(row_at(rows[p], slots, p, w));
+        let base = 1 + p * w;
+        assert(rows[p] == slots.subrange(base, base + w));
+        assert forall|j: int| 0 <= j < rows[p].len() implies pure_below(#[trigger] rows[p][j], n) by {
+            assert(rows[p][j] == slots[base + j]);
+            assert(pure_below(slots[base + j], n));
+        }
+    }
+}
+
+/// 行を選んだスロットは、行の長さだけあり、行と添字が純粋なら純粋である。
+pub proof fn lemma_select_shape(rows: Seq<Seq<Expr>>, idx: Expr, out: Seq<Expr>, w: nat, n: nat)
+    requires
+        select_ok(rows, idx, out),
+        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
+        pure_below(idx, n),
+    ensures
+        out.len() == w,
+        all_pure(out, n),
+{
+    assert(rows[0].len() == out.len());
+    assert forall|j: int| 0 <= j < out.len() implies pure_below(#[trigger] out[j], n) by {
+        assert(picks(out[j], col(rows, j), idx));
+        assert(all_pure(col(rows, j), n)) by {
+            assert forall|t: int| 0 <= t < col(rows, j).len() implies pure_below(#[trigger] col(rows, j)[t], n) by {
+                assert(col(rows, j)[t] == rows[t][j]);
+                assert(all_pure(rows[t], n));
+            }
+        }
     }
 }
 

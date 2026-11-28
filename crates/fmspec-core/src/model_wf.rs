@@ -7,11 +7,11 @@
 #[cfg(verus_keep_ghost)]
 use crate::action_lower::{act_ok, block_ok, flat_ups, upds_ok};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{STy, sty, stys, SVal, wf_stype, wf_stypes, width, width_sum};
+use crate::encoding::{sty, stys, wf_stype, wf_stypes, width, width_sum, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Layout, layout_at, layouts_at, LowerCtx};
+use crate::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_slot_tys_seq_len, slot_tys, slot_tys_seq, ty_repeat};
 #[cfg(verus_keep_ghost)]

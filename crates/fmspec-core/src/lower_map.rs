@@ -2,23 +2,23 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::lemma_defaults_typed;
-use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, keys, keys_or_zero, lemma_default_len, lemma_xwidth_of};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{STy, sty, to_xty, wf_stype, width, XTy, xty};
-use crate::expr_build::{and, bin, cb, ci, defaults, extend};
+use crate::encoding::{sty, to_xty, wf_stype, width, xty, STy, XTy};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, pure_below};
+use crate::expr_build::{and, bin, cb, ci, defaults, extend};
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lemma_lim_small;
 #[cfg(verus_keep_ghost)]
 use crate::lists::rows_view;
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends};
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, etys, has_ty, lemma_and_typed, lemma_bind_typed};
 #[cfg(verus_keep_ghost)]
@@ -31,7 +31,7 @@ use crate::lower_types::{lemma_map_rows_typed, lemma_mrows_typed, lemma_tok_ext,
 use crate::lower_types::{lemma_xetys_of, lenv, shaped, slot_tys, tok, typed, xetys};
 use crate::lowering::{element, element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
-use crate::lowering::low_ok;
+use crate::lowering::{lemma_flat_shape, lemma_ite_rows_shape, low_ok};
 use crate::map_lookup::select_flat_map_lookup;
 use crate::maps::map_rows;
 use crate::model::{BinOp, Expr};
@@ -44,21 +44,21 @@ use crate::preserve_map::{lemma_delete, lemma_get, lemma_has_key, lemma_keys, le
 #[cfg(verus_keep_ghost)]
 use crate::preserve_map::{lemma_maplit_step, lemma_put, lemma_put_expr, maplit_ok, put_lowers};
 use crate::quant::pick_slot;
-use crate::slots::{bind, depth, heads, ite_rows, join_rows, need};
+#[cfg(verus_keep_ghost)]
+use crate::rows::{head_at, heads_ok, mparts_ok, mrow_at};
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
-use crate::source::TExpr;
+use crate::slots::{bind, depth, heads, ite_rows, join_rows, need};
 #[cfg(verus_keep_ghost)]
 use crate::source::Item;
+use crate::source::TExpr;
 use crate::stype_exec::{copy_stype, keys_exec, keys_or_zero_exec, stype_eq, stype_width, to_xtype};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, deep, here_ok, items_ok, lemma_all_pure_mono, lemma_flat_shape};
+use crate::total::{bound_tys, deep, here_ok, items_ok, lemma_all_pure_mono, lemma_items_ok_at};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_heads_pure, lemma_ite_rows_shape, lemma_items_ok_at, lemma_items_ok_intro};
+use crate::total::{lemma_items_ok_intro, lemma_ok_map, lemma_put_pre, lemma_sc_wf_mono, lim_ok};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_mrows_shape, lemma_ok_map, lemma_put_pre, lemma_sc_wf_mono, lim_ok, ok_s};
-#[cfg(verus_keep_ghost)]
-use crate::total::{ok_s_o, put_pre, sctx, tpre};
+use crate::total::{ok_s, ok_s_o, put_pre, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
@@ -885,6 +885,40 @@ pub(crate) fn low_keys(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             Ok((XType::Set(Box::new(k)), present))
         },
         _ => Err(Fail::Type),
+    }
+}
+
+/// Mapのスロットを行に分けると、各行は長さ `w` で、元のスロットが純粋なら純粋である。
+pub proof fn lemma_mrows_shape(slots: Seq<Expr>, rows: Seq<Seq<Expr>>, w: nat, k: nat, n: nat)
+    requires
+        mparts_ok(slots, rows, w, k),
+        all_pure(slots, n),
+    ensures
+        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
+{
+    assert forall|p: int| 0 <= p < rows.len() implies (#[trigger] rows[p]).len() == w && all_pure(rows[p], n) by {
+        assert(mrow_at(rows[p], slots, p, w));
+        let base = p * w;
+        assert(rows[p] == slots.subrange(base, base + w));
+        assert forall|j: int| 0 <= j < rows[p].len() implies pure_below(#[trigger] rows[p][j], n) by {
+            assert(rows[p][j] == slots[base + j]);
+            assert(pure_below(slots[base + j], n));
+        }
+    }
+}
+
+/// 各行の先頭は、行が純粋なら純粋である。
+pub proof fn lemma_heads_pure(h: Seq<Expr>, rows: Seq<Seq<Expr>>, n: nat)
+    requires
+        heads_ok(h, rows),
+        forall|p: int| 0 <= p < rows.len() ==> all_pure(#[trigger] rows[p], n),
+    ensures
+        all_pure(h, n),
+        h.len() == rows.len(),
+{
+    assert forall|q: int| 0 <= q < h.len() implies pure_below(#[trigger] h[q], n) by {
+        assert(head_at(h[q], rows[q]));
+        assert(all_pure(rows[q], n));
     }
 }
 

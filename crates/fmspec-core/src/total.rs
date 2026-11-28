@@ -5,31 +5,25 @@
 //! 下ろしは `Fail::Type` で失敗せず、型の幅だけの純粋なスロットを返す（[`low_post`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, lemma_xwidth_of, STy, sty, to_xty, to_xtys, wf_stype, wf_stypes};
+use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_xtypes, width, XTy, xty, XType, xwidth, xwidth_sum};
+use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, XTy, XType};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, ite_s, mark_s, pure_below, setop_s};
+use crate::expr_build::all_pure;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, items_typed, lemma_items_typed_iff, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lim_s, lim_ss, lim_xs};
 #[cfg(verus_keep_ghost)]
-use crate::lists::{picks, select_ok};
-#[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{Bound, Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{layout_tys, ok_x, sc_wf, shaped};
 #[cfg(verus_keep_ghost)]
-use crate::model::{BinOp, Expr, Value};
+use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{col, flat, head_at, heads_ok, ite_row, ite_rows_ok, mparts_ok, mrow_at, parts_ok};
-#[cfg(verus_keep_ghost)]
-use crate::rows::row_at;
-#[cfg(verus_keep_ghost)]
-use crate::source::{Item, Over, SetOp, TExpr};
+use crate::source::{Item, Over, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -165,79 +159,6 @@ pub proof fn lemma_ok_to_xs(ts: Seq<STy>, enums: Seq<i64>)
 
 // ---- 行の形 ----
 
-/// 各行の長さが `w` で純粋なら、つないだ列の長さは行の数と `w` の積で、純粋である。
-pub proof fn lemma_flat_shape(rows: Seq<Seq<Expr>>, w: nat, n: nat)
-    requires
-        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
-    ensures
-        flat(rows).len() == rows.len() * w,
-        all_pure(flat(rows), n),
-    decreases rows.len(),
-{
-    if rows.len() > 0 {
-        let pre = rows.drop_last();
-        assert forall|p: int| 0 <= p < pre.len() implies (#[trigger] pre[p]).len() == w && all_pure(pre[p], n) by {
-            assert(pre[p] == rows[p]);
-        }
-        lemma_flat_shape(pre, w, n);
-        let last = rows.last();
-        assert(rows[rows.len() - 1] == last);
-        assert(flat(rows) == flat(pre) + last);
-        assert((rows.len() - 1) * w + w == rows.len() * w) by (nonlinear_arith);
-        assert forall|j: int| 0 <= j < flat(rows).len() implies pure_below(#[trigger] flat(rows)[j], n) by {
-            if j < flat(pre).len() {
-                assert(flat(rows)[j] == flat(pre)[j]);
-            } else {
-                assert(flat(rows)[j] == last[j - flat(pre).len()]);
-            }
-        }
-    }
-}
-
-/// Mapのスロットを行に分けると、各行は長さ `w` で、元のスロットが純粋なら純粋である。
-pub proof fn lemma_mrows_shape(slots: Seq<Expr>, rows: Seq<Seq<Expr>>, w: nat, k: nat, n: nat)
-    requires
-        mparts_ok(slots, rows, w, k),
-        all_pure(slots, n),
-    ensures
-        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
-{
-    assert forall|p: int| 0 <= p < rows.len() implies (#[trigger] rows[p]).len() == w && all_pure(rows[p], n) by {
-        assert(mrow_at(rows[p], slots, p, w));
-        let base = p * w;
-        assert(rows[p] == slots.subrange(base, base + w));
-        assert forall|j: int| 0 <= j < rows[p].len() implies pure_below(#[trigger] rows[p][j], n) by {
-            assert(rows[p][j] == slots[base + j]);
-            assert(pure_below(slots[base + j], n));
-        }
-    }
-}
-
-/// 番号 `k` の行だけを `alt` に置き換えた行は、`k`、`alt`、元の行が純粋なら純粋である。
-pub proof fn lemma_ite_rows_shape(out: Seq<Seq<Expr>>, rows: Seq<Seq<Expr>>, k: Expr, alt: Seq<Expr>, n: nat)
-    requires
-        ite_rows_ok(out, rows, k, alt),
-        pure_below(k, n),
-        all_pure(alt, n),
-        forall|p: int| 0 <= p < rows.len() ==> all_pure(#[trigger] rows[p], n),
-    ensures
-        out.len() == rows.len(),
-        forall|p: int| 0 <= p < out.len() ==> (#[trigger] out[p]).len() == alt.len() && all_pure(out[p], n),
-{
-    assert forall|p: int| 0 <= p < out.len() implies (#[trigger] out[p]).len() == alt.len() && all_pure(out[p], n) by {
-        assert(ite_row(out[p], rows[p], k, alt, p));
-        assert(all_pure(rows[p], n));
-        assert forall|j: int| 0 <= j < out[p].len() implies pure_below(#[trigger] out[p][j], n) by {
-            assert(pure_below(alt[j], n));
-            assert(pure_below(rows[p][j], n));
-            let c = Expr::Bin(BinOp::Eq, Box::new(k), Box::new(Expr::Const(Value::Int(p as i64))));
-            assert(pure_below(Expr::Const(Value::Int(p as i64)), n));
-            assert(pure_below(c, n));
-            assert(out[p][j] == ite_s(c, alt[j], rows[p][j]));
-        }
-    }
-}
-
 /// Mapの式の型が条件を満たせば、Mapの格納の型も満たす。
 pub proof fn lemma_ok_map(k: STy, v: STy, enums: Seq<i64>)
     requires
@@ -259,103 +180,6 @@ pub proof fn lemma_ok_list(e: STy, max: usize, enums: Seq<i64>)
         ok_s(e, enums),
 {
     assert(xwidth(XTy::List(Box::new(e), max), enums) == width(STy::List(Box::new(e), max), enums));
-}
-
-/// Listのスロットを行に分けると、長さのスロットと各行は、元のスロットが純粋なら純粋である。
-pub proof fn lemma_list_rows_shape(slots: Seq<Expr>, len: Expr, rows: Seq<Seq<Expr>>, w: nat, max: nat, n: nat)
-    requires
-        parts_ok(slots, len, rows, w, max),
-        all_pure(slots, n),
-    ensures
-        pure_below(len, n),
-        rows.len() == max,
-        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
-{
-    assert(pure_below(slots[0], n));
-    assert forall|p: int| 0 <= p < rows.len() implies (#[trigger] rows[p]).len() == w && all_pure(rows[p], n) by {
-        assert(row_at(rows[p], slots, p, w));
-        let base = 1 + p * w;
-        assert(rows[p] == slots.subrange(base, base + w));
-        assert forall|j: int| 0 <= j < rows[p].len() implies pure_below(#[trigger] rows[p][j], n) by {
-            assert(rows[p][j] == slots[base + j]);
-            assert(pure_below(slots[base + j], n));
-        }
-    }
-}
-
-/// Setどうしの演算のスロットは、両方のスロットが純粋なら純粋である。
-pub proof fn lemma_setop_pure(op: SetOp, x: Expr, y: Expr, n: nat)
-    requires
-        pure_below(x, n),
-        pure_below(y, n),
-    ensures
-        pure_below(setop_s(op, x, y), n),
-{
-    assert(pure_below(Expr::Not(Box::new(y)), n));
-    assert(pure_below(Expr::Or(Box::new(x), Box::new(y)), n));
-    assert(pure_below(Expr::And(Box::new(x), Box::new(y)), n));
-    assert(pure_below(Expr::And(Box::new(x), Box::new(Expr::Not(Box::new(y)))), n));
-    assert(pure_below(Expr::Implies(Box::new(x), Box::new(y)), n));
-}
-
-/// 行を選んだスロットは、行の長さだけあり、行と添字が純粋なら純粋である。
-pub proof fn lemma_select_shape(rows: Seq<Seq<Expr>>, idx: Expr, out: Seq<Expr>, w: nat, n: nat)
-    requires
-        select_ok(rows, idx, out),
-        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
-        pure_below(idx, n),
-    ensures
-        out.len() == w,
-        all_pure(out, n),
-{
-    assert(rows[0].len() == out.len());
-    assert forall|j: int| 0 <= j < out.len() implies pure_below(#[trigger] out[j], n) by {
-        assert(picks(out[j], col(rows, j), idx));
-        assert(all_pure(col(rows, j), n)) by {
-            assert forall|t: int| 0 <= t < col(rows, j).len() implies pure_below(#[trigger] col(rows, j)[t], n) by {
-                assert(col(rows, j)[t] == rows[t][j]);
-                assert(all_pure(rows[t], n));
-            }
-        }
-    }
-}
-
-/// 各行の先頭は、行が純粋なら純粋である。
-pub proof fn lemma_heads_pure(h: Seq<Expr>, rows: Seq<Seq<Expr>>, n: nat)
-    requires
-        heads_ok(h, rows),
-        forall|p: int| 0 <= p < rows.len() ==> all_pure(#[trigger] rows[p], n),
-    ensures
-        all_pure(h, n),
-        h.len() == rows.len(),
-{
-    assert forall|q: int| 0 <= q < h.len() implies pure_below(#[trigger] h[q], n) by {
-        assert(head_at(h[q], rows[q]));
-        assert(all_pure(rows[q], n));
-    }
-}
-
-/// Setの印付けの結果は、元のスロットと番号が純粋なら純粋である。
-pub proof fn lemma_mark_pure(on: bool, bits: Seq<Expr>, r: Expr, out: Seq<Expr>, n: nat)
-    requires
-        out.len() == bits.len(),
-        forall|k: int| 0 <= k < bits.len() ==> #[trigger] out[k] == mark_s(on, bits[k], r, k as i64),
-        all_pure(bits, n),
-        pure_below(r, n),
-    ensures
-        all_pure(out, n),
-{
-    assert forall|k: int| 0 <= k < out.len() implies pure_below(#[trigger] out[k], n) by {
-        assert(out[k] == mark_s(on, bits[k], r, k as i64));
-        assert(pure_below(bits[k], n));
-        assert(pure_below(Expr::Const(Value::Int(k as i64)), n));
-        let ce = Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64))));
-        let cn = Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64))));
-        assert(pure_below(ce, n));
-        assert(pure_below(cn, n));
-        assert(pure_below(Expr::Or(Box::new(bits[k]), Box::new(ce)), n));
-        assert(pure_below(Expr::And(Box::new(bits[k]), Box::new(cn)), n));
-    }
 }
 
 // ---- 式の大きさの条件 ----

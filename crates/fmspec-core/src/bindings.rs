@@ -1,7 +1,7 @@
 //! 評価の順に並べた束縛の列を、中核の `let` の入れ子にする。
 
 #[cfg(verus_keep_ghost)]
-use crate::eval::{Env, eval_l};
+use crate::eval::{eval_l, Env};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{binds_typed, lemma_lts_at, lemma_lts_len, lemma_lts_prefix, lts};
 use crate::model::Expr;
@@ -10,7 +10,7 @@ use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{eval_bindings, eval_bound_body};
 #[cfg(verus_keep_ghost)]
-use crate::typing::{ETy, TyEnv, type_l};
+use crate::typing::{type_l, ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {

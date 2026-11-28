@@ -5,7 +5,7 @@
 //! 束縛の列の局所変数の型は [`lts`] で、外側の局所変数の型に、各束縛の式の型を順に加えたものである。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys_or_zero, STy, sty, to_xty, to_xtys, wf_xtype, width, width_sum, XTy};
+use crate::encoding::{keys_or_zero, sty, to_xty, to_xtys, wf_xtype, width, width_sum, STy, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xwidth, xwidth_sum};
 #[cfg(verus_keep_ghost)]
@@ -17,7 +17,7 @@ use crate::lower_ctx::{Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::typing::{ETy, ety_of, TyEnv, type_l};
+use crate::typing::{ety_of, type_l, ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {

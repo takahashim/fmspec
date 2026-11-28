@@ -1,16 +1,16 @@
 //! 型（`SType`、`XType`）の上の実行関数。複製、比較、値の数、整形式性、幅。対応する仕様は `encoding` にある。
 
-use crate::encoding::{MAX_KEYS, SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys, keys_or_zero, keys_product, lemma_stys, lemma_stys_ext, lemma_to_xtys};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_wf_stypes, lemma_wf_stypes_at, lemma_wf_xtypes_at};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_wf_xtypes_intro, lemma_xtys, lemma_xtys_ext, STy, sty, stys, to_xty};
+use crate::encoding::{lemma_wf_xtypes_intro, lemma_xtys, lemma_xtys_ext, sty, stys, to_xty, STy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xtys, wf_stype, wf_stypes, wf_xtype, wf_xtypes, width, width_sum, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{SType, XType, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
 use crate::fits::{fits_all_s, fits_s, lemma_fits_all};
 #[cfg(verus_keep_ghost)]

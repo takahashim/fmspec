@@ -7,9 +7,9 @@
 //! 中核の状態は、状態変数ごとの値の正規形の符号化をつなげた符号の列である。
 //! 中核の符号の列と値の列の対応は [`rel`] で、各状態変数のスロットが値の符号化になっていることである。
 
-use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, members, STy, sty, stys, width, width_sum, XTy};
+use crate::encoding::{member, members, sty, stys, width, width_sum, STy, XTy};
+use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::ErrKind;
 #[cfg(verus_keep_ghost)]
@@ -17,12 +17,12 @@ use crate::infer::{ir_type_of, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lemma_width_sum_prefix;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Layout, layout_at, layouts_at};
+use crate::lower_ctx::{layout_at, layouts_at, Layout};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::Conditions;
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, SEnv, src_bool};
+use crate::source::{eval_src, src_bool, SEnv};
 #[cfg(verus_keep_ghost)]
 use crate::total::lim_ok;
 use vstd::prelude::*;

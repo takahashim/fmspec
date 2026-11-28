@@ -24,9 +24,9 @@ use crate::checked::CheckedModel;
 use crate::eval::*;
 use crate::model::*;
 use crate::semantics::*;
-use crate::state_enc::{copy_vec, vec_eq};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::args_ok;
+use crate::state_enc::{copy_vec, vec_eq};
 use crate::state_set::cmp_state;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;

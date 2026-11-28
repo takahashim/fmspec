@@ -1,7 +1,7 @@
 //! Setの要素とMapのキーに付ける番号（rank）の計算。
 
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, Env, ErrKind, eval_l, int_result};
+use crate::eval::{as_bool, eval_l, int_result, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::pure_below;
 use crate::expr_copy::copy_expr;

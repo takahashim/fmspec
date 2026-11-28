@@ -6,9 +6,9 @@
 
 use crate::eval::*;
 use crate::model::*;
-use crate::state_enc::{copy_vec, encode, type_range_exec};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{args_ok, encode_spec, in_type, type_range};
+use crate::state_enc::{copy_vec, encode, type_range_exec};
 use vstd::prelude::*;
 
 verus! {

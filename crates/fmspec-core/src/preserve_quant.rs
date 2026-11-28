@@ -1,15 +1,15 @@
 //! 量化（`forall` と `exists`）の下ろしが意味を保存することの仕様と補題。
 //!
-//! 下ろしの実装は [`crate::lowering`] の `quant_over` と `low_quant` にある。
+//! 下ろしの実装は [`crate::lowering`] の `quant_over` と `low_quant`（`crate::lower_quant`）にある。
 
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, enc_rows, keys, lemma_default_len};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_models_enc, lemma_repeat_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, member, STy, sty, SType, SVal, to_xty, width, XTy, xty};
+use crate::encoding::{list_items_member, member, sty, to_xty, width, xty, STy, SType, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, decode, Env, ErrKind, eval_l, quant_l};
+use crate::eval::{as_bool, decode, eval_l, quant_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, bool_lit, pure_below};
 #[cfg(verus_keep_ghost)]
@@ -17,7 +17,7 @@ use crate::keys::{domain, lemma_domain_len, lemma_domain_rank};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{at_rank, lemma_items_member, picks, vals_at};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Block, Bound, extends, LowerCtx};
+use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
@@ -25,7 +25,7 @@ use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::quant::{lemma_select_prefix, lemma_vals_weaken, unrank_ok};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_qstate, eval_quant, eval_src, Over, qresult, QState, select_bits, SEnv};
+use crate::source::{eval_qstate, eval_quant, eval_src, qresult, select_bits, Over, QState, SEnv};
 #[cfg(verus_keep_ghost)]
 use crate::source::{src_bool, TExpr};
 use vstd::prelude::*;

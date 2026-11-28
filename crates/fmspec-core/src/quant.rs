@@ -6,18 +6,18 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::lemma_defaults_typed;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::width_sum;
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_seq, keys, keys_product, lemma_default_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_keys_pos, lemma_stys, STy, sty, stys, SVal, wf_stype, wf_stypes, width};
+use crate::encoding::{lemma_keys_pos, lemma_stys, sty, stys, wf_stype, wf_stypes, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::width_sum;
-#[cfg(verus_keep_ghost)]
-use crate::eval::{Env, ErrKind, eval_l};
-use crate::expr_build::{bin, cb, ci, defaults, eq, ite};
+use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, ite_s, lits, pure_below};
+use crate::expr_build::{bin, cb, ci, defaults, eq, ite};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_product_len, product};
@@ -27,9 +27,9 @@ use crate::limits::{small, smalls};
 use crate::lists::{at_rank, lemma_bin_const, lemma_bin_const_pure, picks, picks_in, vals_at};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
-use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::model::Type;
+use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]

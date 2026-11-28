@@ -9,9 +9,9 @@ use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, member, STy, sty, SVal, width, XTy};
+use crate::encoding::{list_items_member, member, sty, width, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{binop_spec, Env, ErrKind, eval_l};
+use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 use crate::expr_build::sub_exprs;
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, ite_s, pure_below};

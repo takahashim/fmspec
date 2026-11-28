@@ -2,16 +2,16 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::lemma_defaults_typed;
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{default_val, enc, keys_or_zero, lemma_default_len, lemma_xwidth_of, sty, STy};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{to_xty, wf_stype, width, xty, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, keys_or_zero, lemma_default_len, lemma_xwidth_of, STy, sty};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, wf_stype, width, XTy, xty};
-#[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, Env, ErrKind, eval_l};
-use crate::expr_build::{bin, cb, defaults, is_bool_lit};
+use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, bool_lit, lits, pure_below};
+use crate::expr_build::{bin, cb, defaults, is_bool_lit};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
@@ -19,9 +19,9 @@ use crate::infer::ir_type_of;
 use crate::limits::{lemma_lim_small, lim_s, small};
 #[cfg(verus_keep_ghost)]
 use crate::lists::picks;
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, etys, has_ty, lemma_all_ty_push};
 #[cfg(verus_keep_ghost)]
@@ -32,24 +32,24 @@ use crate::lower_types::{lemma_map_flags_typed, lemma_tok_ext, lemma_top_typed, 
 use crate::lower_types::{lemma_typed_ext, lemma_xetys_of, lenv, ok_x, sc_wf, shaped, slot_tys, tok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{tok_in, typed, xetys};
-use crate::lowering::{bool_in, low};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
-use crate::model::{BinOp, Expr, Type};
+use crate::lowering::{bool_in, low};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
+use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{combine_ok, lemma_over_list, lemma_over_map, lemma_over_set};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{lemma_over_type, lemma_quant, list_col, over_ok, quant_s};
-use crate::quant::{pick_slot, unrank};
 #[cfg(verus_keep_ghost)]
 use crate::quant::unrank_ok;
-use crate::slots::{bind, depth, need};
+use crate::quant::{pick_slot, unrank};
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
+use crate::slots::{bind, depth, need};
 use crate::source::{Over, TExpr};
 use crate::stype_exec::{copy_stype, keys_exec, stype_eq, stype_width, to_xtype};
 #[cfg(verus_keep_ghost)]
@@ -62,20 +62,30 @@ use vstd::prelude::*;
 
 verus! {
 
+/// 量化がたどる値の領域（`over_ok`）。候補の位置を `count` 個並べ、位置を局所変数として、
+/// `guard` がその位置をたどるかを、`slots` がその位置の値を表す。
+pub(crate) struct QuantDomain {
+    /// たどる値の格納の型。
+    pub ty: SType,
+    /// 位置を局所変数とする式で、その位置の値をたどるかを表す。
+    pub guard: Expr,
+    /// 候補の位置の数。
+    pub count: usize,
+    /// 位置を局所変数とするスロットの式で、その位置の値を表す。
+    pub slots: Vec<Expr>,
+}
+
 /// 量化でたどる値の型、位置が対象に含まれるかのガード、位置の数、束縛する値のスロットを求める。
 #[verifier::spinoff_prover]
 #[verifier::rlimit(80)]
-pub(crate) fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<
-    (SType, Expr, usize, Vec<Expr>),
-    Fail,
->)
+pub(crate) fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<QuantDomain, Fail>)
     requires
         old(blk).wf(),
         e is Quant,
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
+        r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -86,7 +96,7 @@ pub(crate) fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             us@,
             to_xty(sty(st)),
         )),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok((st, g, n, us)) ==> Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> Some(
             to_xty(sty(st)),
         ) == quant_bound(e->Quant_1, sctx(*cx), bound_tys(old(sc)@)) && ok_s(sty(st), cx.enums@) && us@.len() == width(
             sty(st),
@@ -96,7 +106,7 @@ pub(crate) fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             final(blk).outer@,
             final(blk).binds@,
             lenv(*cx),
-        ) && (r matches Ok((st, g, n, us)) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
+        ) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
             g,
             lenv(*cx),
             blt(*final(blk), *cx).push(ETy::Int),
@@ -115,17 +125,14 @@ pub(crate) fn quant_over(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
 #[verifier::spinoff_prover]
 #[verifier::rlimit(80)]
 #[allow(unused_variables)]
-pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<
-    (SType, Expr, usize, Vec<Expr>),
-    Fail,
->)
+pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<QuantDomain, Fail>)
     requires
         old(blk).wf(),
         e is Quant && e->Quant_1 is Type,
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
+        r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -136,7 +143,7 @@ pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             us@,
             to_xty(sty(st)),
         )),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok((st, g, n, us)) ==> Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> Some(
             to_xty(sty(st)),
         ) == quant_bound(e->Quant_1, sctx(*cx), bound_tys(old(sc)@)) && ok_s(sty(st), cx.enums@) && us@.len() == width(
             sty(st),
@@ -146,7 +153,7 @@ pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             final(blk).outer@,
             final(blk).binds@,
             lenv(*cx),
-        ) && (r matches Ok((st, g, n, us)) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
+        ) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
             g,
             lenv(*cx),
             blt(*final(blk), *cx).push(ETy::Int),
@@ -203,7 +210,7 @@ pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                     assert(has_ty(bool_lit(true), tv, blt(*blk, *cx).push(ETy::Int), ETy::Bool));
                 }
             }
-            Ok((copy_stype(t), cb(true), n as usize, us))
+            Ok(QuantDomain { ty: copy_stype(t), guard: cb(true), count: n as usize, slots: us })
         },
         _ => Err(Fail::Type),
     }
@@ -211,17 +218,14 @@ pub(crate) fn quant_type(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
 
 #[verifier::spinoff_prover]
 #[verifier::rlimit(80)]
-pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<
-    (SType, Expr, usize, Vec<Expr>),
-    Fail,
->)
+pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<QuantDomain, Fail>)
     requires
         old(blk).wf(),
         e is Quant && e->Quant_1 is Set,
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
+        r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -232,7 +236,7 @@ pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
             us@,
             to_xty(sty(st)),
         )),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok((st, g, n, us)) ==> Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> Some(
             to_xty(sty(st)),
         ) == quant_bound(e->Quant_1, sctx(*cx), bound_tys(old(sc)@)) && ok_s(sty(st), cx.enums@) && us@.len() == width(
             sty(st),
@@ -242,7 +246,7 @@ pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
             final(blk).outer@,
             final(blk).binds@,
             lenv(*cx),
-        ) && (r matches Ok((st, g, n, us)) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
+        ) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
             g,
             lenv(*cx),
             blt(*final(blk), *cx).push(ETy::Int),
@@ -316,7 +320,7 @@ pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                 }
                 lemma_over_set(*over, *t, **s, *cx, sc@, b0, *blk, cs@, g, n as nat, us@);
             }
-            Ok((copy_stype(t), g, n as usize, us))
+            Ok(QuantDomain { ty: copy_stype(t), guard: g, count: n as usize, slots: us })
         },
         _ => Err(Fail::Type),
     }
@@ -324,17 +328,14 @@ pub(crate) fn quant_set(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
 
 #[verifier::spinoff_prover]
 #[verifier::rlimit(80)]
-pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<
-    (SType, Expr, usize, Vec<Expr>),
-    Fail,
->)
+pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<QuantDomain, Fail>)
     requires
         old(blk).wf(),
         e is Quant && e->Quant_1 is Map,
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
+        r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -345,7 +346,7 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
             us@,
             to_xty(sty(st)),
         )),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok((st, g, n, us)) ==> Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> Some(
             to_xty(sty(st)),
         ) == quant_bound(e->Quant_1, sctx(*cx), bound_tys(old(sc)@)) && ok_s(sty(st), cx.enums@) && us@.len() == width(
             sty(st),
@@ -355,7 +356,7 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
             final(blk).outer@,
             final(blk).binds@,
             lenv(*cx),
-        ) && (r matches Ok((st, g, n, us)) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
+        ) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
             g,
             lenv(*cx),
             blt(*final(blk), *cx).push(ETy::Int),
@@ -487,7 +488,7 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                 }
                 lemma_over_map(*over, *t, **m, *cx, sc@, b0, *blk, sty(*vt), stride as int, cs@, fs@, g, n as nat, us@);
             }
-            Ok((copy_stype(t), g, n as usize, us))
+            Ok(QuantDomain { ty: copy_stype(t), guard: g, count: n as usize, slots: us })
         },
         _ => Err(Fail::Type),
     }
@@ -495,17 +496,14 @@ pub(crate) fn quant_map(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
 
 #[verifier::spinoff_prover]
 #[verifier::rlimit(80)]
-pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<
-    (SType, Expr, usize, Vec<Expr>),
-    Fail,
->)
+pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (r: Result<QuantDomain, Fail>)
     requires
         old(blk).wf(),
         e is Quant && e->Quant_1 is List,
     ensures
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((st, g, n, us)) ==> n <= 0x7fff_ffff && (over_ok(
+        r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> n <= 0x7fff_ffff && (over_ok(
             e->Quant_1,
             *cx,
             old(sc)@,
@@ -516,7 +514,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             us@,
             to_xty(sty(st)),
         )),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok((st, g, n, us)) ==> Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> deep(r) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> Some(
             to_xty(sty(st)),
         ) == quant_bound(e->Quant_1, sctx(*cx), bound_tys(old(sc)@)) && ok_s(sty(st), cx.enums@) && us@.len() == width(
             sty(st),
@@ -526,7 +524,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
             final(blk).outer@,
             final(blk).binds@,
             lenv(*cx),
-        ) && (r matches Ok((st, g, n, us)) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
+        ) && (r matches Ok(QuantDomain { ty: st, guard: g, count: n, slots: us }) ==> wf_stype(sty(st), cx.enums@) && small(sty(st)) && has_ty(
             g,
             lenv(*cx),
             blt(*final(blk), *cx).push(ETy::Int),
@@ -740,7 +738,7 @@ pub(crate) fn quant_list(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
                 }
                 lemma_over_list(*over, **li, *cx, sc@, b0, *blk, sty(*u), max as nat, w as int, cs@, us@, g);
             }
-            Ok((copy_stype(&u), g, max, us))
+            Ok(QuantDomain { ty: copy_stype(&u), guard: g, count: max, slots: us })
         },
         _ => Err(Fail::Type),
     }
@@ -773,7 +771,7 @@ pub(crate) fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
     let ghost bt = bound_tys(old(sc)@);
     let ghost tp = pre && tok(*cx, old(sc)@, *old(blk));
     let ghost tv = lenv(*cx);
-    let (st, g, n, us) = quant_over(e, cx, sc, blk)?;
+    let QuantDomain { ty: st, guard: g, count: n, slots: us } = quant_over(e, cx, sc, blk)?;
     let ghost b1 = *blk;
     let d = depth(blk);
     let top = need(d.checked_add(1))?;

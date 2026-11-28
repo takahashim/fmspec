@@ -2,30 +2,30 @@
 
 use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, keys_or_zero, STy, sty, to_xty, wf_stype, wf_xtype, XTy, xty};
+use crate::encoding::{keys, keys_or_zero, sty, to_xty, wf_stype, wf_xtype, xty, STy, XTy};
 use crate::expr_build::{all_of, and, bin, cb, ci, eq, implies, or};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, Join, mark_s, pure_below, setop_s};
+use crate::expr_build::{all_pure, bool_lit, mark_s, pure_below, setop_s, Join};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, small};
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, blt, has_ty, lemma_and_typed, lemma_bools_typed, lemma_ge0_typed};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_has_ty_blk, lemma_tok_ext, lemma_tree_typed, lemma_typed_blk};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_typed_bools, lenv, tok, xetys};
-use crate::lowering::{element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
-use crate::model::{BinOp, Expr};
+use crate::lowering::{element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
+use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_tree_pure};
 #[cfg(verus_keep_ghost)]
@@ -33,15 +33,15 @@ use crate::preserve_set::{lemma_insert, lemma_remove, lemma_set_contains, lemma_
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_setlit_base, lemma_setlit_step, setlit_ok};
 use crate::quant::pick_slot;
-use crate::slots::not;
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
+use crate::slots::not;
 use crate::source::{SetOp, TExpr};
 use crate::stype_exec::{copy_stype, keys_exec, keys_or_zero_exec, stype_eq, xtype_eq};
 #[cfg(verus_keep_ghost)]
-use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_mark_pure};
+use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_sc_wf_mono};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_sc_wf_mono, lemma_setop_pure, lim_ok, sctx, tpre};
+use crate::total::{lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -549,6 +549,44 @@ pub(crate) proof fn lemma_mark_typed(on: bool, bits: Seq<Expr>, r: Expr, out: Se
         assert(has_ty(Expr::Const(Value::Int(k as i64)), tv, lt, ETy::Int));
         assert(has_ty(Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64)))), tv, lt, ETy::Bool));
         assert(has_ty(Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64)))), tv, lt, ETy::Bool));
+    }
+}
+
+/// Setどうしの演算のスロットは、両方のスロットが純粋なら純粋である。
+pub proof fn lemma_setop_pure(op: SetOp, x: Expr, y: Expr, n: nat)
+    requires
+        pure_below(x, n),
+        pure_below(y, n),
+    ensures
+        pure_below(setop_s(op, x, y), n),
+{
+    assert(pure_below(Expr::Not(Box::new(y)), n));
+    assert(pure_below(Expr::Or(Box::new(x), Box::new(y)), n));
+    assert(pure_below(Expr::And(Box::new(x), Box::new(y)), n));
+    assert(pure_below(Expr::And(Box::new(x), Box::new(Expr::Not(Box::new(y)))), n));
+    assert(pure_below(Expr::Implies(Box::new(x), Box::new(y)), n));
+}
+
+/// Setの印付けの結果は、元のスロットと番号が純粋なら純粋である。
+pub proof fn lemma_mark_pure(on: bool, bits: Seq<Expr>, r: Expr, out: Seq<Expr>, n: nat)
+    requires
+        out.len() == bits.len(),
+        forall|k: int| 0 <= k < bits.len() ==> #[trigger] out[k] == mark_s(on, bits[k], r, k as i64),
+        all_pure(bits, n),
+        pure_below(r, n),
+    ensures
+        all_pure(out, n),
+{
+    assert forall|k: int| 0 <= k < out.len() implies pure_below(#[trigger] out[k], n) by {
+        assert(out[k] == mark_s(on, bits[k], r, k as i64));
+        assert(pure_below(bits[k], n));
+        assert(pure_below(Expr::Const(Value::Int(k as i64)), n));
+        let ce = Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64))));
+        let cn = Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k as i64))));
+        assert(pure_below(ce, n));
+        assert(pure_below(cn, n));
+        assert(pure_below(Expr::Or(Box::new(bits[k]), Box::new(ce)), n));
+        assert(pure_below(Expr::And(Box::new(bits[k]), Box::new(cn)), n));
     }
 }
 

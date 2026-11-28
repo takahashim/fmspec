@@ -3,19 +3,19 @@
 //! 式の型の整形式性（[`wf_xtype_exec`]）、型の大きさの条件（[`lim_s_exec`]、[`lim_x_exec`]）、
 //! 式とその部分式の条件（[`check_lim`]）を、仕様と一致する実行関数として持つ。
 
-use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_stys, lemma_xtys, STy, sty, stys, width, width_sum, XTy, xty, xtys};
+use crate::encoding::{lemma_stys, lemma_xtys, sty, stys, width, width_sum, xty, xtys, STy, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xwidth, xwidth_sum};
-use crate::infer::{check, Scope};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{agrees, scope_view};
+use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
 use crate::source::{Item, Over, TExpr};
-use crate::stype_exec::{keys_exec, keys_or_zero_exec, stype_eq, to_xtype, wf_stype_exec};
 use crate::stype_exec::wf_xtype_exec;
+use crate::stype_exec::{keys_exec, keys_or_zero_exec, stype_eq, to_xtype, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
 use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_items_intro, lemma_lim_ok_seq_at};
 #[cfg(verus_keep_ghost)]

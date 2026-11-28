@@ -1,7 +1,7 @@
 //! Mapの参照の下ろし。Mapとキーは評価済みで、Mapはスロットの式の列、キーは番号を束縛した局所変数で受け取る。
 
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, Env, ErrKind, eval_l};
+use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, pure_below};
 use crate::expr_copy::copy_expr;

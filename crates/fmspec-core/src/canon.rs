@@ -6,7 +6,6 @@
 //! [`canon_ok`] は、スロットの値の列がある値の正規形の符号化であることで、
 //! [`canonical`] は、それを判定する中核の式を作る。
 
-use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
 #[cfg(verus_keep_ghost)]
@@ -20,14 +19,15 @@ use crate::encoding::{lemma_to_xtys, lemma_xtys, lemma_xwidth_of, lemma_xwidths_
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{list_items_member, map_rows_member, member, members, models, models_seq, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, stys, SVal, to_xty, to_xtys, wf_stype, wf_stypes, width, width_sum, XTy};
+use crate::encoding::{sty, stys, to_xty, to_xtys, wf_stype, wf_stypes, width, width_sum, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{Env, ErrKind, eval_l};
+use crate::eval::{eval_l, Env, ErrKind};
 use crate::expr_build::{all_of, bin, cb, ci, defaults, eq, is_bool_lit, ite, split, sub_exprs};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, concat, int_lit, ite_s, Join, lemma_xoff_step, lits};
+use crate::expr_build::{all_pure, bool_lit, concat, int_lit, ite_s, lemma_xoff_step, lits, Join};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{pure_below, split_ok, tree_s, xoff};
 use crate::expr_copy::copy_expr;
@@ -35,17 +35,17 @@ use crate::expr_copy::copy_expr;
 use crate::limits::*;
 use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
-use crate::lists::{lemma_items_member, lemma_list_join, lemma_list_parts, pad, pad_vals, rows_at};
-#[cfg(verus_keep_ghost)]
 use crate::lists::rows_view;
+#[cfg(verus_keep_ghost)]
+use crate::lists::{lemma_items_member, lemma_list_join, lemma_list_parts, pad, pad_vals, rows_at};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
 use crate::maps::map_rows;
 #[cfg(verus_keep_ghost)]
 use crate::maps::{lemma_map_join, lemma_map_parts, lemma_none_rows, row_vals};
-use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
+use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]

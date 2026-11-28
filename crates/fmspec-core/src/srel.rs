@@ -1,21 +1,21 @@
 //! 中核の符号の列と、値の列の対応（`rel`）。中核の更新の列の意味（`c_apply`）と、引数の正規形の仕様。
 
 #[cfg(verus_keep_ghost)]
-use crate::canon::{canon_ok, canon_wf, lemma_enc_seq_sub, lemma_member_in, lemma_seq_in};
-#[cfg(verus_keep_ghost)]
 use crate::canon::lemma_wf_index;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, enc_seq, lemma_enc_len, member, members, STy, sty, SVal, wf_stypes};
+use crate::canon::{canon_ok, canon_wf, lemma_enc_seq_sub, lemma_member_in, lemma_seq_in};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{enc, enc_seq, lemma_enc_len, member, members, sty, wf_stypes, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{width, width_sum};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, code_of, decode, Env, ErrKind, eval_l, eval_spec, lookup};
+use crate::eval::{as_bool, code_of, decode, eval_l, eval_spec, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::pure_below;
 #[cfg(verus_keep_ghost)]
 use crate::limits::smalls;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Constant, Layout, layout_at, layouts_at};
+use crate::lower_ctx::{layout_at, layouts_at, Constant, Layout};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{in_slot, in_slots, lemma_slot_tys_len, lemma_slot_tys_seq_len};
 #[cfg(verus_keep_ghost)]

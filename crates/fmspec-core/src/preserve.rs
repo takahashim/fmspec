@@ -16,24 +16,24 @@ use crate::encoding::{default_val, enc, enc_rows, enc_seq, lemma_default_len, le
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, models, models_seq};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{STy, sty, SVal, width, XTy, xty, xwidth, xwidth_sum};
+use crate::encoding::{sty, width, xty, xwidth, xwidth_sum, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, Env, ErrKind, eval_l, int_result, lookup};
+use crate::eval::{as_bool, eval_l, int_result, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, concat, ite_s, Join, join_s, lits, or_s};
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, ite_s, join_s, lits, or_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{pure_below, tree_s, xoff};
 #[cfg(verus_keep_ghost)]
 use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{added, Block, Bound, extends, Layout, LowerCtx};
+use crate::lower_ctx::{added, extends, Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{in_slots, slot_tys};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, of_value, SEnv, src_bool, TExpr, to_value};
+use crate::source::{eval_src, of_value, src_bool, to_value, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {

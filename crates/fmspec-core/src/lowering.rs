@@ -19,16 +19,16 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::{lemma_in_member, lemma_models_has, lemma_shaped_len};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{enc, keys, keys_or_zero, lemma_xwidth_of, member, sty, to_xty, STy, SVal};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{wf_stype, width, xty, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, keys, keys_or_zero, lemma_xwidth_of, member, STy, sty, SVal, to_xty};
+use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, width, XTy, xty};
-#[cfg(verus_keep_ghost)]
-use crate::eval::{Env, ErrKind, eval_l};
+use crate::expr_build::{all_pure, bool_lit, int_lit, ite_s, kind_expr, pure_below, tree_s, Join};
 use crate::expr_build::{ci, eq};
-#[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, int_lit, Join, kind_expr, pure_below, tree_s};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::fits::{lemma_fits_to, lemma_to_fits};
@@ -39,9 +39,9 @@ use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
 use crate::lower_core::low_core;
-use crate::lower_ctx::{Block, Bound, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, Layout, LowerCtx};
 use crate::lower_list::{low_list_contains, low_list_get, low_list_lit, low_list_update};
 use crate::lower_map::{low_get, low_map_access, low_map_lit};
 use crate::lower_quant::low_quant;
@@ -49,9 +49,9 @@ use crate::lower_set::{low_member, low_set_lit, low_setop};
 use crate::lower_struct::low_struct;
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
-use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Type};
+use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
@@ -60,13 +60,15 @@ use crate::preserve_elem::{elem_lowers, elem_rank_lowers, lemma_elem_rank, lemma
 use crate::preserve_list::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::*;
-use crate::slot_store::{rank_expr, rank_or_neg, store};
+#[cfg(verus_keep_ghost)]
+use crate::rows::{flat, ite_row, ite_rows_ok};
 #[cfg(verus_keep_ghost)]
 use crate::slot_store::store_ok;
+use crate::slot_store::{rank_expr, rank_or_neg, store};
 use crate::slots::*;
-use crate::source::{FAIL_NOT_IN_DOMAIN, TExpr};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
+use crate::source::{TExpr, FAIL_NOT_IN_DOMAIN};
 use crate::stype_exec::{fits, keys_exec, stype_width, to_xtype, xtype_eq};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;
@@ -1118,6 +1120,60 @@ pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: R
         }
     }
     Ok(out)
+}
+
+/// 各行の長さが `w` で純粋なら、つないだ列の長さは行の数と `w` の積で、純粋である。
+pub proof fn lemma_flat_shape(rows: Seq<Seq<Expr>>, w: nat, n: nat)
+    requires
+        forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
+    ensures
+        flat(rows).len() == rows.len() * w,
+        all_pure(flat(rows), n),
+    decreases rows.len(),
+{
+    if rows.len() > 0 {
+        let pre = rows.drop_last();
+        assert forall|p: int| 0 <= p < pre.len() implies (#[trigger] pre[p]).len() == w && all_pure(pre[p], n) by {
+            assert(pre[p] == rows[p]);
+        }
+        lemma_flat_shape(pre, w, n);
+        let last = rows.last();
+        assert(rows[rows.len() - 1] == last);
+        assert(flat(rows) == flat(pre) + last);
+        assert((rows.len() - 1) * w + w == rows.len() * w) by (nonlinear_arith);
+        assert forall|j: int| 0 <= j < flat(rows).len() implies pure_below(#[trigger] flat(rows)[j], n) by {
+            if j < flat(pre).len() {
+                assert(flat(rows)[j] == flat(pre)[j]);
+            } else {
+                assert(flat(rows)[j] == last[j - flat(pre).len()]);
+            }
+        }
+    }
+}
+
+/// 番号 `k` の行だけを `alt` に置き換えた行は、`k`、`alt`、元の行が純粋なら純粋である。
+pub proof fn lemma_ite_rows_shape(out: Seq<Seq<Expr>>, rows: Seq<Seq<Expr>>, k: Expr, alt: Seq<Expr>, n: nat)
+    requires
+        ite_rows_ok(out, rows, k, alt),
+        pure_below(k, n),
+        all_pure(alt, n),
+        forall|p: int| 0 <= p < rows.len() ==> all_pure(#[trigger] rows[p], n),
+    ensures
+        out.len() == rows.len(),
+        forall|p: int| 0 <= p < out.len() ==> (#[trigger] out[p]).len() == alt.len() && all_pure(out[p], n),
+{
+    assert forall|p: int| 0 <= p < out.len() implies (#[trigger] out[p]).len() == alt.len() && all_pure(out[p], n) by {
+        assert(ite_row(out[p], rows[p], k, alt, p));
+        assert(all_pure(rows[p], n));
+        assert forall|j: int| 0 <= j < out[p].len() implies pure_below(#[trigger] out[p][j], n) by {
+            assert(pure_below(alt[j], n));
+            assert(pure_below(rows[p][j], n));
+            let c = Expr::Bin(BinOp::Eq, Box::new(k), Box::new(Expr::Const(Value::Int(p as i64))));
+            assert(pure_below(Expr::Const(Value::Int(p as i64)), n));
+            assert(pure_below(c, n));
+            assert(out[p][j] == ite_s(c, alt[j], rows[p][j]));
+        }
+    }
 }
 
 } // verus!

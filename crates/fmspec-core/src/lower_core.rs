@@ -2,26 +2,26 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::lemma_defaults_typed;
-use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, lemma_default_len, lemma_enc_len, lemma_models_enc};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_xtys, lemma_xwidth_of, lemma_xwidth_pos, member, STy, sty, SVal};
+use crate::encoding::{lemma_xtys, lemma_xwidth_of, lemma_xwidth_pos, member, sty, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_xtypes, XTy, xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{wf_xtypes, xty, xtys, xwidth, xwidth_sum, XTy};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{Env, ErrKind, eval_l, lookup};
-use crate::expr_build::{bin, cb, defaults, extend, ite, Join, tree};
+use crate::eval::{eval_l, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, bool_lit, ite_s, kind_expr, lits, pure_below};
+use crate::expr_build::{bin, cb, defaults, extend, ite, tree, Join};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_bool, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lemma_lim_xs_at, lim_xs};
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, has_ty, lemma_added_typed, lemma_bind_typed};
 #[cfg(verus_keep_ghost)]
@@ -34,9 +34,9 @@ use crate::lower_types::{lemma_typed_blk, lemma_typed_concat, lemma_typed_ext, l
 use crate::lower_types::{lemma_xetys_len, lemma_xetys_of, lenv, lts, ok_x, sc_typed, sc_wf, shaped};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{slot_tys, tok, tok_in, ty_post, typed, xetys, xetys_seq};
-use crate::lowering::{atoms, bool_in, layout_slots, lit_type, low, sub_scalar};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
+use crate::lowering::{atoms, bool_in, layout_slots, lit_type, low, sub_scalar};
 use crate::model::{BinOp, Expr, Value};
 use crate::preserve::pure_exec;
 #[cfg(verus_keep_ghost)]
@@ -53,9 +53,9 @@ use crate::preserve_ops::{lemma_implies, lemma_ite_binds_push, lemma_ite_bound, 
 use crate::preserve_ops::{lemma_ite_simple, lemma_ite_tpre, lemma_let, lemma_not};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_ops::{lemma_pads_closed, pad_lets_s, pad_lets_seq};
-use crate::slots::{atom, bind, copy_exprs, depth, eq_slots, need, new_block, not, wrap};
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
+use crate::slots::{atom, bind, copy_exprs, depth, eq_slots, need, new_block, not, wrap};
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
@@ -66,7 +66,7 @@ use crate::total::{bound_tys, cx_wf, deep, here_ok, layout_wf, lemma_all_pure_mo
 use crate::total::{lemma_lim_ok_seq_at, lemma_sc_wf_mono, lim_ok, low_post, ok_s, sctx, tpre};
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
-use crate::typing::{TyEnv, type_l};
+use crate::typing::{type_l, TyEnv};
 #[cfg(verus_keep_ghost)]
 use vstd::pervasive::arbitrary;
 use vstd::prelude::*;

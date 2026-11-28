@@ -253,7 +253,7 @@ VERUS_MUTANTS = [
   ["lower_quant.rs", "Expr::Implies(Box::new(guard), Box::new(e))", "Expr::And(Box::new(guard), Box::new(e))", "forallのガードを論理積にする"],
   ["lower_quant.rs", "let at = need(j.checked_mul(stride))?;", "let at = need(j.checked_mul(w))?;", "Mapの有無の位置を値の幅で数える"],
   ["lower_quant.rs", "let hi = n as i64 - 1;", "let hi = n as i64 - 2;", "量化で最後の値をたどらない"],
-  ["lower_quant.rs", "(copy_stype(t), cb(true), n as usize, us)", "(copy_stype(t), cb(false), n as usize, us)", "型の全体をたどる量化で値を選ばない"],
+  ["lower_quant.rs", "guard: cb(true), count: n as usize", "guard: cb(false), count: n as usize", "型の全体をたどる量化で値を選ばない"],
   ["lower_quant.rs", "let g = bin(BinOp::Lt, Expr::Local(d), copy_expr(&cs[0]));", "let g = bin(BinOp::Le, Expr::Local(d), copy_expr(&cs[0]));", "Listの長さの位置まで要素とみなす"],
   ["lower_quant.rs", "let at = need(need(need(k.checked_mul(w))?.checked_add(1))?.checked_add(j))?;", "let at = need(need(k.checked_mul(w))?.checked_add(j))?;", "Listの長さのスロットを要素のスロットとみなす"],
   ["lower_set.rs", "bits = mark(&bits, &r, true);", "bits = mark(&bits, &r, false);", "Setのリテラルの要素に印を付けない"],

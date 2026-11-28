@@ -6,25 +6,25 @@ use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, lemma_default_len, lemma_xtys, lemma_xwidth_of, sty};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, XTy, xty, xtys, xwidth, xwidth_sum};
-use crate::expr_build::{cb, defaults, extend, split, sub_exprs};
+use crate::encoding::{to_xty, xty, xtys, xwidth, xwidth_sum, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, pure_below, split_ok, xoff};
+use crate::expr_build::{cb, defaults, extend, split, sub_exprs};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_types_of_iff, types_of};
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{blt, has_ty, lemma_check_typed, lemma_lim_x_small, lemma_tok_ext};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_typed_blk, lemma_typed_concat, lemma_typed_sub, lemma_xetys_of};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_xetys_part, lenv, tok, typed, xetys, xetys_seq};
-use crate::lowering::{copy_usizes, low};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
+use crate::lowering::{copy_usizes, low};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_lits};
@@ -32,10 +32,10 @@ use crate::preserve::{lemma_extends_trans, lemma_lits};
 use crate::preserve_tuple::{lemma_is_some, lemma_none, lemma_part, lemma_seq_base, lemma_seq_step};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_tuple::{lemma_some, lemma_tuple_done, lemma_unwrap, lowers_seq};
-use crate::slots::{check, copy_exprs, need, not};
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
-use crate::source::{FAIL_NONE, TExpr};
+use crate::slots::{check, copy_exprs, need, not};
+use crate::source::{TExpr, FAIL_NONE};
 use crate::stype_exec::{copy_xtype, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_sc_wf_mono};

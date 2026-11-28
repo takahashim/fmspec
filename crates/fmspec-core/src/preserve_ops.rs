@@ -3,23 +3,23 @@
 //! 下ろしの実装は [`crate::lowering`] にある。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{models, models_seq, SVal, XTy, xty, xwidth};
+use crate::encoding::{models, models_seq, xty, xwidth, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, Env, ErrKind, eval_l};
+use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, ite_s, Join, join_s, pure_below, tree_s};
+use crate::expr_build::{all_pure, bool_lit, ite_s, join_s, pure_below, tree_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{added, Block, Bound, extends, LowerCtx};
+use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_fold, eval_src, SEnv, src_bool, TExpr};
+use crate::source::{eval_fold, eval_src, src_bool, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;
 use vstd::prelude::*;
