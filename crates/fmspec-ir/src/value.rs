@@ -311,8 +311,11 @@ pub fn output_value_from_json(model: &Model, action: usize, v: &Value) -> Result
         .output
         .as_ref()
         .ok_or_else(|| format!("操作 {:?} は出力を宣言していません", names.name))?;
-    let codes = value_from_json(&model.names.enums, ty, v)?;
-    codes.first().copied().ok_or_else(|| "出力の値が不正です".to_string())
+    // 出力の型はBool、有界Int、Enumに限るので、符号の列の長さは1である。
+    match value_from_json(&model.names.enums, ty, v)?.as_slice() {
+        [x] => Ok(*x),
+        _ => Err("出力の値が不正です".to_string()),
+    }
 }
 
 pub(crate) fn output_from_json(model: &Model, action: usize, v: &Value) -> Result<Option<i64>, String> {

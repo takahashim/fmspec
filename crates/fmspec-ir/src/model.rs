@@ -5,7 +5,7 @@ use crate::diagnostics::{describe, lower_error, user_reason};
 use crate::json::{array, index, object, optional_array, required, schema, source, string, unique, Res};
 use crate::resolve::{self, Constant, Ctx, Fields, Layout};
 use crate::type_syntax::parse_type;
-use crate::types::SType;
+use crate::types::{self, SType};
 use crate::IR_VERSION;
 use fmspec_core::ir::ir_check::lower_checked;
 use fmspec_core::kernel::checked::{validate, CheckedModel};
@@ -235,16 +235,16 @@ fn parse_bindings<'v>(
     Ok(out)
 }
 
-fn layouts(enums: &[EnumNames], types: &[SType]) -> Vec<Layout> {
-    let mut offset = 0;
-    types
+/// 型の列の各型の位置。位置は中核の `slot_offsets` で求める。
+fn layouts(enums: &[EnumNames], types: &[SType], path: &str) -> Res<Vec<Layout>> {
+    let Some(offsets) = types::offsets(enums, types) else {
+        return schema(path, "スロット数の合計が大きすぎます");
+    };
+    Ok(types
         .iter()
-        .map(|ty| {
-            let l = Layout { ty: ty.clone(), offset };
-            offset += ty.width(enums);
-            l
-        })
-        .collect()
+        .zip(offsets)
+        .map(|(ty, offset)| Layout { ty: ty.clone(), offset })
+        .collect())
 }
 
 fn arg_names_at<'n>(params: &'n [String], choices: &'n [String], i: usize) -> &'n str {
@@ -286,7 +286,7 @@ fn parse_action(v: &Value, path: &str, a: usize, base: &Ctx, state_names: &[Stri
     let n_param_slots = arg_types.iter().map(|t| t.width(enums)).sum();
     arg_types.extend(choice_types);
     domains.extend(choice_domains);
-    let args = layouts(enums, &arg_types);
+    let args = layouts(enums, &arg_types, path)?;
     let ctx = Ctx {
         args: &args,
         n_params: n_user_params,
@@ -494,7 +494,7 @@ pub(crate) fn build(root: &Value, maps: &[MapSource]) -> Result<Built, LoadError
     let (constants, sconsts) = parse_constants(optional_array(map, path, "constants")?, &enums, &fields)?;
     let closed = Ctx::closed(&enums, &constants, &fields);
     let states = parse_states(array(required(map, path, "states")?, "$.states")?, &closed)?;
-    let state_layouts = layouts(&enums, &states.types);
+    let state_layouts = layouts(&enums, &states.types, "$.states")?;
     let ctx = Ctx {
         states: Some(&state_layouts),
         ..closed
@@ -909,7 +909,7 @@ fn parse_contracts(items: &[Value], ctx: &Ctx, actions: &[ActionNames]) -> Res<D
             return schema(&format!("{path}.action"), format!("未定義の操作 {action_name:?}"));
         };
         let act = &actions[action];
-        let args = layouts(ctx.enums, &act.arg_types);
+        let args = layouts(ctx.enums, &act.arg_types, &path)?;
         let cctx = Ctx {
             args: &args,
             n_params: act.params.len(),
