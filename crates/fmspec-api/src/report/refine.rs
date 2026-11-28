@@ -2,7 +2,8 @@
 
 use super::{attach_bfs, inconsistency_json, limit_name, reject_json_in, INCONSISTENCY_MESSAGE, REJECTED_MESSAGE};
 use fmspec_core::evidence::TraceStep;
-use fmspec_core::refine::{map_state_of, Mapped, RefClaim, RefEvidence};
+use fmspec_core::evidence::{RefClaim, RefEvidence};
+use fmspec_core::refine::{map_state_of, Mapped};
 use fmspec_core::semantics::Conditions;
 use fmspec_ir::{
     args_to_json, claim_to_json, conditions_to_json, error_to_json, output_to_json, state_to_json, Refinement,

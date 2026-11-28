@@ -111,4 +111,25 @@ pub enum Reject {
     NotSymmetric(usize),
 }
 
+/// 詳細化が破れる事象の主張。トレースの末尾について述べる。
+pub enum RefClaim {
+    /// 開始状態（トレースの長さは0）を写した状態が、抽象モデルの初期状態でない。
+    Init,
+    /// 最後の遷移が、抽象モデルの遷移にも、状態の変わらないステップにも写らない。
+    Step,
+    /// 末尾の状態で、写像のスロット（添字）の評価または符号化が失敗する。
+    Map(usize, ErrKind),
+    /// 具体モデルそのものについての主張（操作の評価の失敗など）。
+    Model(Claim),
+}
+
+/// 詳細化の証拠。
+pub enum RefEvidence {
+    /// 具体モデルの証明書。
+    Certificate(Certificate),
+    /// 開始状態、ステップ、末尾の事象の主張。
+    Trace(Vec<i64>, Vec<TraceStep>, RefClaim),
+    Unavailable(Limit),
+}
+
 } // verus!

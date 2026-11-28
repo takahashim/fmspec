@@ -89,7 +89,7 @@ where
             return g;
         }
         let state = g.states[cur].clone();
-        for a in 0..model.raw().actions.len() {
+        for a in 0..model.n_actions() {
             if !selected(&cond.actions, a) {
                 continue;
             }
@@ -137,7 +137,7 @@ where
 /// 遷移の引数の列から、入力（公開引数と、注入する選択の値）を取り出す。
 /// `injected` は操作ごとの、注入する選択の引数の列での添字である。
 pub fn input_of(model: &CheckedModel, injected: &[Vec<usize>], action: usize, args: &[i64]) -> Vec<i64> {
-    let n = model.raw().actions[action].n_params.min(args.len());
+    let n = model.n_params(action).unwrap_or(0).min(args.len());
     let mut input = args[..n].to_vec();
     if let Some(slots) = injected.get(action) {
         input.extend(slots.iter().filter_map(|i| args.get(*i)));

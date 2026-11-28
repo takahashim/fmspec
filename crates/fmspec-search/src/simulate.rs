@@ -83,7 +83,7 @@ fn run<F>(model: &CheckedModel, cond: &Conditions, opts: &SimOptions, successors
 where
     F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
 {
-    let n_actions = model.raw().actions.len();
+    let n_actions = model.n_actions();
     let mut rng = SplitMix64::new(opts.seed);
     let mut stats = SimStats::default();
     let found = |evidence: Evidence, stats: SimStats| SimResult {

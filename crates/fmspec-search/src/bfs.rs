@@ -132,7 +132,7 @@ fn search<F>(model: &CheckedModel, cond: &Conditions, opts: &BfsOptions, success
 where
     F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
 {
-    let n_actions = model.raw().actions.len();
+    let n_actions = model.n_actions();
     let mut stats = Stats::default();
     let mut nodes: Vec<Node> = Vec::new();
     let mut visited = Visited::default();

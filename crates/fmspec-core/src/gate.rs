@@ -355,26 +355,18 @@ impl<'a> CertCheck<'a> {
         proof {
             assert(none@ =~= Seq::<SwapMaps>::empty());
         }
-        let mut k = self.next;
-        let mut left = n;
-        while k < states.len() && left > 0
-            invariant
-                self.next <= k <= states@.len(),
-                none@ == Seq::<SwapMaps>::empty(),
-                forall|j: int| 0 <= j < k ==> state_closed(*m, *self.cond, states@, (#[trigger] states@[j])@),
-            decreases states@.len() - k,
-        {
-            match check_state(m, self.cond, &none, states, k) {
-                Some(r) => {
-                    return Some(Verdict::rejected(r));
-                },
-                None => {},
+        let k = match check_states_range(m, self.cond, &none, states, self.next, n) {
+            Err(r) => {
+                return Some(Verdict::rejected(r));
+            },
+            Ok(k) => k,
+        };
+        proof {
+            assert forall|j: int| 0 <= j < k implies state_closed(*m, *self.cond, states@, (#[trigger] states@[j])@) by {
+                if j >= self.next {
+                    lemma_closed_without_swaps(*m, *self.cond, states@, states@[j]@);
+                }
             }
-            proof {
-                lemma_closed_without_swaps(*m, *self.cond, states@, states@[k as int]@);
-            }
-            k = k + 1;
-            left = left - 1;
         }
         self.next = k;
         if k < states.len() {
@@ -421,7 +413,7 @@ pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<us
             if !conditions_eq(m, &cert.conditions, c) {
                 return Verdict::rejected(Reject::ConditionMismatch);
             }
-            match crate::sym::symmetry(m, c, swaps) {
+            match crate::sym_check::symmetry(m, c, swaps) {
                 Err(i) => Verdict::rejected(Reject::NotSymmetric(i)),
                 Ok(sw) => match check_sym_certificate(m, c, &sw, &cert.states) {
                     None => Verdict::of(VerdictKind::Verified),

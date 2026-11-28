@@ -15,7 +15,14 @@ use crate::state_set::find;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;
 use crate::step::*;
+#[cfg(verus_keep_ghost)]
+use crate::step::{step_spec, Step};
+#[cfg(verus_keep_ghost)]
+use crate::sym::word_ok;
 use crate::sym::*;
+#[cfg(verus_keep_ghost)]
+use crate::sym::{all_sym, apply_word, lemma_edge_word, lemma_safe_word, lemma_word_concat, map_act};
+use crate::sym_check::canonicalize;
 use vstd::prelude::*;
 
 verus! {
@@ -349,6 +356,44 @@ pub(crate) fn check_initials(m: &RawModel, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i6
     None
 }
 
+/// 証明書の `from` 番目から、最大 `n` 個の状態を検査する。検査を終えた状態の次の添字を返す。
+/// 返した添字は、証明書の終わりか、`from + n` である。
+pub(crate) fn check_states_range(
+    m: &RawModel,
+    c: &Conditions,
+    sw: &Vec<SwapMaps>,
+    cert: &Vec<Vec<i64>>,
+    from: usize,
+    n: usize,
+) -> (r: Result<usize, Reject>)
+    requires
+        from <= cert@.len(),
+    ensures
+        r matches Ok(k) ==> from <= k <= cert@.len() && (k == cert@.len() || k == from + n) && forall|j: int|
+            from <= j < k ==> sym_state_closed(*m, *c, sw@, cert@, (#[trigger] cert@[j])@),
+{
+    let mut k = from;
+    let mut left = n;
+    while k < cert.len() && left > 0
+        invariant
+            from <= k <= cert@.len(),
+            left <= n,
+            k - from == n - left,
+            forall|j: int| from <= j < k ==> sym_state_closed(*m, *c, sw@, cert@, (#[trigger] cert@[j])@),
+        decreases cert@.len() - k,
+    {
+        match check_state(m, c, sw, cert, k) {
+            Some(r) => {
+                return Err(r);
+            },
+            None => {},
+        }
+        k = k + 1;
+        left = left - 1;
+    }
+    Ok(k)
+}
+
 /// 入れ替えの列 `sw` のもとで、証明書を検査する。`None`（受理）なら、証明書は代表元の証明書として帰納的である。
 fn check_with_swaps(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
     ensures
@@ -360,24 +405,10 @@ fn check_with_swaps(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec
         },
         None => {},
     }
-    let mut k: usize = 0;
-    while k < cert.len()
-        invariant
-            k <= cert@.len(),
-            forall|j: int|
-                0 <= j < m.inits@.len() ==> (#[trigger] m.inits@[j])@.len() == m.state_types@.len() && reps(sw@, cert@, m.inits@[j]@),
-            forall|j: int| 0 <= j < k ==> sym_state_closed(*m, *c, sw@, cert@, (#[trigger] cert@[j])@),
-        decreases cert@.len() - k,
-    {
-        match check_state(m, c, sw, cert, k) {
-            Some(r) => {
-                return Some(r);
-            },
-            None => {},
-        }
-        k = k + 1;
+    match check_states_range(m, c, sw, cert, 0, cert.len()) {
+        Err(r) => Some(r),
+        Ok(_) => None,
     }
-    None
 }
 
 /// 安全性証明書を検査する。`None`（受理）を返すなら、証明書は帰納的で、モデルは安全である。
@@ -413,6 +444,107 @@ pub(crate) fn check_sym_certificate(m: &RawModel, c: &Conditions, sw: &Vec<SwapM
         }
     }
     r
+}
+
+/// 状態 `s` から、入れ替えの列で証明書の状態に移れる。
+pub open spec fn reps(sw: Seq<SwapMaps>, cert: Seq<Vec<i64>>, s: Seq<i64>) -> bool {
+    exists|w: Seq<usize>| word_ok(sw, w) && #[trigger] in_cert(cert, apply_word(sw, w, s))
+}
+
+/// 証明書の状態 `s` は性質を満たし、有効な遷移の後続は、入れ替えの列で証明書の状態に移れる。
+pub open spec fn sym_state_closed(m: RawModel, c: Conditions, sw: Seq<SwapMaps>, cert: Seq<Vec<i64>>, s: Seq<i64>) -> bool {
+    &&& s.len() == m.state_types@.len()
+    &&& invs_hold(m, c, s)
+    &&& no_deadlock(m, c, s)
+    &&& forall|a: int, args: Seq<i64>| #[trigger]
+        act_on(m, c, a) && #[trigger] args_ok(m, a, args) ==> match step_spec(m, a, args, s) {
+            Step::Disabled => true,
+            Step::Fail(_, _) => false,
+            Step::To(t, o) => cons_hold(m, c, a, s, args, t, o) && reps(sw, cert, t),
+        }
+}
+
+pub open spec fn sym_inductive(m: RawModel, c: Conditions, sw: Seq<SwapMaps>, cert: Seq<Vec<i64>>) -> bool {
+    &&& forall|i: int|
+        0 <= i < m.inits@.len() ==> (#[trigger] m.inits@[i])@.len() == m.state_types@.len() && reps(
+            sw,
+            cert,
+            m.inits@[i]@,
+        )
+    &&& forall|j: int| 0 <= j < cert.len() ==> sym_state_closed(m, c, sw, cert, (#[trigger] cert[j])@)
+}
+
+pub(crate) proof fn lemma_sym_closed_safe(m: RawModel, c: Conditions, sw: Seq<SwapMaps>, cert: Seq<Vec<i64>>, s: Seq<i64>)
+    requires
+        sym_state_closed(m, c, sw, cert, s),
+    ensures
+        state_safe(m, c, s),
+{
+    assert forall|a: int, args: Seq<i64>| #[trigger] act_on(m, c, a) && #[trigger] args_ok(m, a, args) implies trans_safe(
+        m,
+        c,
+        a,
+        args,
+        s,
+    ) by {}
+}
+
+pub(crate) proof fn lemma_reach_reps(m: RawModel, c: Conditions, sw: Seq<SwapMaps>, cert: Seq<Vec<i64>>, s: Seq<i64>, n: nat)
+    requires
+        all_sym(m, c, sw),
+        sym_inductive(m, c, sw, cert),
+        reach(m, c, s, n),
+    ensures
+        s.len() == m.state_types@.len(),
+        reps(sw, cert, s),
+    decreases n,
+{
+    if n == 0 {
+        let i = choose|i: int| 0 <= i < m.inits@.len() && (#[trigger] m.inits@[i])@ == s;
+        assert(reps(sw, cert, m.inits@[i]@));
+    } else {
+        let (q, a, args, o) = choose|q: Seq<i64>, a: int, args: Seq<i64>, o: Option<i64>|
+            reach(m, c, q, (n - 1) as nat) && #[trigger] is_edge(m, c, q, a, args, o, s);
+        lemma_reach_reps(m, c, sw, cert, q, (n - 1) as nat);
+        let w = choose|w: Seq<usize>| word_ok(sw, w) && #[trigger] in_cert(cert, apply_word(sw, w, q));
+        lemma_edge_word(m, c, sw, w, q, a, args, o, s);
+        let r = apply_word(sw, w, q);
+        let j = choose|j: int| 0 <= j < cert.len() && (#[trigger] cert[j])@ == r;
+        assert(sym_state_closed(m, c, sw, cert, cert[j]@));
+        let b = map_act(sw, w, a);
+        let t = apply_word(sw, w, s);
+        assert(is_edge(m, c, r, b, args, o, t));
+        assert(act_on(m, c, b) && args_ok(m, b, args));
+        assert(reps(sw, cert, t));
+        let w2 = choose|w2: Seq<usize>| word_ok(sw, w2) && #[trigger] in_cert(cert, apply_word(sw, w2, t));
+        lemma_word_concat(sw, w, w2, s);
+        assert forall|i: int| 0 <= i < (w + w2).len() implies (#[trigger] (w + w2)[i]) < sw.len() by {
+            if i < w.len() {
+                assert((w + w2)[i] == w[i]);
+            } else {
+                assert((w + w2)[i] == w2[i - w.len()]);
+            }
+        }
+        assert(in_cert(cert, apply_word(sw, w + w2, s)));
+    }
+}
+
+/// 代表元の証明書が帰納的で、入れ替えがどれも対称性なら、モデルは安全である。
+pub proof fn lemma_sym_safe(m: RawModel, c: Conditions, sw: Seq<SwapMaps>, cert: Seq<Vec<i64>>)
+    requires
+        all_sym(m, c, sw),
+        sym_inductive(m, c, sw, cert),
+    ensures
+        safe(m, c),
+{
+    assert forall|s: Seq<i64>, n: nat| #[trigger] reach(m, c, s, n) implies state_safe(m, c, s) by {
+        lemma_reach_reps(m, c, sw, cert, s, n);
+        let w = choose|w: Seq<usize>| word_ok(sw, w) && #[trigger] in_cert(cert, apply_word(sw, w, s));
+        let j = choose|j: int| 0 <= j < cert.len() && (#[trigger] cert[j])@ == apply_word(sw, w, s);
+        assert(sym_state_closed(m, c, sw, cert, cert[j]@));
+        lemma_sym_closed_safe(m, c, sw, cert, cert[j]@);
+        lemma_safe_word(m, c, sw, w, s);
+    }
 }
 
 } // verus!

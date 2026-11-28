@@ -25,12 +25,16 @@ use crate::eval::*;
 use crate::model::*;
 use crate::semantics::*;
 #[cfg(verus_keep_ghost)]
+use crate::semantics::{act_on, is_edge, stuck};
+#[cfg(verus_keep_ghost)]
 use crate::state_enc::args_ok;
 use crate::state_enc::{copy_vec, vec_eq};
 use crate::state_set::cmp_state;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;
 use crate::step::*;
+#[cfg(verus_keep_ghost)]
+use crate::step::{all_disabled, enum_ok, lemma_enum_enabled, tr_sound};
 use std::sync::Arc;
 use vstd::prelude::*;
 
@@ -264,7 +268,7 @@ fn output_matches_exec(out: SeenOutput, o: Option<i64>) -> (r: bool)
 }
 
 /// 操作 `a` の引数の列 `args` に対応する入力。
-fn input_of_exec(m: &RawModel, inj: &Vec<Vec<usize>>, a: usize, args: &Vec<i64>) -> (r: Vec<i64>)
+pub(crate) fn input_of_exec(m: &RawModel, inj: &Vec<Vec<usize>>, a: usize, args: &Vec<i64>) -> (r: Vec<i64>)
     requires
         a < m.actions@.len(),
     ensures
@@ -409,90 +413,6 @@ fn transitions_of(m: &RawModel, c: &Conditions, s: &Vec<i64>, want: usize) -> (r
         a = a + 1;
     }
     Ok(found)
-}
-
-/// 入力の列の中に `(a, x)` がある。
-fn has_input(l: &Vec<(usize, Vec<i64>)>, a: usize, x: &Vec<i64>) -> (r: bool)
-    ensures
-        r ==> exists|k: int| 0 <= k < l@.len() && (#[trigger] l@[k]).0 == a && l@[k].1@ == x@,
-{
-    let mut k: usize = 0;
-    while k < l.len()
-        invariant
-            k <= l@.len(),
-        decreases l@.len() - k,
-    {
-        if l[k].0 == a && vec_eq(&l[k].1, x) {
-            assert(l@[k as int].0 == a && l@[k as int].1@ == x@);
-            return true;
-        }
-        k = k + 1;
-    }
-    false
-}
-
-/// 状態 `s` で有効な入力。操作の定義順に並び、同じ入力は1つにまとめる。空なら、`s` に有効な遷移はない。
-fn inputs_at(m: &RawModel, c: &Conditions, inj: &Vec<Vec<usize>>, s: &Vec<i64>) -> (r: Result<
-    Vec<(usize, Vec<i64>)>,
-    ModelError,
->)
-    ensures
-        match r {
-            Ok(l) => (forall|k: int|
-                0 <= k < l@.len() ==> accepts(*m, *c, inj@, s@, (#[trigger] l@[k]).0 as int, l@[k].1@)) && (l@.len()
-                == 0 ==> stuck(*m, *c, s@)),
-            Err(e) => e.state@ == s@ && model_error_at(*m, *c, e),
-        },
-{
-    let mut l: Vec<(usize, Vec<i64>)> = Vec::new();
-    let mut a: usize = 0;
-    while a < m.actions.len()
-        invariant
-            a <= m.actions@.len(),
-            forall|k: int| 0 <= k < l@.len() ==> accepts(*m, *c, inj@, s@, (#[trigger] l@[k]).0 as int, l@[k].1@),
-            l@.len() == 0 ==> forall|b: int| 0 <= b < a && #[trigger] act_on(*m, *c, b) ==> all_disabled(*m, b, s@),
-        decreases m.actions@.len() - a,
-    {
-        if act_on_exec(m, c, a) {
-            match enumerate(m, a, s) {
-                Enumerated::Fail(args, site, kind) => {
-                    return Err(ModelError { state: copy_vec(s), action: a, args, site, kind });
-                },
-                Enumerated::Ok(ts) => {
-                    let ghost l0 = l@;
-                    let mut j: usize = 0;
-                    while j < ts.len()
-                        invariant
-                            a < m.actions@.len(),
-                            act_on(*m, *c, a as int),
-                            enum_ok(*m, a as int, s@, ts@),
-                            j <= ts@.len(),
-                            forall|k: int|
-                                0 <= k < l@.len() ==> accepts(*m, *c, inj@, s@, (#[trigger] l@[k]).0 as int, l@[k].1@),
-                            l@.len() >= l0.len(),
-                            j > 0 ==> l@.len() > 0,
-                        decreases ts@.len() - j,
-                    {
-                        let tr = &ts[j];
-                        let x = input_of_exec(m, inj, a, &tr.args);
-                        assert(tr_sound(*m, a as int, s@, ts@[j as int]));
-                        assert(is_edge(*m, *c, s@, a as int, tr.args@, tr.output, tr.state@));
-                        if !has_input(&l, a, &x) {
-                            l.push((a, x));
-                        }
-                        j = j + 1;
-                    }
-                    proof {
-                        if l@.len() == 0 {
-                            lemma_enum_enabled(*m, a as int, s@, ts@);
-                        }
-                    }
-                },
-            }
-        }
-        a = a + 1;
-    }
-    Ok(l)
 }
 
 /// 候補 `cands` の先頭 `n` 個のどれでも、入力 `(a, x)` が有効である。
@@ -1397,6 +1317,90 @@ impl Session {
         self.cands = Candidates { states: next, hist: Ghost(h1) };
         ObserveOutcome::Continue
     }
+}
+
+/// 入力の列の中に `(a, x)` がある。
+pub(crate) fn has_input(l: &Vec<(usize, Vec<i64>)>, a: usize, x: &Vec<i64>) -> (r: bool)
+    ensures
+        r ==> exists|k: int| 0 <= k < l@.len() && (#[trigger] l@[k]).0 == a && l@[k].1@ == x@,
+{
+    let mut k: usize = 0;
+    while k < l.len()
+        invariant
+            k <= l@.len(),
+        decreases l@.len() - k,
+    {
+        if l[k].0 == a && vec_eq(&l[k].1, x) {
+            assert(l@[k as int].0 == a && l@[k as int].1@ == x@);
+            return true;
+        }
+        k = k + 1;
+    }
+    false
+}
+
+/// 状態 `s` で有効な入力。操作の定義順に並び、同じ入力は1つにまとめる。空なら、`s` に有効な遷移はない。
+pub(crate) fn inputs_at(m: &RawModel, c: &Conditions, inj: &Vec<Vec<usize>>, s: &Vec<i64>) -> (r: Result<
+    Vec<(usize, Vec<i64>)>,
+    ModelError,
+>)
+    ensures
+        match r {
+            Ok(l) => (forall|k: int|
+                0 <= k < l@.len() ==> accepts(*m, *c, inj@, s@, (#[trigger] l@[k]).0 as int, l@[k].1@)) && (l@.len()
+                == 0 ==> stuck(*m, *c, s@)),
+            Err(e) => e.state@ == s@ && model_error_at(*m, *c, e),
+        },
+{
+    let mut l: Vec<(usize, Vec<i64>)> = Vec::new();
+    let mut a: usize = 0;
+    while a < m.actions.len()
+        invariant
+            a <= m.actions@.len(),
+            forall|k: int| 0 <= k < l@.len() ==> accepts(*m, *c, inj@, s@, (#[trigger] l@[k]).0 as int, l@[k].1@),
+            l@.len() == 0 ==> forall|b: int| 0 <= b < a && #[trigger] act_on(*m, *c, b) ==> all_disabled(*m, b, s@),
+        decreases m.actions@.len() - a,
+    {
+        if act_on_exec(m, c, a) {
+            match enumerate(m, a, s) {
+                Enumerated::Fail(args, site, kind) => {
+                    return Err(ModelError { state: copy_vec(s), action: a, args, site, kind });
+                },
+                Enumerated::Ok(ts) => {
+                    let ghost l0 = l@;
+                    let mut j: usize = 0;
+                    while j < ts.len()
+                        invariant
+                            a < m.actions@.len(),
+                            act_on(*m, *c, a as int),
+                            enum_ok(*m, a as int, s@, ts@),
+                            j <= ts@.len(),
+                            forall|k: int|
+                                0 <= k < l@.len() ==> accepts(*m, *c, inj@, s@, (#[trigger] l@[k]).0 as int, l@[k].1@),
+                            l@.len() >= l0.len(),
+                            j > 0 ==> l@.len() > 0,
+                        decreases ts@.len() - j,
+                    {
+                        let tr = &ts[j];
+                        let x = input_of_exec(m, inj, a, &tr.args);
+                        assert(tr_sound(*m, a as int, s@, ts@[j as int]));
+                        assert(is_edge(*m, *c, s@, a as int, tr.args@, tr.output, tr.state@));
+                        if !has_input(&l, a, &x) {
+                            l.push((a, x));
+                        }
+                        j = j + 1;
+                    }
+                    proof {
+                        if l@.len() == 0 {
+                            lemma_enum_enabled(*m, a as int, s@, ts@);
+                        }
+                    }
+                },
+            }
+        }
+        a = a + 1;
+    }
+    Ok(l)
 }
 
 } // verus!

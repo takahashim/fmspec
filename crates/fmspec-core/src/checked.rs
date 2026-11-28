@@ -1,7 +1,7 @@
 //! IR検証を通ったモデル（`CheckedModel`）。フィールドは非公開で、`validate` を通らずには作れない。
 
 use crate::eval::ErrKind;
-use crate::model::RawModel;
+use crate::model::{RawModel, Type};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::terminal_spec;
 use crate::semantics::{check_contracts, check_invariants, eval_terminal, Conditions};
@@ -45,6 +45,35 @@ impl CheckedModel {
             use_type_invariant(self);
         }
         &self.raw
+    }
+
+    /// 操作の数。
+    pub fn n_actions(&self) -> (r: usize)
+        ensures
+            r == self@.actions@.len(),
+    {
+        self.raw.actions.len()
+    }
+
+    /// 操作 `a` の公開引数の数。`a` が操作の添字でなければ `None`。
+    pub fn n_params(&self, a: usize) -> (r: Option<usize>)
+        ensures
+            r matches Some(n) ==> a < self@.actions@.len() && n == self@.actions@[a as int].n_params,
+            r is None ==> a >= self@.actions@.len(),
+    {
+        if a < self.raw.actions.len() {
+            Some(self.raw.actions[a].n_params)
+        } else {
+            None
+        }
+    }
+
+    /// 状態のスロットの型。
+    pub fn state_types(&self) -> (r: &Vec<Type>)
+        ensures
+            *r == self@.state_types,
+    {
+        &self.raw.state_types
     }
 
     /// 初期状態の符号化列。1つ以上ある。

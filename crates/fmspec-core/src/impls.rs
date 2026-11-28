@@ -3,10 +3,10 @@
 //! Verus は再帰的な型や `Vec` を持つ型の `derive` に仕様を付けられないので、
 //! `verus!` の外に手で書く。ここにあるコードは証明の対象ではなく、判定の経路からも呼ばれない。
 
-use crate::evidence::{Certificate, Claim, Evidence, TraceStep};
+use crate::evidence::{Certificate, Claim, Evidence, RefClaim, RefEvidence, TraceStep};
 use crate::gate::Verdict;
 use crate::model::{Action, Contract, Expr, Output, RawModel, Update};
-use crate::refine::{RefClaim, RefEvidence, RefVerdict};
+use crate::refine::RefVerdict;
 use crate::semantics::Conditions;
 use crate::step::{Enumerated, Transition};
 use core::fmt;

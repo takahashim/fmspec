@@ -15,7 +15,7 @@ use fmspec_core::model::{Expr, RawModel, Value as CoreValue};
 use fmspec_core::model_lower::SMap;
 use fmspec_core::smodel::{SAction, SConst, SContract, SModel, SOutput, SUpdate};
 use fmspec_core::source::TExpr;
-use fmspec_core::sym::renamed_eq;
+use fmspec_core::sym_check::renamed_eq;
 use fmspec_core::typing::InvalidModel;
 use serde_json::{json, Value};
 use std::collections::HashSet;
