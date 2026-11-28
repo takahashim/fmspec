@@ -32,13 +32,15 @@ use crate::lower_types::{lemma_list_join_typed, lemma_lrows_typed, lemma_lt_type
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_tok_ext, lemma_tree_typed, lemma_typed_blk, lemma_typed_concat};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_xetys_of, lenv, slot_tys, tok, ty_post, typed, xetys};
+use crate::lower_types::{lemma_xetys_of, lenv, slot_tys, tok, typed, xetys};
+#[cfg(verus_keep_ghost)]
+use crate::lowering::low_ok;
 use crate::lowering::{element, low, sub_scalar};
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_join_pure, lemma_lits, lemma_pure_mono};
+use crate::preserve::lemma_tree_pure;
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_tree_pure, lowers};
+use crate::preserve::{lemma_extends_trans, lemma_join_pure, lemma_lits, lemma_pure_mono};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_list::{defaults_s, hit_at, lemma_at, lemma_first, lemma_last};
 #[cfg(verus_keep_ghost)]
@@ -58,7 +60,7 @@ use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_flat_shape, le
 #[cfg(verus_keep_ghost)]
 use crate::total::{lemma_lim_ok_seq_at, lemma_list_rows_shape, lemma_ok_list, lemma_ok_to_x};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_sc_wf_mono, lemma_select_shape, lim_ok, low_post, sctx, tpre};
+use crate::total::{lemma_sc_wf_mono, lemma_select_shape, lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 #[cfg(verus_keep_ghost)]
@@ -149,11 +151,7 @@ pub(crate) fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
         old(blk).wf(),
         e is ListLit,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -319,11 +317,7 @@ pub(crate) fn low_list_contains(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, b
         old(blk).wf(),
         e is ListContains,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -515,11 +509,7 @@ pub(crate) fn low_list_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
         old(blk).wf(),
         e is At || e is First || e is Last,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     match e {
@@ -541,11 +531,7 @@ pub(crate) fn low_at(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Bl
         old(blk).wf(),
         e is At,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -681,11 +667,7 @@ pub(crate) fn low_first_last(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk:
         old(blk).wf(),
         e is First || e is Last,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -833,11 +815,7 @@ pub(crate) fn low_list_update(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk
         old(blk).wf(),
         e is Push || e is Pop || e is Shift,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     match e {
@@ -859,11 +837,7 @@ pub(crate) fn low_push(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         old(blk).wf(),
         e is Push,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -997,11 +971,7 @@ pub(crate) fn low_pop_shift(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: 
         old(blk).wf(),
         e is Pop || e is Shift,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;

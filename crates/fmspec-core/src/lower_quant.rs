@@ -31,13 +31,15 @@ use crate::lower_types::{lemma_map_flags_typed, lemma_tok_ext, lemma_top_typed, 
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_typed_ext, lemma_xetys_of, lenv, ok_x, sc_wf, shaped, slot_tys, tok};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{tok_in, ty_post, typed, xetys};
+use crate::lower_types::{tok_in, typed, xetys};
+#[cfg(verus_keep_ghost)]
+use crate::lowering::low_ok;
 use crate::lowering::{bool_in, low};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_pure_mono, lowers};
+use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{combine_ok, lemma_over_list, lemma_over_map, lemma_over_set};
 #[cfg(verus_keep_ghost)]
@@ -53,7 +55,7 @@ use crate::stype_exec::{copy_stype, keys_exec, stype_eq, stype_width, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::total::{bound_tys, deep, here_ok, lemma_all_pure_mono, lemma_ok_to_x, lemma_sc_wf_mono};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok, low_post, n_ok_set, ok_s, quant_bound, sctx, tpre};
+use crate::total::{lim_ok, n_ok_set, ok_s, quant_bound, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -756,11 +758,7 @@ pub(crate) fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
         old(blk).wf(),
         e is Quant,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 2nat,
 {
     let (all, _over, body) = match e {

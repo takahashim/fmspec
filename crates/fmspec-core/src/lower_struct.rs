@@ -21,11 +21,13 @@ use crate::lower_types::{blt, has_ty, lemma_check_typed, lemma_lim_x_small, lemm
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_typed_blk, lemma_typed_concat, lemma_typed_sub, lemma_xetys_of};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_xetys_part, lenv, tok, ty_post, typed, xetys, xetys_seq};
+use crate::lower_types::{lemma_xetys_part, lenv, tok, typed, xetys, xetys_seq};
+#[cfg(verus_keep_ghost)]
+use crate::lowering::low_ok;
 use crate::lowering::{copy_usizes, low};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_lits, lowers};
+use crate::preserve::{lemma_extends_trans, lemma_lits};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_tuple::{lemma_is_some, lemma_none, lemma_part, lemma_seq_base, lemma_seq_step};
 #[cfg(verus_keep_ghost)]
@@ -38,7 +40,7 @@ use crate::stype_exec::{copy_xtype, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_sc_wf_mono};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok, low_post, sctx, tpre};
+use crate::total::{lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
@@ -53,11 +55,7 @@ pub(crate) fn low_struct(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         old(blk).wf(),
         e is Tuple || e is Record || e is Nth || e is Field || e is None || e is Some || e is IsSome || e is IsNone || e is Unwrap,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 2nat,
 {
     match e {
@@ -74,11 +72,7 @@ pub(crate) fn low_tuple(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
         old(blk).wf(),
         e is Tuple || e is Record,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s());
@@ -226,11 +220,7 @@ pub(crate) fn low_proj(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         old(blk).wf(),
         e is Nth || e is Field,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -347,11 +337,7 @@ pub(crate) fn low_opt(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         old(blk).wf(),
         e is None || e is Some || e is IsSome || e is IsNone || e is Unwrap,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s());
@@ -375,11 +361,7 @@ pub(crate) fn low_none(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         old(blk).wf(),
         e is None,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -451,11 +433,7 @@ pub(crate) fn low_some(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         old(blk).wf(),
         e is Some,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -513,11 +491,7 @@ pub(crate) fn low_is_some(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         old(blk).wf(),
         e is IsSome || e is IsNone,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -576,11 +550,7 @@ pub(crate) fn low_unwrap(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         old(blk).wf(),
         e is Unwrap,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;

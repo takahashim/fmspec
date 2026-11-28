@@ -28,7 +28,9 @@ use crate::lower_types::{lemma_ge0_typed, lemma_has_ty_blk, lemma_ite_rows_typed
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_map_rows_typed, lemma_mrows_typed, lemma_tok_ext, lemma_typed_blk};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_xetys_of, lenv, shaped, slot_tys, tok, ty_post, typed, xetys};
+use crate::lower_types::{lemma_xetys_of, lenv, shaped, slot_tys, tok, typed, xetys};
+#[cfg(verus_keep_ghost)]
+use crate::lowering::low_ok;
 use crate::lowering::{element, element_rank, lookup_rank, low};
 use crate::map_lookup::select_flat_map_lookup;
 use crate::maps::map_rows;
@@ -36,7 +38,7 @@ use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_fresh_push, lemma_lits, lemma_pure_mono, lowers};
+use crate::preserve::{lemma_extends_trans, lemma_fresh_push, lemma_lits, lemma_pure_mono};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_map::{lemma_delete, lemma_get, lemma_has_key, lemma_keys, lemma_maplit_base};
 #[cfg(verus_keep_ghost)]
@@ -54,9 +56,9 @@ use crate::total::{bound_tys, deep, here_ok, items_ok, lemma_all_pure_mono, lemm
 #[cfg(verus_keep_ghost)]
 use crate::total::{lemma_heads_pure, lemma_ite_rows_shape, lemma_items_ok_at, lemma_items_ok_intro};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_mrows_shape, lemma_ok_map, lemma_put_pre, lemma_sc_wf_mono, lim_ok};
+use crate::total::{lemma_mrows_shape, lemma_ok_map, lemma_put_pre, lemma_sc_wf_mono, lim_ok, ok_s};
 #[cfg(verus_keep_ghost)]
-use crate::total::{low_post, ok_s, ok_s_o, put_pre, sctx, tpre};
+use crate::total::{ok_s_o, put_pre, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
@@ -230,11 +232,7 @@ pub(crate) fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         old(blk).wf(),
         e is MapLit,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -375,11 +373,7 @@ pub(crate) fn low_get(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         old(blk).wf(),
         e is Get,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -518,11 +512,7 @@ pub(crate) fn low_map_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk:
         old(blk).wf(),
         e is HasKey || e is Put || e is Delete || e is Keys,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -586,11 +576,7 @@ pub(crate) fn low_has_key(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         old(blk).wf(),
         e is HasKey,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -711,11 +697,7 @@ pub(crate) fn low_delete(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         old(blk).wf(),
         e is Delete,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -840,11 +822,7 @@ pub(crate) fn low_keys(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         old(blk).wf(),
         e is Keys,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;

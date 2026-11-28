@@ -75,6 +75,25 @@ use vstd::prelude::*;
 
 verus! {
 
+/// 下ろしの関数の事後条件。型が付き大きさの条件を満たす式なら型の誤りで失敗せず（`low_post`）、
+/// 文脈に型が付くならスロットの式に型が付き（`ty_post`）、束縛の列は伸びるだけで、局所変数の束縛は元に戻り、
+/// 結果のスロットは式の意味を表す（`lowers`）。
+pub open spec fn low_ok(
+    e: TExpr,
+    cx: LowerCtx,
+    sc0: Seq<Bound>,
+    sc1: Seq<Bound>,
+    b0: Block,
+    b1: Block,
+    r: Result<(XType, Vec<Expr>), Fail>,
+) -> bool {
+    &&& tpre(e, cx, sc0, b0.depth_s()) ==> low_post(e, cx, sc0, b1.depth_s(), r)
+    &&& tpre(e, cx, sc0, b0.depth_s()) && tok(cx, sc0, b0) ==> ty_post(cx, b1, r)
+    &&& extends(b0, b1)
+    &&& r is Ok ==> sc1 == sc0
+    &&& r matches Ok((t, slots)) ==> lowers(e, cx, sc0, b0, b1, xty(t), slots@)
+}
+
 /// 状態変数や引数のスロット。`kind` は 0 が遷移前の状態変数、1 が遷移後の状態変数、2 が引数。
 pub(crate) fn layout_slots(l: &Layout, kind: u8, enums: &Vec<i64>) -> (r: Option<(XType, Vec<Expr>)>)
     ensures
@@ -260,11 +279,7 @@ pub(crate) fn low(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block
     requires
         old(blk).wf(),
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 3nat,
 {
     match e {
@@ -654,11 +669,7 @@ fn low_coll(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
         old(blk).wf(),
         e is SetContains || e is ListContains || e is Insert || e is Remove || e is SetBin || e is Size || e is IsEmpty,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     match e {
@@ -676,11 +687,7 @@ fn low_size(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) -> (
         old(blk).wf(),
         e is Size || e is IsEmpty,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let enums = &cx.enums;
@@ -921,11 +928,7 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
         old(blk).wf(),
         e is HasKey || e is Get || e is Put || e is Delete || e is Keys || e is At || e is First || e is Last || e is Push || e is Pop || e is Shift,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 2nat,
 {
     match e {

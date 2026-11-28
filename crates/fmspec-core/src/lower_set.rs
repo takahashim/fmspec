@@ -19,13 +19,15 @@ use crate::lower_types::{all_ty, blt, has_ty, lemma_and_typed, lemma_bools_typed
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_has_ty_blk, lemma_tok_ext, lemma_tree_typed, lemma_typed_blk};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{lemma_typed_bools, lenv, tok, ty_post, xetys};
+use crate::lower_types::{lemma_typed_bools, lenv, tok, xetys};
+#[cfg(verus_keep_ghost)]
+use crate::lowering::low_ok;
 use crate::lowering::{element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
 use crate::model::{BinOp, Expr};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{lemma_extends_trans, lemma_tree_pure, lowers};
+use crate::preserve::{lemma_extends_trans, lemma_tree_pure};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_insert, lemma_remove, lemma_set_contains, lemma_setbin};
 #[cfg(verus_keep_ghost)]
@@ -39,7 +41,7 @@ use crate::stype_exec::{copy_stype, keys_exec, keys_or_zero_exec, stype_eq, xtyp
 #[cfg(verus_keep_ghost)]
 use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_mark_pure};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lemma_sc_wf_mono, lemma_setop_pure, lim_ok, low_post, sctx, tpre};
+use crate::total::{lemma_sc_wf_mono, lemma_setop_pure, lim_ok, sctx, tpre};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -76,11 +78,7 @@ pub(crate) fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         old(blk).wf(),
         e is SetLit,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 1nat,
 {
     let enums = &cx.enums;
@@ -220,11 +218,7 @@ pub(crate) fn low_member(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         old(blk).wf(),
         e is SetContains,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s());
@@ -307,11 +301,7 @@ pub(crate) fn low_setop(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
         old(blk).wf(),
         e is Insert || e is Remove || e is SetBin,
     ensures
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) ==> low_post(*e, *cx, old(sc)@, final(blk).depth_s(), r),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> ty_post(*cx, *final(blk), r),
-        extends(*old(blk), *final(blk)),
-        r is Ok ==> final(sc)@ == old(sc)@,
-        r matches Ok((t, slots)) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(t), slots@),
+        low_ok(*e, *cx, old(sc)@, final(sc)@, *old(blk), *final(blk), r),
     decreases e, 0nat,
 {
     let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s());
