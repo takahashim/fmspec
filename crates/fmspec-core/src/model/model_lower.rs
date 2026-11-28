@@ -6,7 +6,15 @@
 //! 下ろしが成功すれば、中核のモデルの安全性は値の上のモデルの安全性と一致する（[`lowers_model`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::kernel::eval::ErrKind;
+use crate::kernel::eval::{Env, ErrKind};
+#[cfg(verus_keep_ghost)]
+use crate::kernel::model::Value;
+#[cfg(verus_keep_ghost)]
+use crate::slot::preserve::{stored_result, top_ok};
+#[cfg(verus_keep_ghost)]
+use crate::value::encoding::width;
+#[cfg(verus_keep_ghost)]
+use crate::value::source::SEnv;
 use crate::kernel::expr_copy::copy_expr;
 use crate::kernel::model::{Action, Contract, Expr, RawModel};
 #[cfg(verus_keep_ghost)]
@@ -64,6 +72,50 @@ verus! {
 pub struct SMap {
     pub expr: crate::value::source::TExpr,
     pub ty: SType,
+}
+
+/// 写像の式の、置く場所の型の列。
+pub open spec fn map_tys(maps: Seq<SMap>) -> Seq<STy> {
+    Seq::new(maps.len(), |q: int| sty(maps[q].ty))
+}
+
+/// 写像のスロットの式の列 `f` のうち、`q` 番目の写像の式を下ろした部分。
+pub open spec fn map_block(maps: Seq<SMap>, f: Seq<Expr>, q: int, enums: Seq<i64>) -> Seq<Expr> {
+    let o = width_sum(map_tys(maps).take(q), enums) as int;
+    f.subrange(o, o + width(map_tys(maps)[q], enums))
+}
+
+/// `f` の先頭は、写像 `maps` の先頭の `n` 個の式を、状態だけを参照する文脈 `mx` で置く値として下ろした式をつないだ列である。
+pub open spec fn maps_prefix(mx: LowerCtx, maps: Seq<SMap>, f: Seq<Expr>, n: int) -> bool {
+    forall|q: int, env: Env, se: SEnv|
+        0 <= q < n && #[trigger] top_ok(mx, env, se, Seq::empty(), 0) ==> #[trigger] stored_result(
+            eval_src(maps[q].expr, se, Seq::empty()),
+            map_block(maps, f, q, mx.enums@),
+            env,
+            Seq::empty(),
+            map_tys(maps)[q],
+            se.enums,
+        )
+}
+
+/// `f` は、写像 `maps` の各式を、状態だけを参照する文脈 `mx` で置く値として下ろした式をつないだ列である。
+pub open spec fn maps_low(mx: LowerCtx, maps: Seq<SMap>, f: Seq<Expr>) -> bool {
+    &&& f.len() == width_sum(map_tys(maps), mx.enums@)
+    &&& maps_prefix(mx, maps, f, maps.len() as int)
+}
+
+/// 中核のモデル `m` は、モデル `sm` を下ろしたもので、写像のスロットの式 `f` は、写像 `maps` を下ろしたものである。
+pub open spec fn lowers_with_maps(sm: SModel, maps: Seq<SMap>, m: RawModel, f: Seq<Expr>) -> bool {
+    exists|cv: Seq<SVal>, st: Seq<Layout>, cs: Seq<LowerCtx>, ks: Seq<LowerCtx>, sx: LowerCtx, mx: LowerCtx|
+        #[trigger] model_ok(sm, cv, m, st, cs, ks, sx) && consts_ok(sm, cv) && ctx_is(
+            mx,
+            sm.enums@,
+            cv,
+            st,
+            Seq::empty(),
+            false,
+            None,
+        ) && #[trigger] maps_low(mx, maps, f)
 }
 
 /// 中核のモデル `m` の安全性は、定数の値が `cv` のモデル `sm` の安全性と一致する。
@@ -626,6 +678,7 @@ fn lower_props(sm: &SModel, cx: &LowerCtx) -> (r: Result<(Vec<Expr>, Option<Expr
 pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, Vec<Expr>), LowerError>)
     ensures
         r matches Ok((m, _)) ==> lowers_model(*sm, m),
+        r matches Ok((m, f)) ==> lowers_with_maps(*sm, maps@, m, f@),
         r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)) || (e is Mapping && maps@.len() > 0),
         r matches Ok((m, _)) ==> sm_wf(*sm) ==> wf_frame(m),
         r matches Ok((m, _)) ==> sm_wf(*sm) ==> crate::kernel::typing::wf(m),
@@ -757,6 +810,11 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
     cx.args = Vec::new();
     cx.next = false;
     cx.out = None;
+    let ghost mx = cx;
+    proof {
+        assert(ctx_is(mx, sm.enums@, cv, stg, Seq::empty(), false, None));
+        assert(map_tys(maps@).take(0) =~= Seq::<STy>::empty());
+    }
     let mut slots: Vec<Expr> = Vec::new();
     let mut q: usize = 0;
     while q < maps.len()
@@ -764,18 +822,41 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
             q <= maps@.len(),
             lowers_model(*sm, m),
             sm_wf(*sm) ==> wf_frame(m) && crate::kernel::typing::wf(m),
+            model_ok(*sm, cv, m, stg, cs, ks, sx),
+            consts_ok(*sm, cv),
+            ctx_is(mx, sm.enums@, cv, stg, Seq::empty(), false, None),
+            cx == mx,
+            m.enums@ == sm.enums@,
+            slots@.len() == width_sum(map_tys(maps@).take(q as int), sm.enums@),
+            maps_prefix(mx, maps@, slots@, q as int),
         decreases maps@.len() - q,
     {
         match lower_stored(&maps[q].expr, &cx, &maps[q].ty, 0) {
             Ok(out) => {
+                let w = match stype_width(&maps[q].ty, &m.enums) {
+                    Some(w) => w,
+                    None => return Err(LowerError::Mapping(q)),
+                };
+                if out.len() != w {
+                    return Err(LowerError::Mapping(q));
+                }
+                let ghost before = slots@;
                 let mut j: usize = 0;
                 while j < out.len()
                     invariant
                         j <= out@.len(),
+                        slots@ == before + out@.take(j as int),
                     decreases out@.len() - j,
                 {
                     slots.push(copy_expr(&out[j]));
+                    proof {
+                        assert(out@.take(j + 1) =~= out@.take(j as int).push(out@[j as int]));
+                    }
                     j += 1;
+                }
+                proof {
+                    assert(out@.take(j as int) =~= out@);
+                    lemma_maps_step(mx, maps@, before, out@, slots@, q as int);
                 }
             },
             Err(Fail::Depth) => {
@@ -787,7 +868,73 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         }
         q += 1;
     }
+    proof {
+        assert(map_tys(maps@).take(q as int) =~= map_tys(maps@));
+        assert(maps_low(mx, maps@, slots@));
+        assert(model_ok(*sm, cv, m, stg, cs, ks, sx));
+    }
     Ok((m, slots))
+}
+
+/// 写像の式を1つ下ろして列を延ばすと、下ろした式の数が1つ増える。
+proof fn lemma_maps_step(mx: LowerCtx, maps: Seq<SMap>, before: Seq<Expr>, out: Seq<Expr>, after: Seq<Expr>, q: int)
+    requires
+        0 <= q < maps.len(),
+        maps_prefix(mx, maps, before, q),
+        before.len() == width_sum(map_tys(maps).take(q), mx.enums@),
+        after == before + out,
+        out.len() == width(sty(maps[q].ty), mx.enums@),
+        forall|env: Env, se: SEnv, ls: Seq<Value>|
+            #[trigger] top_ok(mx, env, se, ls, 0) ==> stored_result(
+                eval_src(maps[q].expr, se, Seq::empty()),
+                out,
+                env,
+                ls,
+                sty(maps[q].ty),
+                se.enums,
+            ),
+    ensures
+        maps_prefix(mx, maps, after, q + 1),
+        after.len() == width_sum(map_tys(maps).take(q + 1), mx.enums@),
+{
+    let enums = mx.enums@;
+    let ts = map_tys(maps);
+    assert(ts.take(q + 1).drop_last() =~= ts.take(q));
+    assert(ts.take(q + 1).last() == ts[q]);
+    assert(ts[q] == sty(maps[q].ty));
+    assert(map_block(maps, after, q, enums) =~= out);
+    assert(after.subrange(0, before.len() as int) =~= before);
+    assert forall|p: int, env: Env, se: SEnv|
+        0 <= p < q + 1 && #[trigger] top_ok(mx, env, se, Seq::empty(), 0) implies #[trigger] stored_result(
+            eval_src(maps[p].expr, se, Seq::empty()),
+            map_block(maps, after, p, enums),
+            env,
+            Seq::empty(),
+            ts[p],
+            se.enums,
+        ) by {
+        if p < q {
+            crate::model::srel::lemma_width_take(ts, p + 1, q, enums);
+            lemma_map_block_prefix(maps, before, after, p, q, enums);
+        }
+    }
+}
+
+/// 先頭の写像の部分は、列を後ろに延ばしても変わらない。
+proof fn lemma_map_block_prefix(maps: Seq<SMap>, a: Seq<Expr>, b: Seq<Expr>, p: int, q: int, enums: Seq<i64>)
+    requires
+        0 <= p < q <= maps.len(),
+        a.len() == width_sum(map_tys(maps).take(q), enums),
+        a.len() <= b.len(),
+        b.subrange(0, a.len() as int) == a,
+        width_sum(map_tys(maps).take(p + 1), enums) <= width_sum(map_tys(maps).take(q), enums),
+    ensures
+        map_block(maps, b, p, enums) == map_block(maps, a, p, enums),
+{
+    let ts = map_tys(maps);
+    assert(ts.take(p + 1).drop_last() =~= ts.take(p));
+    assert(ts.take(p + 1).last() == ts[p]);
+    assert(map_block(maps, b, p, enums) =~= map_block(maps, a, p, enums));
 }
 
 } // verus!

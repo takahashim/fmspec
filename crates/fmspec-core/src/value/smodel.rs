@@ -104,7 +104,7 @@ pub open spec fn consts_ok(sm: SModel, cv: Seq<SVal>) -> bool {
         ) == Ok::<SVal, ErrKind>(cv[i]) && member(cv[i], sty(sm.consts@[i].ty), sm.enums@)
 }
 
-proof fn lemma_consts_prefix(sm: SModel, a: Seq<SVal>, b: Seq<SVal>, i: int)
+pub proof fn lemma_consts_prefix(sm: SModel, a: Seq<SVal>, b: Seq<SVal>, i: int)
     requires
         consts_ok(sm, a),
         consts_ok(sm, b),

@@ -102,7 +102,7 @@ proof fn lemma_env_act(
 }
 
 /// 状態の性質の環境の対応。
-proof fn lemma_env_inv(sm: SModel, cv: Seq<SVal>, m: RawModel, st: Seq<Layout>, sx: LowerCtx, s: Seq<SVal>, y: Seq<i64>)
+pub(crate) proof fn lemma_env_inv(sm: SModel, cv: Seq<SVal>, m: RawModel, st: Seq<Layout>, sx: LowerCtx, s: Seq<SVal>, y: Seq<i64>)
     requires
         ctx_is(sx, sm.enums@, cv, st, Seq::empty(), false, None),
         rel(st, s, m.state_types@, y, sm.enums@),
@@ -208,7 +208,7 @@ pub open spec fn arg_codes(sm: SModel, a: int, vs: Seq<SVal>) -> Seq<i64> {
 }
 
 /// 値の引数の符号は、引数の値を表し、ドメインに従う。
-proof fn lemma_arg_codes(
+pub(crate) proof fn lemma_arg_codes(
     sm: SModel,
     cv: Seq<SVal>,
     m: RawModel,
@@ -232,7 +232,7 @@ proof fn lemma_arg_codes(
 }
 
 /// 正規形の中核の引数は、値の引数を表す。
-proof fn lemma_core_args(
+pub(crate) proof fn lemma_core_args(
     sm: SModel,
     cv: Seq<SVal>,
     m: RawModel,
@@ -270,7 +270,7 @@ proof fn lemma_core_args(
 // ---- 遷移と状態の対応 ----
 
 /// 値を表す状態と引数での遷移は対応し、安全性も一致する。
-proof fn lemma_trans(
+pub(crate) proof fn lemma_trans(
     sm: SModel,
     cv: Seq<SVal>,
     m: RawModel,
@@ -467,7 +467,7 @@ proof fn lemma_state_safe(
 // ---- 到達可能性の対応 ----
 
 /// 中核の到達可能な状態は、到達可能な値の状態を表す。
-proof fn lemma_reach_core(
+pub(crate) proof fn lemma_reach_core(
     sm: SModel,
     cv: Seq<SVal>,
     m: RawModel,
@@ -513,7 +513,7 @@ proof fn lemma_reach_core(
 }
 
 /// 到達可能な値の状態は、到達可能な中核の状態に表される。
-proof fn lemma_reach_src(
+pub(crate) proof fn lemma_reach_src(
     sm: SModel,
     cv: Seq<SVal>,
     m: RawModel,
