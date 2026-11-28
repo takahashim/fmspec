@@ -300,10 +300,10 @@ VERUS_MUTANTS = [
   ["action_lower.rs", "if out.len() != 1 {", "if out.len() == 0 {", "出力のスロットの数を確かめない"],
   ["action_lower.rs", "SType::Int(lo, hi) => Type::Int(*lo, *hi),", "SType::Int(lo, hi) => Type::Int(*lo, *lo),", "出力の整数の範囲を変える"],
   ["action_lower.rs", "let domains = slot_types_list(&sa.args, &cx.enums);", "let domains: Vec<Type> = Vec::new();", "操作のドメインを空にする"],
-  ["model_lower.rs", "            Ok(false) => {},\n            Ok(true) => {", "            Ok(true) => {},\n            Ok(false) => {", "初期条件が偽の状態を残す"],
-  ["model_lower.rs", "let x = concat_codes(&ps[p], &cs[q]);", "let x = concat_codes(&cs[q], &ps[p]);", "候補の符号を逆の順につなぐ"],
-  ["model_lower.rs", "if k < out.len() && vec_eq(&out[k], &x) {", "if k < out.len() {", "等しくない候補を捨てる"],
-  ["model_lower.rs", "    if out.len() == 0 {\n        return Err(Fault::Lower);", "    if out.len() == usize::MAX {\n        return Err(Fault::Lower);", "スロットのない値を評価済みとする"],
+  ["model_init.rs", "            Ok(false) => {},\n            Ok(true) => {", "            Ok(true) => {},\n            Ok(false) => {", "初期条件が偽の状態を残す"],
+  ["model_init.rs", "let x = concat_codes(&ps[p], &cs[q]);", "let x = concat_codes(&cs[q], &ps[p]);", "候補の符号を逆の順につなぐ"],
+  ["model_init.rs", "if k < out.len() && vec_eq(&out[k], &x) {", "if k < out.len() {", "等しくない候補を捨てる"],
+  ["model_init.rs", "    if out.len() == 0 {\n        return Err(Fault::Lower);", "    if out.len() == usize::MAX {\n        return Err(Fault::Lower);", "スロットのない値を評価済みとする"],
   ["model_lower.rs", "cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: vals });", "cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: Vec::new() });", "定数のスロットを空にする"],
   ["model_lower.rs", "    cx.next = true;", "    cx.next = false;", "遷移契約から遷移後の状態を参照できなくする"],
   ["model_lower.rs", "Some(o) => Some(copy_stype(&o.ty)),", "Some(_) => None,", "遷移契約から出力を参照できなくする"],
@@ -311,7 +311,7 @@ VERUS_MUTANTS = [
   ["model_lower.rs", "if !(wf_stype_exec(&ts[i], enums) && small_stype(&ts[i])) {", "if !wf_stype_exec(&ts[i], enums) {", "Listの長さの上限を確かめない"],
   ["slot_types.rs", "out.push(Type::Int(0, *max as i64));", "out.push(Type::Int(1, *max as i64));", "スロットの型の実装でListの長さから0を除く"],
   ["model_lower.rs", "    if !check_model(sm) {\n        return Err(LowerError::Type);", "    if false {\n        return Err(LowerError::Type);", "下ろしの前にモデルの型を確かめない"],
-  ["model_lower.rs", "        Err(Fail::Depth) => return Err(Fault::Depth),", "        Err(Fail::Depth) => return Err(Fault::Lower),", "値の式の深さの上限を内部の誤りにする"],
+  ["model_init.rs", "        Err(Fail::Depth) => return Err(Fault::Depth),", "        Err(Fail::Depth) => return Err(Fault::Lower),", "値の式の深さの上限を内部の誤りにする"],
   ["action_lower.rs", "        Err(Fail::Depth) => return Err(LowerError::Depth),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "        Err(Fail::Depth) => return Err(LowerError::Guard(a)),\n        Err(Fail::Type) => return Err(LowerError::Guard(a)),", "guardの深さの上限を内部の誤りにする"],
   ["lower_list.rs", "                    if rows.len() > 0 {\n                        out.push(defs);\n                    }", "                    out.push(defs);", "上限0のListの `shift` に既定の行を加える"],
   ["refine.rs", "                if !is_initial(a, &x) {\n                    return Some(Reject::Refine(RefReject::InitialNotMapped(i)));\n                }\n", "",
@@ -349,9 +349,9 @@ VERUS_MUTANTS = [
   ["ir_check.rs", "            if !check_user_guard(j, &es[idx.len()], ns, np, nc) {", "            if false {", "動的ドメインのあとの guard を確かめない"],
   ["ir_check.rs", "            if a != con.action {", "            if false {", "遷移契約の操作を確かめない"],
   ["ir_check.rs", "        || !distinct_exec(&ns.actions) || !distinct_exec(&ns.fields) {", "        || !distinct_exec(&ns.fields) {", "操作の名前の重複を確かめない"],
-  ["ir_check.rs", "            return Some(i);\n        }\n        i += 1;\n    }\n    proof {\n        lemma_index_of(s, x@, i as int);", "            return Some(0);\n        }\n        i += 1;\n    }\n    proof {\n        lemma_index_of(s, x@, i as int);", "名前の位置を常に0にする"],
+  ["ir_json.rs", "            return Some(i);\n        }\n        i += 1;\n    }\n    proof {\n        lemma_index_of(s, x@, i as int);", "            return Some(0);\n        }\n        i += 1;\n    }\n    proof {\n        lemma_index_of(s, x@, i as int);", "名前の位置を常に0にする"],
   ["ir_check.rs", "(Some(x), None) => inits.len() == 1 && check_top(x, &inits[0], ns, 0, 0),", "(Some(x), None) => inits.len() >= 1 && check_top(x, &inits[0], ns, 0, 0),", "initial の候補を1つに限らない"],
-  ["ir_check.rs", "Json::Int(n) => *n >= 0 && (*n as u128) == (x as u128),", "Json::Int(n) => (*n as u128) == (x as u128),", "負の数を添字として受け入れる"]
+  ["ir_json.rs", "Json::Int(n) => *n >= 0 && (*n as u128) == (x as u128),", "Json::Int(n) => (*n as u128) == (x as u128),", "負の数を添字として受け入れる"]
 ].freeze
 
 # 到達点に置く assert(false)。[ファイル, 直前に挿入する位置の文字列, 説明]。
@@ -460,9 +460,9 @@ VERUS_CANARIES = [
   ["model_safe.rs", "    lemma_env_act(sm, cv, m, st, cs[a], a, p, ps, vs, xs);", "lemma_trans の環境"],
   ["model_safe.rs", "    if safe(m, c) {", "lemma_safe"],
   ["model_safe.rs", "        lemma_reach_core(sm, cv, m, st, cs, ks, sx, c, q, (n - 1) as nat);", "lemma_reach_core の帰納"],
-  ["model_lower.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
+  ["model_init.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
   ["model_lower.rs", "        lemma_init_ok(*sm, cv, m, stg, sx, psg, cc);", "lower_model の結論"],
-  ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"],
+  ["model_init.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"],
   ["model_lower.rs", "            crate::model_wf::lemma_cx_tok(*cx, cv, stys(sm.states@), stys(sa.args@));\n            assert(out_sty(*sa)", "lower_contracts の文脈"],
   ["action_lower.rs", "                lemma_upd_pre(*sa, *cx, u as int);", "lower_action の代入の前提"],
   ["refine.rs", "        assert(ref_state_ok(b, cb, a, f, cert[j]@));\n    }\n}", "lemma_cert_refines の遷移"],
@@ -484,7 +484,7 @@ VERUS_CANARIES = [
   ["ir_check.rs", "            lemma_doms_step(xs, i as int);", "domains のループ"],
   ["ir_check.rs", "                lemma_index_of_bound(strs(ns.actions@), an@);", "check_contract の操作"],
   ["ir_check.rs", "    Some(lower_model_map(sm, maps))", "lower_checked"],
-  ["ir_check.rs", "        assert(a@.subrange(0, a@.len() as int) =~= a@);", "copy_chars"],
+  ["ir_json.rs", "        assert(a@.subrange(0, a@.len() as int) =~= a@);", "copy_chars"],
   ["ir.rs", "                vstd::std_specs::vec::axiom_vec_index_decreases(ms, i);", "lemma_get_dec"]
 ].freeze
 

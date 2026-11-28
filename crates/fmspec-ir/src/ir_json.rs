@@ -3,7 +3,7 @@
 //! `serde_json::Value` を中核の [`Json`] に機械的に写す。ここは信頼基盤に含まれるので、
 //! 名前の解決や意味の判断を含めない。
 
-use fmspec_core::ir::{IrNames, Json, Member};
+use fmspec_core::ir_json::{IrNames, Json, Member};
 use serde_json::Value;
 
 fn chars(s: &str) -> Vec<char> {

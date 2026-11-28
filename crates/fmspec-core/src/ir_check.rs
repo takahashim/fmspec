@@ -3,9 +3,23 @@
 //! [`check_ir`] が真を返すなら、[`crate::ir::ir_rel`] が成り立つ。
 //! [`lower_checked`] は、対応を確かめてからモデルを下ろす。
 
-use crate::action_lower::LowerError;
 use crate::encoding::SType;
-use crate::ir::*;
+#[cfg(verus_keep_ghost)]
+use crate::ir::{act_ctx, action_rel, binds_rel, const_rel, contract_rel, doms, enum_rel, ECtx};
+#[cfg(verus_keep_ghost)]
+use crate::ir::{ex_at, ex_rel, exs_rel, field_rel, field_ty_rel, form_rel, guard_rel};
+#[cfg(verus_keep_ghost)]
+use crate::ir::{invariant_rel, ir_rel, lemma_arr_dec, lemma_get_dec, lemma_one_dec, member_rel};
+#[cfg(verus_keep_ghost)]
+use crate::ir::{name_is, op_form, opt_ex_rel, over_rel, state_rel, ty_at, ty_rel, tys_rel};
+#[cfg(verus_keep_ghost)]
+use crate::ir::{update_rel, user_guard_rel};
+use crate::ir_json::str_exec;
+#[cfg(verus_keep_ghost)]
+use crate::ir_json::{arr, at, distinct, get, index_of, names_ok, one, opt_arr, str_of, strs};
+use crate::ir_json::{arr_exec, chars_eq, copy_chars, distinct_exec, eqk, get_exec, index_of_exec};
+use crate::ir_json::{is_empty_obj, is_nat, last_of_exec, one_exec, present, IrNames, Json};
+use crate::lower_error::LowerError;
 use crate::model::{BinOp, Expr, RawModel, Value};
 use crate::model_lower::{lower_model_map, SMap};
 use crate::smodel::{SAction, SModel};
@@ -13,367 +27,6 @@ use crate::source::{Over, SetOp, TExpr};
 use vstd::prelude::*;
 
 verus! {
-
-// ---- 文字列 ----
-
-/// 文字の列が、ASCIIの文字列リテラル `s` と等しい。
-fn eqk(a: &Vec<char>, s: &str) -> (r: bool)
-    requires
-        s.is_ascii(),
-    ensures
-        r == (a@ == s@),
-{
-    let n = s.unicode_len();
-    if a.len() != n {
-        return false;
-    }
-    let mut i = 0;
-    while i < n
-        invariant
-            n == s@.len(),
-            a@.len() == n,
-            i <= n,
-            s.is_ascii(),
-            forall|j: int| 0 <= j < i ==> a@[j] == s@[j],
-        decreases n - i,
-    {
-        if a[i] != s.get_char(i) {
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        assert(a@ =~= s@);
-    }
-    true
-}
-
-fn chars_eq(a: &Vec<char>, b: &Vec<char>) -> (r: bool)
-    ensures
-        r == (a@ == b@),
-{
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < a.len()
-        invariant
-            a@.len() == b@.len(),
-            i <= a@.len(),
-            forall|j: int| 0 <= j < i ==> a@[j] == b@[j],
-        decreases a.len() - i,
-    {
-        if a[i] != b[i] {
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        assert(a@ =~= b@);
-    }
-    true
-}
-
-fn copy_chars(a: &Vec<char>) -> (r: Vec<char>)
-    ensures
-        r@ == a@,
-{
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < a.len()
-        invariant
-            i <= a@.len(),
-            out@ == a@.subrange(0, i as int),
-        decreases a.len() - i,
-    {
-        out.push(a[i]);
-        i += 1;
-    }
-    proof {
-        assert(a@.subrange(0, a@.len() as int) =~= a@);
-    }
-    out
-}
-
-// ---- 名前の探索 ----
-
-proof fn lemma_index_of(s: Seq<Seq<char>>, x: Seq<char>, i: int)
-    requires
-        0 <= i <= s.len(),
-        forall|q: int| 0 <= q < i ==> s[q] != x,
-    ensures
-        i < s.len() && s[i] == x ==> index_of(s, x) == Some(i),
-        i == s.len() ==> index_of(s, x) is None,
-    decreases i,
-{
-    if i > 0 {
-        assert forall|q: int| 0 <= q < i - 1 implies s.drop_first()[q] != x by {
-            assert(s.drop_first()[q] == s[q + 1]);
-        }
-        if i < s.len() && s[i] == x {
-            assert(s.drop_first()[i - 1] == s[i]);
-        }
-        lemma_index_of(s.drop_first(), x, i - 1);
-    }
-}
-
-/// 名前の表で、名前 `x` の最初の位置。
-fn index_of_exec(v: &Vec<Vec<char>>, x: &Vec<char>) -> (r: Option<usize>)
-    ensures
-        match r {
-            Some(i) => index_of(strs(v@), x@) == Some(i as int),
-            None => index_of(strs(v@), x@) is None,
-        },
-{
-    let ghost s = strs(v@);
-    let mut i = 0;
-    while i < v.len()
-        invariant
-            i <= v@.len(),
-            s == strs(v@),
-            forall|q: int| 0 <= q < i ==> s[q] != x@,
-        decreases v.len() - i,
-    {
-        if chars_eq(&v[i], x) {
-            proof {
-                lemma_index_of(s, x@, i as int);
-            }
-            return Some(i);
-        }
-        i += 1;
-    }
-    proof {
-        lemma_index_of(s, x@, i as int);
-    }
-    None
-}
-
-proof fn lemma_last_of(s: Seq<Seq<char>>, x: Seq<char>, i: int)
-    requires
-        0 <= i <= s.len(),
-        forall|q: int| i <= q < s.len() ==> s[q] != x,
-    ensures
-        i > 0 && s[i - 1] == x ==> last_of(s, x) == Some(i - 1),
-        i == 0 ==> last_of(s, x) is None,
-    decreases s.len(),
-{
-    if s.len() > 0 && i < s.len() {
-        assert(s.last() != x);
-        let t = s.drop_last();
-        assert forall|q: int| i <= q < t.len() implies t[q] != x by {
-            assert(t[q] == s[q]);
-        }
-        if i > 0 && s[i - 1] == x {
-            assert(t[i - 1] == s[i - 1]);
-        }
-        lemma_last_of(t, x, i);
-    }
-}
-
-/// 局所変数の名前の列で、名前 `x` の最後の位置。
-fn last_of_exec(v: &Vec<Vec<char>>, x: &Vec<char>) -> (r: Option<usize>)
-    ensures
-        match r {
-            Some(i) => last_of(strs(v@), x@) == Some(i as int),
-            None => last_of(strs(v@), x@) is None,
-        },
-{
-    let ghost s = strs(v@);
-    let mut i = v.len();
-    while i > 0
-        invariant
-            i <= v@.len(),
-            s == strs(v@),
-            forall|q: int| i <= q < s.len() ==> s[q] != x@,
-        decreases i,
-    {
-        if chars_eq(&v[i - 1], x) {
-            proof {
-                lemma_last_of(s, x@, i as int);
-            }
-            return Some(i - 1);
-        }
-        i -= 1;
-    }
-    proof {
-        lemma_last_of(s, x@, 0);
-    }
-    None
-}
-
-/// 名前の列に重複がない。
-fn distinct_exec(v: &Vec<Vec<char>>) -> (r: bool)
-    ensures
-        r ==> distinct(strs(v@)),
-{
-    let ghost s = strs(v@);
-    let mut i = 0;
-    while i < v.len()
-        invariant
-            i <= v@.len(),
-            s == strs(v@),
-            forall|p: int, q: int| 0 <= p < q < i ==> s[p] != s[q],
-        decreases v.len() - i,
-    {
-        let mut j = 0;
-        while j < i
-            invariant
-                j <= i < v@.len(),
-                s == strs(v@),
-                forall|p: int, q: int| 0 <= p < q < i ==> s[p] != s[q],
-                forall|p: int| 0 <= p < j ==> s[p] != s[i as int],
-            decreases i - j,
-        {
-            if chars_eq(&v[j], &v[i]) {
-                return false;
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-    true
-}
-
-// ---- JSONの読み方 ----
-
-proof fn lemma_find_at(ms: Seq<Member>, k: Seq<char>, i: int)
-    requires
-        0 <= i <= ms.len(),
-        forall|q: int| 0 <= q < i ==> ms[q].key@ != k,
-    ensures
-        i < ms.len() && ms[i].key@ == k ==> find(ms, k) == Some(i),
-        i == ms.len() ==> find(ms, k) is None,
-    decreases i,
-{
-    if i > 0 {
-        assert forall|q: int| 0 <= q < i - 1 implies ms.drop_first()[q].key@ != k by {
-            assert(ms.drop_first()[q] == ms[q + 1]);
-        }
-        if i < ms.len() && ms[i].key@ == k {
-            assert(ms.drop_first()[i - 1] == ms[i]);
-        }
-        lemma_find_at(ms.drop_first(), k, i - 1);
-    }
-}
-
-/// オブジェクトのキー `k` の値。
-fn get_exec<'a>(j: &'a Json, k: &str) -> (r: Option<&'a Json>)
-    requires
-        k.is_ascii(),
-    ensures
-        match r {
-            Some(v) => get(*j, k@) == Some(*v),
-            None => get(*j, k@) is None,
-        },
-{
-    match j {
-        Json::Obj(ms) => {
-            let mut i = 0;
-            while i < ms.len()
-                invariant
-                    i <= ms@.len(),
-                    k.is_ascii(),
-                    *j == Json::Obj(*ms),
-                    forall|q: int| 0 <= q < i ==> ms@[q].key@ != k@,
-                decreases ms.len() - i,
-            {
-                if eqk(&ms[i].key, k) {
-                    proof {
-                        lemma_find_at(ms@, k@, i as int);
-                    }
-                    return Some(&ms[i].value);
-                }
-                i += 1;
-            }
-            proof {
-                lemma_find_at(ms@, k@, i as int);
-            }
-            None
-        },
-        _ => None,
-    }
-}
-
-/// キー `k` の値が省略か `null` でなければ、その値。
-fn present<'a>(j: &'a Json, k: &str) -> (r: Option<&'a Json>)
-    requires
-        k.is_ascii(),
-    ensures
-        match r {
-            Some(v) => !absent(*j, k@) && at(*j, k@) == *v,
-            None => absent(*j, k@),
-        },
-{
-    match get_exec(j, k) {
-        Some(Json::Null) => None,
-        Some(v) => Some(v),
-        None => None,
-    }
-}
-
-fn one_exec(j: &Json) -> (r: Option<(&Vec<char>, &Json)>)
-    ensures
-        match r {
-            Some((k, b)) => one(*j) == Some((k@, *b)),
-            None => one(*j) is None,
-        },
-{
-    match j {
-        Json::Obj(ms) => if ms.len() == 1 {
-            Some((&ms[0].key, &ms[0].value))
-        } else {
-            None
-        },
-        _ => None,
-    }
-}
-
-fn arr_exec(j: &Json) -> (r: Option<&Vec<Json>>)
-    ensures
-        match r {
-            Some(xs) => arr(*j) == Some(xs@) && *j == Json::Arr(*xs),
-            None => arr(*j) is None,
-        },
-{
-    match j {
-        Json::Arr(xs) => Some(xs),
-        _ => None,
-    }
-}
-
-fn str_exec(j: &Json) -> (r: Option<&Vec<char>>)
-    ensures
-        match r {
-            Some(s) => str_of(*j) == Some(s@),
-            None => str_of(*j) is None,
-        },
-{
-    match j {
-        Json::Str(s) => Some(s),
-        _ => None,
-    }
-}
-
-/// JSONの値が、0以上の整数 `x` である。
-fn is_nat(j: &Json, x: usize) -> (r: bool)
-    ensures
-        r ==> nat_of(*j) == Some(x as nat),
-{
-    match j {
-        Json::Int(n) => *n >= 0 && (*n as u128) == (x as u128),
-        _ => false,
-    }
-}
-
-fn is_empty_obj(j: &Json) -> (r: bool)
-    ensures
-        r == empty_obj(*j),
-{
-    match j {
-        Json::Obj(ms) => ms.len() == 0,
-        _ => false,
-    }
-}
 
 // ---- 型 ----
 
@@ -1710,6 +1363,168 @@ fn check_opt_ex(j: &Json, k: &str, e: &Option<TExpr>, ns: &IrNames) -> (r: bool)
     }
 }
 
+/// `check_enum` を、列 `xs` のすべての要素について確かめる。
+fn check_all_enums(xs: &[Json], ns: &IrNames, sm: &SModel) -> (r: bool)
+    requires
+        xs@.len() == ns.enums@.len(),
+        xs@.len() == sm.enums@.len(),
+        ns.variants@.len() == ns.enums@.len(),
+    ensures
+        r ==> forall|q: int| 0 <= q < xs@.len() ==> #[trigger] enum_rel(xs@[q], *ns, q, sm.enums@[q]),
+{
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ns.enums@.len(),
+            xs@.len() == sm.enums@.len(),
+            ns.variants@.len() == ns.enums@.len(),
+            forall|q: int| 0 <= q < i ==> #[trigger] enum_rel(xs@[q], *ns, q, sm.enums@[q]),
+        decreases xs.len() - i,
+    {
+        if !check_enum(&xs[i], ns, i, sm.enums[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `check_const` を、列 `xs` のすべての要素について確かめる。
+fn check_all_consts(xs: &[Json], ns: &IrNames, sm: &SModel) -> (r: bool)
+    requires
+        xs@.len() == ns.consts@.len(),
+        xs@.len() == sm.consts@.len(),
+    ensures
+        r ==> forall|q: int| 0 <= q < xs@.len() ==> #[trigger] const_rel(xs@[q], *ns, q, *sm),
+{
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ns.consts@.len(),
+            xs@.len() == sm.consts@.len(),
+            forall|q: int| 0 <= q < i ==> #[trigger] const_rel(xs@[q], *ns, q, *sm),
+        decreases xs.len() - i,
+    {
+        if !check_const(&xs[i], ns, i, sm) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `check_state` を、列 `xs` のすべての要素について確かめる。
+fn check_all_states(xs: &[Json], ns: &IrNames, sm: &SModel) -> (r: bool)
+    requires
+        xs@.len() == ns.states@.len(),
+        xs@.len() == sm.states@.len(),
+        xs@.len() == sm.inits@.len(),
+    ensures
+        r ==> forall|q: int| 0 <= q < xs@.len() ==> #[trigger] state_rel(xs@[q], *ns, q, *sm),
+{
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ns.states@.len(),
+            xs@.len() == sm.states@.len(),
+            xs@.len() == sm.inits@.len(),
+            forall|q: int| 0 <= q < i ==> #[trigger] state_rel(xs@[q], *ns, q, *sm),
+        decreases xs.len() - i,
+    {
+        if !check_state(&xs[i], ns, i, sm) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `check_action` を、列 `xs` のすべての要素について確かめる。
+fn check_all_actions(xs: &[Json], ns: &IrNames, sm: &SModel) -> (r: bool)
+    requires
+        xs@.len() == ns.actions@.len(),
+        xs@.len() == sm.actions@.len(),
+        xs@.len() == ns.params@.len(),
+        xs@.len() == ns.choices@.len(),
+    ensures
+        r ==> forall|q: int| 0 <= q < xs@.len() ==> #[trigger] action_rel(xs@[q], *ns, q, sm.actions@[q], sm.enums@),
+{
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ns.actions@.len(),
+            xs@.len() == sm.actions@.len(),
+            xs@.len() == ns.params@.len(),
+            xs@.len() == ns.choices@.len(),
+            forall|q: int| 0 <= q < i ==> #[trigger] action_rel(xs@[q], *ns, q, sm.actions@[q], sm.enums@),
+        decreases xs.len() - i,
+    {
+        if !check_action(&xs[i], ns, i, &sm.actions[i], &sm.enums) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `check_invariant` を、列 `xs` のすべての要素について確かめる。
+fn check_all_invariants(xs: &[Json], ns: &IrNames, sm: &SModel) -> (r: bool)
+    requires
+        xs@.len() == ns.invariants@.len(),
+        xs@.len() == sm.invariants@.len(),
+    ensures
+        r ==> forall|q: int| 0 <= q < xs@.len() ==> #[trigger] invariant_rel(xs@[q], *ns, q, *sm),
+{
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ns.invariants@.len(),
+            xs@.len() == sm.invariants@.len(),
+            forall|q: int| 0 <= q < i ==> #[trigger] invariant_rel(xs@[q], *ns, q, *sm),
+        decreases xs.len() - i,
+    {
+        if !check_invariant(&xs[i], ns, i, sm) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `check_contract` を、列 `xs` のすべての要素について確かめる。
+fn check_all_contracts(xs: &[Json], ns: &IrNames, sm: &SModel) -> (r: bool)
+    requires
+        xs@.len() == ns.contracts@.len(),
+        xs@.len() == sm.contracts@.len(),
+        ns.params@.len() == ns.actions@.len(),
+        ns.choices@.len() == ns.actions@.len(),
+    ensures
+        r ==> forall|q: int| 0 <= q < xs@.len() ==> #[trigger] contract_rel(xs@[q], *ns, q, *sm),
+{
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            xs@.len() == ns.contracts@.len(),
+            xs@.len() == sm.contracts@.len(),
+            ns.params@.len() == ns.actions@.len(),
+            ns.choices@.len() == ns.actions@.len(),
+            forall|q: int| 0 <= q < i ==> #[trigger] contract_rel(xs@[q], *ns, q, *sm),
+        decreases xs.len() - i,
+    {
+        if !check_contract(&xs[i], ns, i, sm) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// IRのJSON `j` が、名前の表 `ns` のもとで、名前を解決したモデル `sm` を表すかを確かめる。
 pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
     ensures
@@ -1736,20 +1551,8 @@ pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
     if es.len() != ns.enums.len() || es.len() != sm.enums.len() {
         return false;
     }
-    let mut i = 0;
-    while i < es.len()
-        invariant
-            i <= es@.len(),
-            es@.len() == ns.enums@.len(),
-            es@.len() == sm.enums@.len(),
-            ns.variants@.len() == ns.enums@.len(),
-            forall|q: int| 0 <= q < i ==> #[trigger] enum_rel(es@[q], *ns, q, sm.enums@[q]),
-        decreases es.len() - i,
-    {
-        if !check_enum(&es[i], ns, i, sm.enums[i]) {
-            return false;
-        }
-        i += 1;
+    if !check_all_enums(es, ns, sm) {
+        return false;
     }
     // 定数
     let cs = match opt_arr_exec(j, "constants") {
@@ -1759,19 +1562,8 @@ pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
     if cs.len() != ns.consts.len() || cs.len() != sm.consts.len() {
         return false;
     }
-    let mut i = 0;
-    while i < cs.len()
-        invariant
-            i <= cs@.len(),
-            cs@.len() == ns.consts@.len(),
-            cs@.len() == sm.consts@.len(),
-            forall|q: int| 0 <= q < i ==> #[trigger] const_rel(cs@[q], *ns, q, *sm),
-        decreases cs.len() - i,
-    {
-        if !check_const(&cs[i], ns, i, sm) {
-            return false;
-        }
-        i += 1;
+    if !check_all_consts(cs, ns, sm) {
+        return false;
     }
     // 状態変数
     let ss = match get_exec(j, "states") {
@@ -1784,20 +1576,8 @@ pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
     if ss.len() != ns.states.len() || ss.len() != sm.states.len() || ss.len() != sm.inits.len() {
         return false;
     }
-    let mut i = 0;
-    while i < ss.len()
-        invariant
-            i <= ss@.len(),
-            ss@.len() == ns.states@.len(),
-            ss@.len() == sm.states@.len(),
-            ss@.len() == sm.inits@.len(),
-            forall|q: int| 0 <= q < i ==> #[trigger] state_rel(ss@[q], *ns, q, *sm),
-        decreases ss.len() - i,
-    {
-        if !check_state(&ss[i], ns, i, sm) {
-            return false;
-        }
-        i += 1;
+    if !check_all_states(ss, ns, sm) {
+        return false;
     }
     if !check_opt_ex(j, "initial_constraint", &sm.constraint, ns) {
         return false;
@@ -1811,21 +1591,8 @@ pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
         != ns.choices.len() {
         return false;
     }
-    let mut a = 0;
-    while a < acts.len()
-        invariant
-            a <= acts@.len(),
-            acts@.len() == ns.actions@.len(),
-            acts@.len() == sm.actions@.len(),
-            acts@.len() == ns.params@.len(),
-            acts@.len() == ns.choices@.len(),
-            forall|q: int| 0 <= q < a ==> #[trigger] action_rel(acts@[q], *ns, q, sm.actions@[q], sm.enums@),
-        decreases acts.len() - a,
-    {
-        if !check_action(&acts[a], ns, a, &sm.actions[a], &sm.enums) {
-            return false;
-        }
-        a += 1;
+    if !check_all_actions(acts, ns, sm) {
+        return false;
     }
     // 不変条件
     let is = match opt_arr_exec(j, "invariants") {
@@ -1835,19 +1602,8 @@ pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
     if is.len() != ns.invariants.len() || is.len() != sm.invariants.len() {
         return false;
     }
-    let mut i = 0;
-    while i < is.len()
-        invariant
-            i <= is@.len(),
-            is@.len() == ns.invariants@.len(),
-            is@.len() == sm.invariants@.len(),
-            forall|q: int| 0 <= q < i ==> #[trigger] invariant_rel(is@[q], *ns, q, *sm),
-        decreases is.len() - i,
-    {
-        if !check_invariant(&is[i], ns, i, sm) {
-            return false;
-        }
-        i += 1;
+    if !check_all_invariants(is, ns, sm) {
+        return false;
     }
     // 遷移契約
     let ks = match opt_arr_exec(j, "contracts") {
@@ -1857,21 +1613,8 @@ pub fn check_ir(j: &Json, ns: &IrNames, sm: &SModel) -> (r: bool)
     if ks.len() != ns.contracts.len() || ks.len() != sm.contracts.len() {
         return false;
     }
-    let mut k = 0;
-    while k < ks.len()
-        invariant
-            k <= ks@.len(),
-            ks@.len() == ns.contracts@.len(),
-            ks@.len() == sm.contracts@.len(),
-            ns.params@.len() == ns.actions@.len(),
-            ns.choices@.len() == ns.actions@.len(),
-            forall|q: int| 0 <= q < k ==> #[trigger] contract_rel(ks@[q], *ns, q, *sm),
-        decreases ks.len() - k,
-    {
-        if !check_contract(&ks[k], ns, k, sm) {
-            return false;
-        }
-        k += 1;
+    if !check_all_contracts(ks, ns, sm) {
+        return false;
     }
     check_opt_ex(j, "terminal", &sm.terminal, ns)
 }
@@ -1885,7 +1628,7 @@ pub fn lower_checked(j: &Json, ns: &IrNames, sm: &SModel, maps: &Vec<SMap>) -> (
         r is Some ==> ir_rel(*j, *ns, *sm),
         r matches Some(Ok((m, _))) ==> crate::model_lower::lowers_model(*sm, m),
         r matches Some(Ok((m, _))) ==> crate::model_wf::sm_wf(*sm) ==> crate::typing::wf(m),
-        r matches Some(Err(e)) ==> crate::action_lower::user_err(e) || (crate::action_lower::type_err(e)
+        r matches Some(Err(e)) ==> crate::lower_error::user_err(e) || (crate::lower_error::type_err(e)
             && !crate::model_total::model_typed(*sm)) || (e is Mapping && maps@.len() > 0),
 {
     if !check_ir(j, ns, sm) {

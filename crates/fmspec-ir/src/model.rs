@@ -7,10 +7,10 @@ use crate::resolve::{self, Constant, Ctx, Fields, Layout};
 use crate::type_syntax::parse_type;
 use crate::types::SType;
 use crate::IR_VERSION;
-use fmspec_core::action_lower::LowerError;
 use fmspec_core::checked::{validate, CheckedModel};
 use fmspec_core::expr_copy::copy_expr;
 use fmspec_core::ir_check::lower_checked;
+use fmspec_core::lower_error::LowerError;
 use fmspec_core::model::{Expr, RawModel, Value as CoreValue};
 use fmspec_core::model_lower::SMap;
 use fmspec_core::smodel::{SAction, SConst, SContract, SModel, SOutput, SUpdate};
@@ -456,7 +456,7 @@ pub(crate) struct Built {
     pub sm: SModel,
     pub smaps: Vec<SMap>,
     pub names: Names,
-    pub ir_names: fmspec_core::ir::IrNames,
+    pub ir_names: fmspec_core::ir_json::IrNames,
     constants: Vec<Constant>,
     init_paths: Vec<Vec<String>>,
 }
