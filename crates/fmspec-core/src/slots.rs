@@ -14,9 +14,9 @@ use crate::equality::{eq_ok, eq_seq_ok, lemma_eq_coll, lemma_eq_option, lemma_eq
 #[cfg(verus_keep_ghost)]
 use crate::equality::{lemma_eq_scalar, lemma_eq_tuple};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, Env};
+use crate::eval::{Env, eval_l};
+use crate::expr_build::{all_of, and, cb, ci, eq, implies, is_bool_lit, ite, Join, split, sub_exprs};
 use crate::expr_build::tree;
-use crate::expr_build::{all_of, and, cb, ci, eq, implies, is_bool_lit, ite, split, sub_exprs, Join};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{bool_lit, int_lit, ite_s, split_ok, tree_s};
 use crate::expr_copy::copy_expr;
@@ -24,14 +24,14 @@ use crate::expr_copy::copy_expr;
 use crate::limits::*;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{picks, rows_view, select_ok};
-#[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{added, extends};
 use crate::lower_ctx::{binds, Block, Fail};
 #[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{added, extends};
+#[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
+use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::model::Value;
-use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 use crate::quant::pick_slot;

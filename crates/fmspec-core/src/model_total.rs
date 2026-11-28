@@ -3,23 +3,23 @@
 //! [`model_typed`] は、モデルの各式が、下ろしで使う文脈で型を持ち、大きさの条件を満たすことを表す。
 //! [`check_model`] はそれを実行時に確かめる。
 
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_len, lemma_stys, member, sty, stys, to_xty, width, STy, SVal};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{width_sum, xty, xtys, XTy};
 use crate::encoding::{SType, XType};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{lemma_enc_len, lemma_stys, member, STy, sty, stys, SVal, to_xty, width};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{width_sum, XTy, xty, xtys};
 use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{scope_view, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{layout_at, layouts_at, Constant, Layout, LowerCtx};
+use crate::lower_ctx::{Constant, Layout, layout_at, layouts_at, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::layout_tys;
 use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{lemma_layout_end, styped, SAction};
+use crate::smodel::{lemma_layout_end, SAction, styped};
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::srel::consts_rel;

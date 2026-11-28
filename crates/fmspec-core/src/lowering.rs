@@ -19,16 +19,16 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::{lemma_in_member, lemma_models_has, lemma_shaped_len};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, keys, keys_or_zero, lemma_xwidth_of, member, sty, to_xty, STy, SVal};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_stype, width, xty, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, Env, ErrKind};
+use crate::encoding::{enc, keys, keys_or_zero, lemma_xwidth_of, member, STy, sty, SVal, to_xty};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, int_lit, kind_expr, pure_below, tree_s, Join};
+use crate::encoding::{wf_stype, width, XTy, xty};
+#[cfg(verus_keep_ghost)]
+use crate::eval::{Env, ErrKind, eval_l};
 use crate::expr_build::{ci, eq};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, bool_lit, int_lit, Join, kind_expr, pure_below, tree_s};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::fits::{lemma_fits_to, lemma_to_fits};
@@ -39,9 +39,9 @@ use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
 use crate::lower_core::low_core;
+use crate::lower_ctx::{Block, Bound, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
-use crate::lower_ctx::{Block, Bound, Fail, Layout, LowerCtx};
 use crate::lower_list::{low_list_contains, low_list_get, low_list_lit, low_list_update};
 use crate::lower_map::{low_get, low_map_access, low_map_lit};
 use crate::lower_quant::low_quant;
@@ -49,9 +49,9 @@ use crate::lower_set::{low_member, low_set_lit, low_setop};
 use crate::lower_struct::low_struct;
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::*;
+use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Type};
-use crate::model::{Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
@@ -60,13 +60,13 @@ use crate::preserve_elem::{elem_lowers, elem_rank_lowers, lemma_elem_rank, lemma
 use crate::preserve_list::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::*;
+use crate::slot_store::{rank_expr, rank_or_neg, store};
 #[cfg(verus_keep_ghost)]
 use crate::slot_store::store_ok;
-use crate::slot_store::{rank_expr, rank_or_neg, store};
 use crate::slots::*;
+use crate::source::{FAIL_NOT_IN_DOMAIN, TExpr};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
-use crate::source::{TExpr, FAIL_NOT_IN_DOMAIN};
 use crate::stype_exec::{fits, keys_exec, stype_width, to_xtype, xtype_eq};
 #[cfg(verus_keep_ghost)]
 use crate::total::*;

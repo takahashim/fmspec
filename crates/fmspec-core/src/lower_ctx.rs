@@ -1,8 +1,8 @@
 //! 下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）。下ろしの各モジュールと、その証明が共有する型。
 
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, width_sum, STy};
 use crate::encoding::{SType, XType};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{STy, sty, width_sum};
 use crate::model::{Expr, Value};
 use crate::typing::ETy;
 use vstd::prelude::*;

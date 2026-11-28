@@ -1,7 +1,7 @@
 //! 値の型を、格納の型の場所に置けるか（`fits_s`）の仕様と、両向きの補題。実行時の検査（`fits`）は `stype_exec` にある。`fits_s(t, st)` は `t == to_xty(st)` と同値である（`lemma_fits_iff`）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, to_xtys, STy, XTy};
+use crate::encoding::{STy, to_xty, to_xtys, XTy};
 use vstd::prelude::*;
 
 verus! {

@@ -6,9 +6,9 @@
 //! `fmspec-ir` の上限（幅が65536以下、Listの長さが1024以下）を満たす宣言の型は、この条件を満たす。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::xwidth_sum;
+use crate::encoding::{lemma_xwidth_of, STy, to_xty, to_xtys, width, width_sum, XTy, xwidth};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_xwidth_of, to_xty, to_xtys, width, width_sum, xwidth, STy, XTy};
+use crate::encoding::xwidth_sum;
 #[cfg(verus_keep_ghost)]
 use crate::fits::{fits_s, lemma_fits_to};
 use vstd::prelude::*;

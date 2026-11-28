@@ -4,12 +4,12 @@
 use crate::canon::lemma_defaults_typed;
 use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_repeat, lemma_default_len, lemma_xwidth_of, sty, STy};
+use crate::encoding::{default_val, enc, enc_repeat, lemma_default_len, lemma_xwidth_of, STy, sty};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, wf_stype, width, xty, xwidth, XTy};
-#[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, lits, pure_below, Join};
+use crate::encoding::{to_xty, wf_stype, width, XTy, xty, xwidth};
 use crate::expr_build::{and, bin, ci, defaults, extend};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, bool_lit, Join, lits, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_iff};
@@ -18,9 +18,9 @@ use crate::limits::{lemma_lim_small, lim_x, small};
 use crate::lists::list_parts;
 #[cfg(verus_keep_ghost)]
 use crate::lists::{lemma_select_typed, rows_view};
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, blt, etys, has_ty, lemma_add_typed, lemma_added_typed};
 #[cfg(verus_keep_ghost)]
@@ -33,14 +33,14 @@ use crate::lower_types::{lemma_list_join_typed, lemma_lrows_typed, lemma_lt_type
 use crate::lower_types::{lemma_tok_ext, lemma_tree_typed, lemma_typed_blk, lemma_typed_concat};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_xetys_of, lenv, slot_tys, tok, typed, xetys};
+use crate::lowering::{element, low, sub_scalar};
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
-use crate::lowering::{element, low, sub_scalar};
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::lemma_tree_pure;
-#[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_join_pure, lemma_lits, lemma_pure_mono};
+#[cfg(verus_keep_ghost)]
+use crate::preserve::lemma_tree_pure;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_list::{defaults_s, hit_at, lemma_at, lemma_first, lemma_last};
 #[cfg(verus_keep_ghost)]
@@ -49,11 +49,11 @@ use crate::preserve_list::{lemma_list_contains, lemma_listlit_base, lemma_listli
 use crate::preserve_list::{lemma_listlit_step, lemma_pop, lemma_push, lemma_shift, listlit_ok};
 #[cfg(verus_keep_ghost)]
 use crate::rows::flat;
+use crate::slots::{any_of, atom, bind, check, copy_exprs, eq_slots, ite_rows, list_join, need};
+use crate::slots::select;
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
-use crate::slots::select;
-use crate::slots::{any_of, atom, bind, check, copy_exprs, eq_slots, ite_rows, list_join, need};
-use crate::source::{TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX};
+use crate::source::{FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, TExpr};
 use crate::stype_exec::{copy_stype, stype_eq, to_xtype, xtype_eq};
 #[cfg(verus_keep_ghost)]
 use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_flat_shape, lemma_ite_rows_shape};

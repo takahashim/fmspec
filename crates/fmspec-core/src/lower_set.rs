@@ -2,30 +2,30 @@
 
 use crate::encoding::XType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, keys_or_zero, sty, to_xty, wf_stype, wf_xtype, xty, STy, XTy};
+use crate::encoding::{keys, keys_or_zero, STy, sty, to_xty, wf_stype, wf_xtype, XTy, xty};
 use crate::expr_build::{all_of, and, bin, cb, ci, eq, implies, or};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, mark_s, pure_below, setop_s, Join};
+use crate::expr_build::{all_pure, bool_lit, Join, mark_s, pure_below, setop_s};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::{ir_type_of, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, small};
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, blt, has_ty, lemma_and_typed, lemma_bools_typed, lemma_ge0_typed};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_has_ty_blk, lemma_tok_ext, lemma_tree_typed, lemma_typed_blk};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_typed_bools, lenv, tok, xetys};
-#[cfg(verus_keep_ghost)]
-use crate::lowering::low_ok;
 use crate::lowering::{element_rank, lookup_rank, low};
 #[cfg(verus_keep_ghost)]
-use crate::model::Value;
+use crate::lowering::low_ok;
 use crate::model::{BinOp, Expr};
+#[cfg(verus_keep_ghost)]
+use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_tree_pure};
 #[cfg(verus_keep_ghost)]
@@ -33,9 +33,9 @@ use crate::preserve_set::{lemma_insert, lemma_remove, lemma_set_contains, lemma_
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_setlit_base, lemma_setlit_step, setlit_ok};
 use crate::quant::pick_slot;
+use crate::slots::not;
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
-use crate::slots::not;
 use crate::source::{SetOp, TExpr};
 use crate::stype_exec::{copy_stype, keys_exec, keys_or_zero_exec, stype_eq, xtype_eq};
 #[cfg(verus_keep_ghost)]

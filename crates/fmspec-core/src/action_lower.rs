@@ -3,20 +3,20 @@
 use crate::canon::{canonical, slot_types_list};
 #[cfg(verus_keep_ghost)]
 use crate::canon::{lemma_member_in, lemma_wf_index};
+use crate::encoding::{STy, SType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, lemma_enc_len, lemma_width_pos, member, sty, stys, to_xty, SVal};
+use crate::encoding::{enc, lemma_enc_len, lemma_width_pos, member, sty, stys, SVal, to_xty};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{wf_stype, wf_stypes, width};
-use crate::encoding::{STy, SType};
 use crate::eval::ErrKind;
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, code_of, decode, eval_l, eval_spec, lookup, prop_spec, Env};
+use crate::eval::{as_bool, code_of, decode, Env, eval_l, eval_spec, lookup, prop_spec};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lim_s, smalls};
+use crate::lower_ctx::{Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{layout_at, layouts_at};
-use crate::lower_ctx::{Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{has_ty, in_slot, in_slots, layout_tys, lemma_slot_tys_len};
 #[cfg(verus_keep_ghost)]
@@ -35,7 +35,7 @@ use crate::smodel::{s_apply, s_env, s_output, s_state_tys, s_step, s_write, SMod
 #[cfg(verus_keep_ghost)]
 use crate::smodel::{styped, SUpdate};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, src_bool, SEnv};
+use crate::source::{eval_src, SEnv, src_bool};
 #[cfg(verus_keep_ghost)]
 use crate::srel::{arg_slots, c_apply, c_write, canon_at, canon_from, codes, dom_ok, fold_ok};
 #[cfg(verus_keep_ghost)]
@@ -45,7 +45,7 @@ use crate::srel::{lemma_rel_canon, lemma_width_take, rel};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{encode_spec, in_type, vals_ok};
 #[cfg(verus_keep_ghost)]
-use crate::step::{act_env, apply_updates, output_spec, step_spec, Step};
+use crate::step::{act_env, apply_updates, output_spec, Step, step_spec};
 use crate::stype_exec::stype_width;
 #[cfg(verus_keep_ghost)]
 use crate::total::{cx_wf, layout_wf, sctx};

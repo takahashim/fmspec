@@ -15,9 +15,9 @@ use crate::eval::*;
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
+use crate::state_enc::{encode, vec_eq};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{args_ok, encode_spec};
-use crate::state_enc::{encode, vec_eq};
 use crate::step::*;
 use crate::trace::*;
 #[cfg(verus_keep_ghost)]

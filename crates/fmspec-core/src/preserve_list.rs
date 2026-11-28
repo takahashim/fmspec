@@ -5,21 +5,21 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_models_enc, list_items_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, sty, to_xty, width, STy, SVal, XTy};
+use crate::encoding::{member, STy, sty, SVal, to_xty, width, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
-use crate::eval::{binop_spec, eval_l, Env, ErrKind};
+use crate::eval::{binop_spec, Env, ErrKind, eval_l};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, ite_s, lits, pure_below, tree_s, Join};
-#[cfg(verus_keep_ghost)]
-use crate::lists::select_ok;
+use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, ite_s, Join, lits, pure_below, tree_s};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{at_rank, lemma_bin_const, lemma_ite_rows, lemma_items_member, lemma_list_join};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{lemma_list_parts, lemma_rows_weaken, lemma_select, pad, pad_vals, rows_at};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
+use crate::lists::select_ok;
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{added, Block, Bound, extends, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
@@ -29,7 +29,7 @@ use crate::preserve_elem::elem_lowers;
 #[cfg(verus_keep_ghost)]
 use crate::rows::{flat, ite_rows_ok, parts_ok};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_elements, eval_src, SEnv, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX};
+use crate::source::{eval_elements, eval_src, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {

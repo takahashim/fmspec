@@ -2,16 +2,16 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::canon::lemma_defaults_typed;
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, keys_or_zero, lemma_default_len, lemma_xwidth_of, sty, STy};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{to_xty, wf_stype, width, xty, XTy};
 use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, eval_l, Env, ErrKind};
+use crate::encoding::{default_val, enc, keys_or_zero, lemma_default_len, lemma_xwidth_of, STy, sty};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{to_xty, wf_stype, width, XTy, xty};
+#[cfg(verus_keep_ghost)]
+use crate::eval::{as_bool, Env, ErrKind, eval_l};
+use crate::expr_build::{bin, cb, defaults, is_bool_lit};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, bool_lit, lits, pure_below};
-use crate::expr_build::{bin, cb, defaults, is_bool_lit};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::infer::ir_type_of;
@@ -19,9 +19,9 @@ use crate::infer::ir_type_of;
 use crate::limits::{lemma_lim_small, lim_s, small};
 #[cfg(verus_keep_ghost)]
 use crate::lists::picks;
+use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
-use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, binds_typed, blt, etys, has_ty, lemma_all_ty_push};
 #[cfg(verus_keep_ghost)]
@@ -32,24 +32,24 @@ use crate::lower_types::{lemma_map_flags_typed, lemma_tok_ext, lemma_top_typed, 
 use crate::lower_types::{lemma_typed_ext, lemma_xetys_of, lenv, ok_x, sc_wf, shaped, slot_tys, tok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{tok_in, typed, xetys};
-#[cfg(verus_keep_ghost)]
-use crate::lowering::low_ok;
 use crate::lowering::{bool_in, low};
 #[cfg(verus_keep_ghost)]
-use crate::model::Value;
+use crate::lowering::low_ok;
 use crate::model::{BinOp, Expr, Type};
+#[cfg(verus_keep_ghost)]
+use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{combine_ok, lemma_over_list, lemma_over_map, lemma_over_set};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_quant::{lemma_over_type, lemma_quant, list_col, over_ok, quant_s};
-#[cfg(verus_keep_ghost)]
-use crate::quant::unrank_ok;
 use crate::quant::{pick_slot, unrank};
 #[cfg(verus_keep_ghost)]
-use crate::slots::lemma_extends_refl;
+use crate::quant::unrank_ok;
 use crate::slots::{bind, depth, need};
+#[cfg(verus_keep_ghost)]
+use crate::slots::lemma_extends_refl;
 use crate::source::{Over, TExpr};
 use crate::stype_exec::{copy_stype, keys_exec, stype_eq, stype_width, to_xtype};
 #[cfg(verus_keep_ghost)]

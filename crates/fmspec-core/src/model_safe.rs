@@ -9,13 +9,13 @@
 #[cfg(verus_keep_ghost)]
 use crate::action_lower::{act_ok, lemma_step, lemma_step_off, out_ok, out_rel, step_rel};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{enc, enc_seq, member, sty, wf_stypes, width, STy, SType, SVal};
+use crate::encoding::{enc, enc_seq, member, STy, sty, SType, SVal, wf_stypes, width};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{decode, eval_l, prop_spec, Env};
+use crate::eval::{decode, Env, eval_l, prop_spec};
 #[cfg(verus_keep_ghost)]
 use crate::limits::smalls;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
+use crate::lower_ctx::{Layout, layout_at, layouts_at, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::slot_tys_seq;
 #[cfg(verus_keep_ghost)]
@@ -35,7 +35,7 @@ use crate::srel::{lemma_rel_codes, rel};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{args_ok, vals_ok};
 #[cfg(verus_keep_ghost)]
-use crate::step::{act_env, all_disabled, step_spec, Step};
+use crate::step::{act_env, all_disabled, Step, step_spec};
 use vstd::prelude::*;
 
 verus! {

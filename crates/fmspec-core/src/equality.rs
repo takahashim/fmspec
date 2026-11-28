@@ -6,8 +6,6 @@
 //! また、同じ型の値の符号化は、位置ごとに同じ種類の値になる（[`lemma_kinds`]）。
 //! そのため、スロットを位置ごとに比べる式は、型の不一致で失敗しない。
 
-#[cfg(verus_keep_ghost)]
-use crate::encoding::xwidth;
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
@@ -16,13 +14,15 @@ use crate::encoding::{keys_or_zero, lemma_default_vals_len, lemma_enc_items_len,
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_enc_rows_len, lemma_enc_seq_len, lemma_stys, list_items_member};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{map_rows_member, member, members, models_seq, sty, stys, STy, SVal, XTy};
+use crate::encoding::{map_rows_member, member, members, models_seq, STy, sty, stys, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, same_kind, Env, ErrKind};
+use crate::encoding::xwidth;
+#[cfg(verus_keep_ghost)]
+use crate::eval::{Env, ErrKind, eval_l, same_kind};
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, and_s, bool_lit, implies_s, Join, pure_below, split_ok, tree_s};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::xoff;
-#[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, implies_s, pure_below, split_ok, tree_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]

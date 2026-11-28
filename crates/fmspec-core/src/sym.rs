@@ -21,7 +21,7 @@ use crate::state_set::cmp_state;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;
 #[cfg(verus_keep_ghost)]
-use crate::step::{act_env, all_disabled, apply_updates, step_spec, Step};
+use crate::step::{act_env, all_disabled, apply_updates, Step, step_spec};
 use vstd::prelude::*;
 
 verus! {

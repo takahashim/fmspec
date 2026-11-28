@@ -3,7 +3,7 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, keys, member, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{eval_l, Env, ErrKind};
+use crate::eval::{Env, ErrKind, eval_l};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{bool_lit, ite_s, pure_below};
 #[cfg(verus_keep_ghost)]
@@ -11,7 +11,7 @@ use crate::fits::fits_s;
 #[cfg(verus_keep_ghost)]
 use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
+use crate::lower_ctx::{added, Block, Bound, extends, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
@@ -27,7 +27,7 @@ use crate::preserve::{prefix, run, slot_vals};
 #[cfg(verus_keep_ghost)]
 use crate::slot_store::{rank_spec, store_ok, store_spec};
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_src, SEnv, TExpr, FAIL_NOT_IN_DOMAIN};
+use crate::source::{eval_src, FAIL_NOT_IN_DOMAIN, SEnv, TExpr};
 use vstd::prelude::*;
 
 verus! {

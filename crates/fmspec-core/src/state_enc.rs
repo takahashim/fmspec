@@ -1,11 +1,11 @@
 //! 状態と引数の符号化列。各スロットが型に属すこと（`vals_ok`）、値の符号化（`encode`）と、符号化列の複製と比較。
 
-#[cfg(verus_keep_ghost)]
-use crate::eval::decode;
 use crate::eval::ErrKind;
 #[cfg(verus_keep_ghost)]
-use crate::model::RawModel;
+use crate::eval::decode;
 use crate::model::{Type, Value};
+#[cfg(verus_keep_ghost)]
+use crate::model::RawModel;
 use vstd::prelude::*;
 
 verus! {

@@ -8,9 +8,9 @@ use crate::eval::*;
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
+use crate::state_enc::{vals_ok_exec, vec_eq};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::args_ok;
-use crate::state_enc::{vals_ok_exec, vec_eq};
 use crate::step::*;
 use vstd::prelude::*;
 

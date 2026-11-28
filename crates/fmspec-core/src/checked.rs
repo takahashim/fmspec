@@ -2,20 +2,20 @@
 
 use crate::eval::ErrKind;
 use crate::model::RawModel;
-#[cfg(verus_keep_ghost)]
-use crate::semantics::terminal_spec;
-use crate::semantics::{check_contracts, check_invariants, eval_terminal, Conditions};
+use crate::semantics::{check_contracts, check_invariants, Conditions, eval_terminal};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{con_on, con_spec, cons_hold, inv_on, inv_spec, invs_hold, not_true};
+#[cfg(verus_keep_ghost)]
+use crate::semantics::terminal_spec;
 use crate::state_enc::vals_ok_exec;
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{args_ok, state_ok};
-use crate::step::{enumerate, step, Enumerated, StepR};
+use crate::step::{enumerate, Enumerated, step, StepR};
 #[cfg(verus_keep_ghost)]
 use crate::step::{enumerated_ok, step_spec};
+use crate::typing::{InvalidModel, validate_raw};
 #[cfg(verus_keep_ghost)]
 use crate::typing::wf;
-use crate::typing::{validate_raw, InvalidModel};
 use vstd::prelude::*;
 
 verus! {

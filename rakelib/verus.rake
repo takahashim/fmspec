@@ -463,7 +463,7 @@ VERUS_CANARIES = [
   ["model_lower.rs", "    assert(ts.take(n) =~= ts);", "lemma_init_ok"],
   ["model_lower.rs", "        lemma_init_ok(*sm, cv, m, stg, sx, psg, cc);", "lower_model の結論"],
   ["model_lower.rs", "            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);", "lower_model の候補の直積"],
-  ["model_lower.rs", "            crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), stys(sa.args@));\n            assert(out_sty(*sa)", "lower_model の遷移契約の文脈"],
+  ["model_lower.rs", "            crate::model_wf::lemma_cx_tok(*cx, cv, stys(sm.states@), stys(sa.args@));\n            assert(out_sty(*sa)", "lower_contracts の文脈"],
   ["action_lower.rs", "                lemma_upd_pre(*sa, *cx, u as int);", "lower_action の代入の前提"],
   ["refine.rs", "        assert(ref_state_ok(b, cb, a, f, cert[j]@));\n    }\n}", "lemma_cert_refines の遷移"],
   ["refine.rs", "            Move::No\n", "find_move の移れない場合"],

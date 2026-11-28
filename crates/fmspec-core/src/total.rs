@@ -5,9 +5,9 @@
 //! 下ろしは `Fail::Type` で失敗せず、型の幅だけの純粋なスロットを返す（[`low_post`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys, lemma_xwidth_of, sty, to_xty, to_xtys, wf_stype, wf_stypes, STy};
+use crate::encoding::{keys, lemma_xwidth_of, STy, sty, to_xty, to_xtys, wf_stype, wf_stypes};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{wf_xtypes, width, xty, xwidth, xwidth_sum, XTy, XType};
+use crate::encoding::{wf_xtypes, width, XTy, xty, XType, xwidth, xwidth_sum};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{all_pure, ite_s, mark_s, pure_below, setop_s};
 #[cfg(verus_keep_ghost)]
@@ -25,9 +25,9 @@ use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::lemma_pure_mono;
 #[cfg(verus_keep_ghost)]
-use crate::rows::row_at;
-#[cfg(verus_keep_ghost)]
 use crate::rows::{col, flat, head_at, heads_ok, ite_row, ite_rows_ok, mparts_ok, mrow_at, parts_ok};
+#[cfg(verus_keep_ghost)]
+use crate::rows::row_at;
 #[cfg(verus_keep_ghost)]
 use crate::source::{Item, Over, SetOp, TExpr};
 use vstd::prelude::*;
