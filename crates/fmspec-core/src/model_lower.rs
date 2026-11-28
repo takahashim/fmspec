@@ -5,30 +5,34 @@
 //! 初期状態は、状態変数ごとの候補の符号を整列して重複を除き、その直積から初期条件を満たすものを残す。
 //! 下ろしが成功すれば、中核のモデルの安全性は値の上のモデルの安全性と一致する（[`lowers_model`]）。
 
+#[cfg(verus_keep_ghost)]
+use crate::action_lower::{lemma_encode_in, type_err, user_err};
+use crate::action_lower::{lower_action, Fault, LowerError};
 use crate::canon::{slot_types, slot_types_list};
-use crate::encoding::{copy_stype, wf_stype_exec, SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, lemma_stys, lemma_width_pos, member, members, sty, stys, STy};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xty, wf_stype, wf_stypes, width_sum, XTy};
+use crate::encoding::{SType, SVal};
 use crate::equality::small_stype;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{code_of, eval_l, eval_spec, prop_spec, Env, ErrKind};
 use crate::eval::{eval, eval_prop, Ctx};
-use crate::expr_build::stype_width;
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lemma_width_sum_prefix, small, smalls};
+#[cfg(verus_keep_ghost)]
+use crate::lower_ctx::{layout_at, layouts_at};
 use crate::lower_ctx::{Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{layout_at, layouts_at, lemma_slot_tys_len, slot_tys, slot_tys_seq};
+use crate::lower_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 use crate::lowering::{lower_prop, lower_stored};
 use crate::model::{Action, Contract, Expr, RawModel, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::model_safe::*;
+use crate::model_total::check_model;
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, const_ctx, consts_match, lemma_const_ctx, lemma_sa_typed};
-use crate::model_total::{check_model, lower_action};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{lemma_state_ctx, model_typed, out_sty, st_ctx, tys_ok};
 #[cfg(verus_keep_ghost)]
@@ -38,17 +42,18 @@ use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{inv_env, safe, Conditions};
 #[cfg(verus_keep_ghost)]
-use crate::smodel::user_err;
+use crate::smodel::styped;
+use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{codes, consts_ok, lemma_code_in, lemma_encode_in, lemma_rel_codes, rel, s_cand};
-#[cfg(verus_keep_ghost)]
-use crate::smodel::{s_env, s_init, s_init_var, s_prop, s_safe, s_state_tys, styped, type_err};
-use crate::smodel::{Fault, LowerError, SModel};
+use crate::smodel::{consts_ok, s_cand, s_env, s_init, s_init_var, s_prop, s_safe, s_state_tys};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};
 #[cfg(verus_keep_ghost)]
-use crate::step::encode_spec;
-use crate::step::{copy_vec, encode, vec_eq};
+use crate::srel::{codes, consts_rel, lemma_code_in, lemma_rel_codes, rel};
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::encode_spec;
+use crate::state_enc::{copy_vec, encode, vec_eq};
+use crate::stype_exec::{copy_stype, stype_width, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
 use crate::total::{cx_wf, ok_s, sctx};
 use vstd::prelude::*;
@@ -953,7 +958,7 @@ proof fn lemma_model_types(
         m.contracts@.len() == sm.contracts@.len(),
         forall|q: int| 0 <= q < m.actions@.len() ==> #[trigger] action_at(sm, cv, stg, cs[q], q, m.actions@[q]),
         forall|q: int| 0 <= q < m.contracts@.len() ==> #[trigger] contract_at(sm, cv, stg, ks[q], q, m.contracts@[q]),
-        forall|q: int| 0 <= q < m.actions@.len() ==> #[trigger] crate::smodel::act_typed(m.actions@[q], crate::lower_types::lenv(cs[q])),
+        forall|q: int| 0 <= q < m.actions@.len() ==> #[trigger] crate::action_lower::act_typed(m.actions@[q], crate::lower_types::lenv(cs[q])),
         forall|q: int| 0 <= q < m.invariants@.len() ==> #[trigger] crate::lower_types::has_ty(m.invariants@[q], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool),
         forall|q: int| 0 <= q < m.contracts@.len() ==> #[trigger] crate::lower_types::has_ty(m.contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool),
         m.terminal matches Some(e) ==> crate::lower_types::has_ty(e, crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool),
@@ -961,10 +966,10 @@ proof fn lemma_model_types(
         crate::typing::wf(m),
 {
     crate::model_wf::lemma_inv_env(sm, cv, stg, sx, m);
-    assert forall|a: int| 0 <= a < m.actions@.len() implies #[trigger] crate::smodel::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)) by {
+    assert forall|a: int| 0 <= a < m.actions@.len() implies #[trigger] crate::action_lower::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)) by {
         assert(action_at(sm, cv, stg, cs[a], a, m.actions@[a]));
         crate::model_wf::lemma_act_env(sm, cv, stg, cs[a], a, m);
-        assert(crate::smodel::act_typed(m.actions@[a], crate::lower_types::lenv(cs[a])));
+        assert(crate::action_lower::act_typed(m.actions@[a], crate::lower_types::lenv(cs[a])));
     }
     assert forall|c: int| 0 <= c < m.contracts@.len() implies #[trigger] crate::lower_types::has_ty(
         m.contracts@[c].expr,
@@ -1002,6 +1007,439 @@ pub fn lower_model(sm: &SModel) -> (r: Result<RawModel, LowerError>)
         Ok((m, _)) => Ok(m),
         Err(e) => Err(e),
     }
+}
+
+/// 定数を宣言の順に評価して、文脈 `cx` の定数に加える。値の上の定数の値の列を ghost で返す。
+fn lower_consts(sm: &SModel, cx: &mut LowerCtx) -> (r: Result<Ghost<Seq<SVal>>, LowerError>)
+    requires
+        init_cx(*sm, Seq::empty(), *old(cx)),
+        model_typed(*sm),
+        consts_match(*sm, old(cx).consts@),
+    ensures
+        r matches Ok(cv) ==> {
+            &&& init_cx(*sm, cv@, *final(cx))
+            &&& cv@.len() == sm.consts@.len()
+            &&& forall|q: int| 0 <= q < sm.consts@.len() ==> #[trigger] const_at(*sm, cv@, q)
+            &&& consts_match(*sm, final(cx).consts@)
+        },
+        r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)),
+{
+    let ghost mut cv: Seq<SVal> = Seq::empty();
+    let mut i = 0;
+    while i < sm.consts.len()
+        invariant
+            i <= sm.consts@.len(),
+            init_cx(*sm, cv, *cx),
+            cv.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] const_at(*sm, cv, q),
+            model_typed(*sm),
+            consts_match(*sm, cx.consts@),
+        decreases sm.consts@.len() - i,
+    {
+        let c = &sm.consts[i];
+        proof {
+            lemma_const_ctx(*sm, cv, *cx);
+            assert(cx.consts@.len() == i);
+            assert(ok_s(sty(sm.consts@[i as int].ty), sm.enums@));
+        }
+        let (vals, _cs) = match eval_stored(&c.expr, cx, &c.ty) {
+            Ok(r) => r,
+            Err(f) => return Err(LowerError::Const(i, f)),
+        };
+        let ghost cv0 = cv;
+        proof {
+            let se = s_env(*sm, cv, Seq::empty(), Seq::empty(), Seq::empty(), None);
+            lemma_init_top(*sm, cv, *cx);
+            let v = eval_src(c.expr, se, Seq::empty())->Ok_0;
+            cv = cv.push(v);
+            assert(cv.take(i as int) =~= cv0);
+            assert forall|q: int| 0 <= q < i + 1 implies #[trigger] const_at(*sm, cv, q) by {
+                if q < i {
+                    assert(cv.take(q) =~= cv0.take(q));
+                    assert(const_at(*sm, cv0, q));
+                }
+            }
+        }
+        let ghost cs0 = cx.consts@;
+        cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: vals });
+        proof {
+            assert forall|q: int| 0 <= q < cx.consts@.len() implies sty(#[trigger] cx.consts@[q].ty) == sty(
+                sm.consts@[q].ty,
+            ) by {
+                if q < i {
+                    assert(cx.consts@[q] == cs0[q]);
+                }
+            }
+            assert forall|q: int| 0 <= q < cx.consts@.len() implies member(#[trigger] cv[q], sty(cx.consts@[q].ty), sm.enums@)
+                && cx.consts@[q].slots@ == enc(cv[q], sty(cx.consts@[q].ty), sm.enums@) by {
+                if q < i {
+                    assert(cx.consts@[q] == cs0[q]);
+                    assert(cv[q] == cv0[q]);
+                }
+            }
+        }
+        i += 1;
+    }
+    Ok(Ghost(cv))
+}
+
+/// 初期値の候補を状態変数ごとに求め、その直積（`prod_ok`）を作る。
+fn init_products(sm: &SModel, cx: &LowerCtx, Ghost(cv): Ghost<Seq<SVal>>) -> (r: Result<Vec<Vec<i64>>, LowerError>)
+    requires
+        init_cx(*sm, cv, *cx),
+        model_typed(*sm),
+        consts_match(*sm, cx.consts@),
+        cx.consts@.len() == sm.consts@.len(),
+    ensures
+        r matches Ok(ps) ==> sm.inits@.len() == sm.states@.len() && prod_ok(*sm, cv, sm.states@.len() as int, ps@),
+        r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)),
+{
+    if sm.inits.len() != sm.states.len() {
+        return Err(LowerError::InitCount);
+    }
+    let mut cands: Vec<Vec<Vec<i64>>> = Vec::new();
+    let mut total: usize = 1;
+    let mut i = 0;
+    while i < sm.states.len()
+        invariant
+            i <= sm.states@.len(),
+            sm.inits@.len() == sm.states@.len(),
+            init_cx(*sm, cv, *cx),
+            cands@.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] cands_ok(*sm, cv, q, cands@[q]@),
+            model_typed(*sm),
+            consts_match(*sm, cx.consts@),
+            cx.consts@.len() == sm.consts@.len(),
+        decreases sm.states@.len() - i,
+    {
+        let c = var_cands(sm, cx, i, Ghost(cv))?;
+        total = match total.checked_mul(c.len()) {
+            Some(t) => t,
+            None => return Err(LowerError::InitCount),
+        };
+        if total > MAX_INITIAL_CANDIDATES {
+            return Err(LowerError::InitCount);
+        }
+        cands.push(c);
+        i += 1;
+    }
+    // 候補の直積
+    let mut ps: Vec<Vec<i64>> = Vec::new();
+    ps.push(Vec::new());
+    proof {
+        let enums = sm.enums@;
+        let ts0 = s_state_tys(*sm).take(0);
+        assert(ts0 =~= Seq::<STy>::empty());
+        assert forall|y: Seq<i64>| #[trigger] has(ps@, y) implies exists|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) && y
+            == codes(enc_seq(ws, ts0, enums)) by {
+            assert(combo(*sm, cv, 0, Seq::<SVal>::empty()));
+            assert(codes(enc_seq(Seq::<SVal>::empty(), ts0, enums)) =~= Seq::<i64>::empty());
+        }
+        assert forall|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) implies has(ps@, codes(enc_seq(ws, ts0, enums))) by {
+            assert(codes(enc_seq(ws, ts0, enums)) =~= Seq::<i64>::empty());
+            assert(ps@[0]@ =~= Seq::<i64>::empty());
+        }
+        lemma_stys(sm.states@);
+    }
+    let mut k = 0;
+    while k < cands.len()
+        invariant
+            k <= cands@.len(),
+            cands@.len() == sm.states@.len(),
+            s_state_tys(*sm).len() == sm.states@.len(),
+            forall|q: int| 0 <= q < cands@.len() ==> #[trigger] cands_ok(*sm, cv, q, cands@[q]@),
+            prod_ok(*sm, cv, k as int, ps@),
+        decreases cands@.len() - k,
+    {
+        let next = product_step(&ps, &cands[k]);
+        proof {
+            assert(cands_ok(*sm, cv, k as int, cands@[k as int]@));
+            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);
+        }
+        ps = next;
+        k += 1;
+    }
+    Ok(ps)
+}
+
+/// 操作を下ろす。文脈 `cx` の引数のレイアウトを、操作ごとに置き換える。
+fn lower_actions(
+    sm: &SModel,
+    cx: &mut LowerCtx,
+    enums: &Vec<i64>,
+    Ghost(cv): Ghost<Seq<SVal>>,
+    Ghost(stg): Ghost<Seq<Layout>>,
+    Ghost(sx): Ghost<LowerCtx>,
+) -> (r: Result<(Vec<Action>, Ghost<Seq<LowerCtx>>), LowerError>)
+    requires
+        old(cx).enums == sx.enums,
+        old(cx).states == sx.states,
+        old(cx).consts == sx.consts,
+        !old(cx).next,
+        old(cx).out is None,
+        ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
+        enums@ == sm.enums@,
+        model_typed(*sm),
+        old(cx).consts@.len() == sm.consts@.len(),
+        consts_match(*sm, old(cx).consts@),
+        layouts_at(stg, stys(sm.states@), sm.enums@),
+    ensures
+        final(cx).enums == sx.enums,
+        final(cx).states == sx.states,
+        final(cx).consts == sx.consts,
+        !final(cx).next,
+        final(cx).out is None,
+        r matches Ok((actions, cs)) ==> {
+            &&& actions@.len() == sm.actions@.len()
+            &&& cs@.len() == sm.actions@.len()
+            &&& forall|q: int|
+                0 <= q < actions@.len() ==> #[trigger] crate::action_lower::act_typed(actions@[q], crate::lower_types::lenv(cs@[q]))
+            &&& forall|q: int| 0 <= q < actions@.len() ==> #[trigger] action_at(*sm, cv, stg, cs@[q], q, actions@[q])
+        },
+        r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)),
+{
+    let mut actions: Vec<Action> = Vec::new();
+    let ghost mut cs: Seq<LowerCtx> = Seq::empty();
+    let mut a = 0;
+    while a < sm.actions.len()
+        invariant
+            a <= sm.actions@.len(),
+            cx.enums == sx.enums,
+            cx.states == sx.states,
+            cx.consts == sx.consts,
+            !cx.next,
+            cx.out is None,
+            ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
+            enums@ == sm.enums@,
+            actions@.len() == a,
+            forall|q: int| 0 <= q < a ==> #[trigger] crate::action_lower::act_typed(actions@[q], crate::lower_types::lenv(cs[q])),
+            cs.len() == a,
+            forall|q: int| 0 <= q < a ==> #[trigger] action_at(*sm, cv, stg, cs[q], q, actions@[q]),
+            model_typed(*sm),
+            cx.consts@.len() == sm.consts@.len(),
+            consts_match(*sm, cx.consts@),
+            layouts_at(stg, stys(sm.states@), sm.enums@),
+        decreases sm.actions@.len() - a,
+    {
+        let sa = &sm.actions[a];
+        proof {
+            assert(action_typed(*sm, a as int));
+            lemma_sa_typed(*sm, a as int);
+        }
+        match check_types(&sa.args, enums) {
+            Ok(()) => {},
+            Err(i) => return Err(LowerError::Args(a, i)),
+        }
+        let la = match layouts_of(&sa.args, enums) {
+            Ok(l) => l,
+            Err(i) => return Err(LowerError::Args(a, i)),
+        };
+        cx.args = la;
+        proof {
+            lemma_state_ctx(*sm, cv, *cx, stys(sa.args@));
+            crate::model_wf::lemma_cx_tok(*cx, cv, stys(sm.states@), stys(sa.args@));
+        }
+        let act = lower_action(sa, cx, a)?;
+        let ghost a0 = actions@;
+        let ghost cs0 = cs;
+        proof {
+            cs = cs.push(*cx);
+            assert(action_at(*sm, cv, stg, cs[a as int], a as int, act));
+        }
+        actions.push(act);
+        proof {
+            assert forall|q: int| 0 <= q < a + 1 implies #[trigger] crate::action_lower::act_typed(actions@[q], crate::lower_types::lenv(cs[q])) by {
+                if q < a {
+                    assert(actions@[q] == a0[q]);
+                    assert(cs[q] == cs0[q]);
+                }
+            }
+        }
+        a += 1;
+    }
+    Ok((actions, Ghost(cs)))
+}
+
+/// 遷移契約を下ろす。文脈 `cx` の引数のレイアウトと出力の型を、契約の操作ごとに置き換える。
+fn lower_contracts(
+    sm: &SModel,
+    cx: &mut LowerCtx,
+    enums: &Vec<i64>,
+    Ghost(cv): Ghost<Seq<SVal>>,
+    Ghost(stg): Ghost<Seq<Layout>>,
+    Ghost(sx): Ghost<LowerCtx>,
+) -> (r: Result<(Vec<Contract>, Ghost<Seq<LowerCtx>>), LowerError>)
+    requires
+        old(cx).enums == sx.enums,
+        old(cx).states == sx.states,
+        old(cx).consts == sx.consts,
+        old(cx).next,
+        ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
+        enums@ == sm.enums@,
+        model_typed(*sm),
+        old(cx).consts@.len() == sm.consts@.len(),
+        consts_match(*sm, old(cx).consts@),
+        layouts_at(stg, stys(sm.states@), sm.enums@),
+    ensures
+        final(cx).enums == sx.enums,
+        final(cx).states == sx.states,
+        final(cx).consts == sx.consts,
+        r matches Ok((contracts, ks)) ==> {
+            &&& contracts@.len() == sm.contracts@.len()
+            &&& ks@.len() == sm.contracts@.len()
+            &&& forall|q: int|
+                0 <= q < contracts@.len() ==> #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks@[q]), Seq::empty(), crate::typing::ETy::Bool)
+            &&& forall|q: int| 0 <= q < contracts@.len() ==> #[trigger] contract_at(*sm, cv, stg, ks@[q], q, contracts@[q])
+        },
+        r matches Err(e) ==> user_err(e) || (type_err(e) && !model_typed(*sm)),
+{
+    let mut contracts: Vec<Contract> = Vec::new();
+    let ghost mut ks: Seq<LowerCtx> = Seq::empty();
+    let mut k = 0;
+    while k < sm.contracts.len()
+        invariant
+            k <= sm.contracts@.len(),
+            cx.enums == sx.enums,
+            cx.states == sx.states,
+            cx.consts == sx.consts,
+            cx.next,
+            ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
+            enums@ == sm.enums@,
+            contracts@.len() == k,
+            ks.len() == k,
+            forall|q: int| 0 <= q < k ==> #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool),
+            forall|q: int| 0 <= q < k ==> #[trigger] contract_at(*sm, cv, stg, ks[q], q, contracts@[q]),
+            model_typed(*sm),
+            cx.consts@.len() == sm.consts@.len(),
+            consts_match(*sm, cx.consts@),
+            layouts_at(stg, stys(sm.states@), sm.enums@),
+        decreases sm.contracts@.len() - k,
+    {
+        let con = &sm.contracts[k];
+        proof {
+            assert(sm.contracts@[k as int] == *con);
+        }
+        if con.action >= sm.actions.len() {
+            return Err(LowerError::Contract(k));
+        }
+        let sa = &sm.actions[con.action];
+        proof {
+            assert(action_typed(*sm, con.action as int));
+        }
+        let la = match layouts_of(&sa.args, enums) {
+            Ok(l) => l,
+            Err(_) => return Err(LowerError::Contract(k)),
+        };
+        cx.args = la;
+        cx.out = match &sa.output {
+            None => None,
+            Some(o) => Some(copy_stype(&o.ty)),
+        };
+        proof {
+            lemma_state_ctx(*sm, cv, *cx, stys(sa.args@));
+            crate::model_wf::lemma_cx_tok(*cx, cv, stys(sm.states@), stys(sa.args@));
+            assert(out_sty(*sa) == match cx.out {
+                Some(t) => Some(sty(t)),
+                None => None,
+            });
+        }
+        let e = match lower_prop(&con.expr, cx) {
+            Ok(e) => e,
+            Err(Fail::Depth) => return Err(LowerError::Depth),
+            Err(Fail::Type) => return Err(LowerError::Contract(k)),
+        };
+        let c = Contract { action: con.action, expr: e };
+        let ghost k0 = contracts@;
+        let ghost ks0 = ks;
+        proof {
+            ks = ks.push(*cx);
+            assert(contract_at(*sm, cv, stg, ks[k as int], k as int, c));
+        }
+        contracts.push(c);
+        proof {
+            assert forall|q: int| 0 <= q < k + 1 implies #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool) by {
+                if q < k {
+                    assert(contracts@[q] == k0[q]);
+                    assert(ks[q] == ks0[q]);
+                }
+            }
+        }
+        k += 1;
+    }
+    Ok((contracts, Ghost(ks)))
+}
+
+/// 不変条件と終端条件を、状態を参照できる文脈 `cx` で下ろす。
+fn lower_props(sm: &SModel, cx: &LowerCtx) -> (r: Result<(Vec<Expr>, Option<Expr>), LowerError>)
+    requires
+        model_typed(*sm),
+        cx_wf(*cx),
+        sctx(*cx) == st_ctx(*sm, Seq::empty(), false, None),
+        crate::lower_types::cx_tok(*cx),
+    ensures
+        r matches Ok((invariants, terminal)) ==> {
+            &&& invariants@.len() == sm.invariants@.len()
+            &&& forall|q: int|
+                0 <= q < invariants@.len() ==> #[trigger] prop_low(sm.invariants@[q], *cx, invariants@[q])
+            &&& forall|q: int|
+                0 <= q < invariants@.len() ==> #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(*cx), Seq::empty(), crate::typing::ETy::Bool)
+            &&& match (sm.terminal, terminal) {
+                (None, None) => true,
+                (Some(e), Some(x)) => prop_low(e, *cx, x) && crate::lower_types::has_ty(x, crate::lower_types::lenv(*cx), Seq::empty(), crate::typing::ETy::Bool),
+                _ => false,
+            }
+        },
+        r matches Err(e) ==> e is Depth,
+{
+    let mut invariants: Vec<Expr> = Vec::new();
+    let mut i = 0;
+    while i < sm.invariants.len()
+        invariant
+            i <= sm.invariants@.len(),
+            invariants@.len() == i,
+            forall|q: int| 0 <= q < i ==> #[trigger] prop_low(sm.invariants@[q], *cx, invariants@[q]),
+            model_typed(*sm),
+            cx_wf(*cx),
+            sctx(*cx) == st_ctx(*sm, Seq::empty(), false, None),
+            crate::lower_types::cx_tok(*cx),
+            forall|q: int| 0 <= q < i ==> #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(*cx), Seq::empty(), crate::typing::ETy::Bool),
+        decreases sm.invariants@.len() - i,
+    {
+        proof {
+            assert(styped(sm.invariants@[i as int], st_ctx(*sm, Seq::empty(), false, None), XTy::Bool));
+        }
+        match lower_prop(&sm.invariants[i], cx) {
+            Ok(e) => {
+                let ghost i0 = invariants@;
+                invariants.push(e);
+                proof {
+                    assert forall|q: int| 0 <= q < i + 1 implies #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(*cx), Seq::empty(), crate::typing::ETy::Bool) by {
+                        if q < i {
+                            assert(invariants@[q] == i0[q]);
+                        }
+                    }
+                }
+            },
+            Err(Fail::Depth) => return Err(LowerError::Depth),
+            Err(Fail::Type) => return Err(LowerError::Invariant(i)),
+        }
+        i += 1;
+    }
+    let terminal: Option<Expr> = match &sm.terminal {
+        None => None,
+        Some(e) => match lower_prop(e, cx) {
+            Ok(c) => Some(c),
+            Err(Fail::Depth) => return Err(LowerError::Depth),
+            Err(Fail::Type) => return Err(LowerError::Terminal),
+        },
+    };
+    proof {
+        if terminal is Some {
+            assert(styped(sm.terminal->Some_0, st_ctx(*sm, Seq::empty(), false, None), XTy::Bool));
+            assert(crate::lower_types::has_ty(terminal->Some_0, crate::lower_types::lenv(*cx), Seq::empty(), crate::typing::ETy::Bool));
+        }
+    }
+    Ok((invariants, terminal))
 }
 
 /// モデル全体を中核のモデルに下ろし、写像 `maps` の各式をスロットごとの式に下ろして、つないだ列を返す。
@@ -1058,129 +1496,13 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         consts: Vec::new(),
     };
     // 定数
-    let ghost mut cv: Seq<SVal> = Seq::empty();
-    let mut i = 0;
-    while i < sm.consts.len()
-        invariant
-            i <= sm.consts@.len(),
-            enums@ == sm.enums@,
-            init_cx(*sm, cv, cx),
-            cv.len() == i,
-            forall|q: int| 0 <= q < i ==> #[trigger] const_at(*sm, cv, q),
-            model_typed(*sm),
-            consts_match(*sm, cx.consts@),
-        decreases sm.consts@.len() - i,
-    {
-        let c = &sm.consts[i];
-        proof {
-            lemma_const_ctx(*sm, cv, cx);
-            assert(cx.consts@.len() == i);
-            assert(ok_s(sty(sm.consts@[i as int].ty), sm.enums@));
-        }
-        let (vals, _cs) = match eval_stored(&c.expr, &cx, &c.ty) {
-            Ok(r) => r,
-            Err(f) => return Err(LowerError::Const(i, f)),
-        };
-        let ghost cv0 = cv;
-        proof {
-            let se = s_env(*sm, cv, Seq::empty(), Seq::empty(), Seq::empty(), None);
-            lemma_init_top(*sm, cv, cx);
-            let v = eval_src(c.expr, se, Seq::empty())->Ok_0;
-            cv = cv.push(v);
-            assert(cv.take(i as int) =~= cv0);
-            assert forall|q: int| 0 <= q < i + 1 implies #[trigger] const_at(*sm, cv, q) by {
-                if q < i {
-                    assert(cv.take(q) =~= cv0.take(q));
-                    assert(const_at(*sm, cv0, q));
-                }
-            }
-        }
-        let ghost cs0 = cx.consts@;
-        cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: vals });
-        proof {
-            assert forall|q: int| 0 <= q < cx.consts@.len() implies sty(#[trigger] cx.consts@[q].ty) == sty(
-                sm.consts@[q].ty,
-            ) by {
-                if q < i {
-                    assert(cx.consts@[q] == cs0[q]);
-                }
-            }
-            assert forall|q: int| 0 <= q < cx.consts@.len() implies member(#[trigger] cv[q], sty(cx.consts@[q].ty), sm.enums@)
-                && cx.consts@[q].slots@ == enc(cv[q], sty(cx.consts@[q].ty), sm.enums@) by {
-                if q < i {
-                    assert(cx.consts@[q] == cs0[q]);
-                    assert(cv[q] == cv0[q]);
-                }
-            }
-        }
-        i += 1;
-    }
-    // 初期値の候補
-    if sm.inits.len() != sm.states.len() {
-        return Err(LowerError::InitCount);
-    }
-    let mut cands: Vec<Vec<Vec<i64>>> = Vec::new();
-    let mut total: usize = 1;
-    let mut i = 0;
-    while i < sm.states.len()
-        invariant
-            i <= sm.states@.len(),
-            sm.inits@.len() == sm.states@.len(),
-            init_cx(*sm, cv, cx),
-            cands@.len() == i,
-            forall|q: int| 0 <= q < i ==> #[trigger] cands_ok(*sm, cv, q, cands@[q]@),
-            model_typed(*sm),
-            consts_match(*sm, cx.consts@),
-            cx.consts@.len() == sm.consts@.len(),
-        decreases sm.states@.len() - i,
-    {
-        let c = var_cands(sm, &cx, i, Ghost(cv))?;
-        total = match total.checked_mul(c.len()) {
-            Some(t) => t,
-            None => return Err(LowerError::InitCount),
-        };
-        if total > MAX_INITIAL_CANDIDATES {
-            return Err(LowerError::InitCount);
-        }
-        cands.push(c);
-        i += 1;
-    }
-    // 候補の直積
-    let mut ps: Vec<Vec<i64>> = Vec::new();
-    ps.push(Vec::new());
     proof {
-        let enums = sm.enums@;
-        let ts0 = s_state_tys(*sm).take(0);
-        assert(ts0 =~= Seq::<STy>::empty());
-        assert forall|y: Seq<i64>| #[trigger] has(ps@, y) implies exists|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) && y
-            == codes(enc_seq(ws, ts0, enums)) by {
-            assert(combo(*sm, cv, 0, Seq::<SVal>::empty()));
-            assert(codes(enc_seq(Seq::<SVal>::empty(), ts0, enums)) =~= Seq::<i64>::empty());
-        }
-        assert forall|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) implies has(ps@, codes(enc_seq(ws, ts0, enums))) by {
-            assert(codes(enc_seq(ws, ts0, enums)) =~= Seq::<i64>::empty());
-            assert(ps@[0]@ =~= Seq::<i64>::empty());
-        }
-        lemma_stys(sm.states@);
+        assert(consts_rel(cx.consts@, Seq::empty(), sm.enums@));
     }
-    let mut k = 0;
-    while k < cands.len()
-        invariant
-            k <= cands@.len(),
-            cands@.len() == sm.states@.len(),
-            s_state_tys(*sm).len() == sm.states@.len(),
-            forall|q: int| 0 <= q < cands@.len() ==> #[trigger] cands_ok(*sm, cv, q, cands@[q]@),
-            prod_ok(*sm, cv, k as int, ps@),
-        decreases cands@.len() - k,
-    {
-        let next = product_step(&ps, &cands[k]);
-        proof {
-            assert(cands_ok(*sm, cv, k as int, cands@[k as int]@));
-            lemma_prod_step(*sm, cv, k as int, ps@, cands@[k as int]@, next@);
-        }
-        ps = next;
-        k += 1;
-    }
+    let _cv = lower_consts(sm, &mut cx)?;
+    let ghost cv = _cv@;
+    // 初期値の候補の直積
+    let ps = init_products(sm, &cx, Ghost(cv))?;
     // 状態を参照できる文脈
     proof {
         assert(consts_rel(cx.consts@, cv, sm.enums@));
@@ -1213,191 +1535,17 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         return Err(LowerError::NoInit);
     }
     // 不変条件と終端条件
-    let mut invariants: Vec<Expr> = Vec::new();
-    let mut i = 0;
-    while i < sm.invariants.len()
-        invariant
-            i <= sm.invariants@.len(),
-            cx == sx,
-            invariants@.len() == i,
-            forall|q: int| 0 <= q < i ==> #[trigger] prop_low(sm.invariants@[q], sx, invariants@[q]),
-            model_typed(*sm),
-            cx_wf(sx),
-            sctx(sx) == sc0,
-            sc0 == st_ctx(*sm, Seq::empty(), false, None),
-            crate::lower_types::cx_tok(sx),
-            forall|q: int| 0 <= q < i ==> #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool),
-        decreases sm.invariants@.len() - i,
-    {
-        proof {
-            assert(styped(sm.invariants@[i as int], sc0, XTy::Bool));
-        }
-        match lower_prop(&sm.invariants[i], &cx) {
-            Ok(e) => {
-                let ghost i0 = invariants@;
-                invariants.push(e);
-                proof {
-                    assert forall|q: int| 0 <= q < i + 1 implies #[trigger] crate::lower_types::has_ty(invariants@[q], crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool) by {
-                        if q < i {
-                            assert(invariants@[q] == i0[q]);
-                        }
-                    }
-                }
-            },
-            Err(Fail::Depth) => return Err(LowerError::Depth),
-            Err(Fail::Type) => return Err(LowerError::Invariant(i)),
-        }
-        i += 1;
-    }
-    let terminal: Option<Expr> = match &sm.terminal {
-        None => None,
-        Some(e) => match lower_prop(e, &cx) {
-            Ok(c) => Some(c),
-            Err(Fail::Depth) => return Err(LowerError::Depth),
-            Err(Fail::Type) => return Err(LowerError::Terminal),
-        },
-    };
     proof {
-        if terminal is Some {
-            assert(styped(sm.terminal->Some_0, sc0, XTy::Bool));
-            assert(crate::lower_types::has_ty(terminal->Some_0, crate::lower_types::lenv(sx), Seq::empty(), crate::typing::ETy::Bool));
-        }
+        assert(sctx(sx) == st_ctx(*sm, Seq::empty(), false, None));
     }
+    let (invariants, terminal) = lower_props(sm, &cx)?;
     // 操作
-    let mut actions: Vec<Action> = Vec::new();
-    let ghost mut cs: Seq<LowerCtx> = Seq::empty();
-    let mut a = 0;
-    while a < sm.actions.len()
-        invariant
-            a <= sm.actions@.len(),
-            cx.enums == sx.enums,
-            cx.states == sx.states,
-            cx.consts == sx.consts,
-            !cx.next,
-            cx.out is None,
-            ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
-            enums@ == sm.enums@,
-            actions@.len() == a,
-            forall|q: int| 0 <= q < a ==> #[trigger] crate::smodel::act_typed(actions@[q], crate::lower_types::lenv(cs[q])),
-            cs.len() == a,
-            forall|q: int| 0 <= q < a ==> #[trigger] action_at(*sm, cv, stg, cs[q], q, actions@[q]),
-            model_typed(*sm),
-            cx.consts@.len() == sm.consts@.len(),
-            consts_match(*sm, cx.consts@),
-            layouts_at(stg, stys(sm.states@), sm.enums@),
-        decreases sm.actions@.len() - a,
-    {
-        let sa = &sm.actions[a];
-        proof {
-            assert(action_typed(*sm, a as int));
-            lemma_sa_typed(*sm, a as int);
-        }
-        match check_types(&sa.args, &enums) {
-            Ok(()) => {},
-            Err(i) => return Err(LowerError::Args(a, i)),
-        }
-        let la = match layouts_of(&sa.args, &enums) {
-            Ok(l) => l,
-            Err(i) => return Err(LowerError::Args(a, i)),
-        };
-        cx.args = la;
-        proof {
-            lemma_state_ctx(*sm, cv, cx, stys(sa.args@));
-            crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), stys(sa.args@));
-        }
-        let act = lower_action(sa, &cx, a)?;
-        let ghost a0 = actions@;
-        let ghost cs0 = cs;
-        proof {
-            cs = cs.push(cx);
-            assert(action_at(*sm, cv, stg, cs[a as int], a as int, act));
-        }
-        actions.push(act);
-        proof {
-            assert forall|q: int| 0 <= q < a + 1 implies #[trigger] crate::smodel::act_typed(actions@[q], crate::lower_types::lenv(cs[q])) by {
-                if q < a {
-                    assert(actions@[q] == a0[q]);
-                    assert(cs[q] == cs0[q]);
-                }
-            }
-        }
-        a += 1;
-    }
+    let (actions, _cs) = lower_actions(sm, &mut cx, &enums, Ghost(cv), Ghost(stg), Ghost(sx))?;
+    let ghost cs = _cs@;
     // 遷移契約
     cx.next = true;
-    let mut contracts: Vec<Contract> = Vec::new();
-    let ghost mut ks: Seq<LowerCtx> = Seq::empty();
-    let mut k = 0;
-    while k < sm.contracts.len()
-        invariant
-            k <= sm.contracts@.len(),
-            cx.enums == sx.enums,
-            cx.states == sx.states,
-            cx.consts == sx.consts,
-            cx.next,
-            ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
-            enums@ == sm.enums@,
-            contracts@.len() == k,
-            ks.len() == k,
-            forall|q: int| 0 <= q < k ==> #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool),
-            forall|q: int| 0 <= q < k ==> #[trigger] contract_at(*sm, cv, stg, ks[q], q, contracts@[q]),
-            model_typed(*sm),
-            cx.consts@.len() == sm.consts@.len(),
-            consts_match(*sm, cx.consts@),
-            layouts_at(stg, stys(sm.states@), sm.enums@),
-        decreases sm.contracts@.len() - k,
-    {
-        let con = &sm.contracts[k];
-        proof {
-            assert(sm.contracts@[k as int] == *con);
-        }
-        if con.action >= sm.actions.len() {
-            return Err(LowerError::Contract(k));
-        }
-        let sa = &sm.actions[con.action];
-        proof {
-            assert(action_typed(*sm, con.action as int));
-        }
-        let la = match layouts_of(&sa.args, &enums) {
-            Ok(l) => l,
-            Err(_) => return Err(LowerError::Contract(k)),
-        };
-        cx.args = la;
-        cx.out = match &sa.output {
-            None => None,
-            Some(o) => Some(copy_stype(&o.ty)),
-        };
-        proof {
-            lemma_state_ctx(*sm, cv, cx, stys(sa.args@));
-            crate::model_wf::lemma_cx_tok(cx, cv, stys(sm.states@), stys(sa.args@));
-            assert(out_sty(*sa) == match cx.out {
-                Some(t) => Some(sty(t)),
-                None => None,
-            });
-        }
-        let e = match lower_prop(&con.expr, &cx) {
-            Ok(e) => e,
-            Err(Fail::Depth) => return Err(LowerError::Depth),
-            Err(Fail::Type) => return Err(LowerError::Contract(k)),
-        };
-        let c = Contract { action: con.action, expr: e };
-        let ghost k0 = contracts@;
-        let ghost ks0 = ks;
-        proof {
-            ks = ks.push(cx);
-            assert(contract_at(*sm, cv, stg, ks[k as int], k as int, c));
-        }
-        contracts.push(c);
-        proof {
-            assert forall|q: int| 0 <= q < k + 1 implies #[trigger] crate::lower_types::has_ty(contracts@[q].expr, crate::lower_types::lenv(ks[q]), Seq::empty(), crate::typing::ETy::Bool) by {
-                if q < k {
-                    assert(contracts@[q] == k0[q]);
-                    assert(ks[q] == ks0[q]);
-                }
-            }
-        }
-        k += 1;
-    }
+    let (contracts, _ks) = lower_contracts(sm, &mut cx, &enums, Ghost(cv), Ghost(stg), Ghost(sx))?;
+    let ghost ks = _ks@;
     let m = RawModel { enums, state_types: st_tys, inits, actions, invariants, contracts, terminal };
     proof {
         lemma_stys(sm.states@);

@@ -9,24 +9,25 @@ use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, enc, enc_items, enc_repeat, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, member, sty, width, STy, SVal, XTy};
+use crate::encoding::{lemma_items_member, list_items_member, member, sty, width, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, eval_l, Env, ErrKind};
+use crate::expr_build::sub_exprs;
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::ite_s;
-use crate::expr_build::{stype_width, sub_exprs};
+use crate::expr_build::{all_pure, ite_s, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_s;
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{all_pure, all_ty, col, flat, has_ty, ite_row, ite_rows_ok, parts_ok};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{pure_below, row_at, typed};
+use crate::lower_types::{all_ty, has_ty, typed};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
+#[cfg(verus_keep_ghost)]
+use crate::rows::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at};
+use crate::stype_exec::stype_width;
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
@@ -409,7 +410,7 @@ pub proof fn lemma_select_typed(rows: Seq<Seq<Expr>>, idx: Expr, out: Seq<Expr>,
 {
     assert(typed(rows[0], ys, t, lt));
     assert forall|j: int| 0 <= j < out.len() implies #[trigger] has_ty(out[j], t, lt, ys[j]) by {
-        let cl = crate::lower_types::col(rows, j);
+        let cl = crate::rows::col(rows, j);
         assert(crate::lists::picks(out[j], cl, idx));
         assert forall|q: int| 0 <= q < cl.len() implies #[trigger] has_ty(cl[q], t, lt, ys[j]) by {
             assert(typed(rows[q], ys, t, lt));
@@ -472,21 +473,6 @@ pub open spec fn picks_in(x: Expr, fs: Seq<Expr>, r: Expr, lo: int, hi: int) -> 
 
 pub open spec fn picks(x: Expr, fs: Seq<Expr>, r: Expr) -> bool {
     picks_in(x, fs, r, 0, fs.len() as int)
-}
-
-/// Listの要素は、要素の型に属する。
-pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
-    requires
-        list_items_member(items, t, enums),
-        0 <= k < items.len(),
-    ensures
-        member(items[k], t, enums),
-    decreases items.len(),
-{
-    if k < items.len() - 1 {
-        lemma_items_member(items.drop_last(), t, enums, k);
-        assert(items.drop_last()[k] == items[k]);
-    }
 }
 
 /// List のスロットの、長さと要素。

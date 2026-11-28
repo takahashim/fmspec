@@ -20,7 +20,9 @@ use crate::encoding::{map_rows_member, member, members, models_seq, sty, stys, S
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, same_kind, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{and_s, bool_lit, implies_s, split_ok, tree_s, xoff, Join};
+use crate::expr_build::xoff;
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, and_s, bool_lit, implies_s, pure_below, split_ok, tree_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]

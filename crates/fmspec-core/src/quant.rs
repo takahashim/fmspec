@@ -8,18 +8,16 @@
 use crate::canon::lemma_defaults_typed;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::width_sum;
+use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_items, enc_seq, keys, keys_product, lemma_default_len};
-use crate::encoding::{keys_exec, SType};
+use crate::encoding::{default_val, enc, enc_seq, keys, keys_product, lemma_default_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_items_len, lemma_enc_len, lemma_keys_pos, lemma_stys};
+use crate::encoding::{lemma_keys_pos, lemma_stys, sty, stys, wf_stype, wf_stypes, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{list_items_member, member, sty, stys, wf_stype, wf_stypes, width, STy, SVal};
+use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::eval::{as_bool, decode, eval_l, quant_l, Env, ErrKind};
+use crate::expr_build::{all_pure, ite_s, lits, pure_below};
 use crate::expr_build::{bin, cb, ci, defaults, eq, ite};
-#[cfg(verus_keep_ghost)]
-use crate::expr_build::{ite_s, lits};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::keys::{domain, lemma_domain_len, lemma_product_len, product};
@@ -35,7 +33,8 @@ use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{eval_qstate, eval_src, qresult, select_bits, src_bool, QState, SEnv, TExpr};
+use crate::source::select_bits;
+use crate::stype_exec::keys_exec;
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
 #[cfg(verus_keep_ghost)]
@@ -710,42 +709,6 @@ fn pick_range(fs: &Vec<Expr>, lo: usize, hi: usize, r: &Expr) -> (x: Expr)
     x
 }
 
-/// Listの要素の符号化の、`k` 番目の要素の `j` 番目のスロット。
-pub proof fn lemma_items_index(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int, j: int)
-    requires
-        list_items_member(items, t, enums),
-        0 <= k < items.len(),
-        0 <= j < width(t, enums),
-    ensures
-        member(items[k], t, enums),
-        enc_items(items, t, enums).len() == items.len() * width(t, enums),
-        0 <= k * width(t, enums) + j < items.len() * width(t, enums),
-        enc_items(items, t, enums)[k * width(t, enums) + j] == enc(items[k], t, enums)[j],
-    decreases items.len(),
-{
-    let n = items.len() as int;
-    let w = width(t, enums) as int;
-    lemma_enc_items_len(items, t, enums);
-    lemma_enc_items_len(items.drop_last(), t, enums);
-    assert(k * w + j < n * w) by (nonlinear_arith)
-        requires
-            0 <= k < n,
-            0 <= j < w,
-    ;
-    assert(0 <= k * w) by (nonlinear_arith)
-        requires
-            0 <= k,
-            0 <= w,
-    ;
-    lemma_enc_len(items.last(), t, enums);
-    if k == n - 1 {
-        assert((n - 1) * w + j - (n - 1) * w == j);
-    } else {
-        lemma_items_index(items.drop_last(), t, enums, k, j);
-        assert(items.drop_last()[k] == items[k]);
-    }
-}
-
 /// 先頭の `len` 個の位置を選ぶと、列の先頭になる。
 pub proof fn lemma_select_prefix(dom: Seq<SVal>, m: nat, len: nat)
     requires
@@ -767,169 +730,5 @@ pub proof fn lemma_select_prefix(dom: Seq<SVal>, m: nat, len: nat)
 }
 
 // ---- 番号を順にたどる量化と、値を順にたどる量化 ----
-
-/// 正規順の列 `dom` のうち、`bits` の先頭 `n` 個で選んだ値をたどった量化の状態。
-pub open spec fn qprefix(all: bool, dom: Seq<SVal>, bits: Seq<bool>, n: int, body: TExpr, se: SEnv, sls: Seq<SVal>) -> QState {
-    eval_qstate(all, select_bits(dom, bits.take(n)), body, se, sls)
-}
-
-/// 状態に、本体を1つ評価した結果を加える。
-pub open spec fn qstep(all: bool, st: QState, r: Result<bool, ErrKind>) -> QState {
-    match st {
-        QState::Decided(b) => QState::Decided(b),
-        _ => match r {
-            Ok(b) => if b != all {
-                QState::Decided(b)
-            } else {
-                st
-            },
-            Err(k) => match st {
-                QState::Open => QState::Pending(k),
-                _ => st,
-            },
-        },
-    }
-}
-
-/// 値の決まっていない状態が保留している失敗。
-pub open spec fn qpend(st: QState) -> Option<ErrKind> {
-    match st {
-        QState::Pending(k) => Some(k),
-        _ => None,
-    }
-}
-
-/// 1つ先の位置までの量化の状態。選ばない位置では変わらず、選ぶ位置ではその値で本体を評価した結果を加える。
-proof fn lemma_qprefix_next(all: bool, dom: Seq<SVal>, bits: Seq<bool>, n: int, body: TExpr, se: SEnv, sls: Seq<SVal>)
-    requires
-        0 <= n < bits.len(),
-    ensures
-        qprefix(all, dom, bits, n + 1, body, se, sls) == if bits[n] {
-            qstep(all, qprefix(all, dom, bits, n, body, se, sls), src_bool(eval_src(body, se, sls.push(dom[n]))))
-        } else {
-            qprefix(all, dom, bits, n, body, se, sls)
-        },
-{
-    let t = bits.take(n + 1);
-    assert(t.drop_last() =~= bits.take(n));
-    assert(t.last() == bits[n]);
-    let pre = select_bits(dom, bits.take(n));
-    if bits[n] {
-        assert(select_bits(dom, t) == pre.push(dom[n]));
-        assert(pre.push(dom[n]).drop_last() =~= pre);
-    } else {
-        assert(select_bits(dom, t) == pre);
-    }
-}
-
-/// 量化の値が決まったら、先をたどっても変わらない。
-proof fn lemma_qprefix_stuck(
-    all: bool,
-    dom: Seq<SVal>,
-    bits: Seq<bool>,
-    n: int,
-    m: int,
-    body: TExpr,
-    se: SEnv,
-    sls: Seq<SVal>,
-)
-    requires
-        0 <= n <= m <= bits.len(),
-        qprefix(all, dom, bits, n, body, se, sls) is Decided,
-    ensures
-        qprefix(all, dom, bits, m, body, se, sls) == qprefix(all, dom, bits, n, body, se, sls),
-    decreases m - n,
-{
-    if m > n {
-        lemma_qprefix_stuck(all, dom, bits, n, m - 1, body, se, sls);
-        lemma_qprefix_next(all, dom, bits, m - 1, body, se, sls);
-    }
-}
-
-/// 番号 `x` で本体を評価した真偽は、選ぶ位置では値の意味論の本体の真偽になり、選ばない位置では `all` になる。
-pub open spec fn q_step_ok(
-    all: bool,
-    qb: Expr,
-    env: Env,
-    l: Seq<Value>,
-    bits: Seq<bool>,
-    dom: Seq<SVal>,
-    body: TExpr,
-    se: SEnv,
-    sls: Seq<SVal>,
-) -> bool {
-    forall|x: int|
-        0 <= x < bits.len() ==> #[trigger] as_bool(eval_l(qb, env, l.push(Value::Int(x as i64)))) == if bits[x] {
-            src_bool(eval_src(body, se, sls.push(dom[x])))
-        } else {
-            Ok::<bool, ErrKind>(all)
-        }
-}
-
-/// 番号 `n..` をたどる量化の値は、先頭から選んだ値をたどる量化の値になる。
-/// 番号の量化が保留している失敗は、値の量化の状態が保留している失敗と同じである。
-pub proof fn lemma_qscan(
-    all: bool,
-    ty: Type,
-    qb: Expr,
-    env: Env,
-    l: Seq<Value>,
-    bits: Seq<bool>,
-    dom: Seq<SVal>,
-    body: TExpr,
-    se: SEnv,
-    sls: Seq<SVal>,
-    n: int,
-)
-    requires
-        ty is Int,
-        0 <= n <= bits.len() <= 0x7fff_ffff,
-        q_step_ok(all, qb, env, l, bits, dom, body, se, sls),
-        !(qprefix(all, dom, bits, n, body, se, sls) is Decided),
-    ensures
-        quant_l(all, ty, qb, env, l, n, bits.len() - 1, qpend(qprefix(all, dom, bits, n, body, se, sls)))
-            == lift_bool(qresult(all, qprefix(all, dom, bits, bits.len() as int, body, se, sls))),
-    decreases bits.len() - n,
-{
-    let st = qprefix(all, dom, bits, n, body, se, sls);
-    if n < bits.len() {
-        assert(decode(ty, n as i64) == Value::Int(n as i64));
-        let s = as_bool(eval_l(qb, env, l.push(Value::Int(n as i64))));
-        assert(s == if bits[n] {
-            src_bool(eval_src(body, se, sls.push(dom[n])))
-        } else {
-            Ok::<bool, ErrKind>(all)
-        });
-        lemma_qprefix_next(all, dom, bits, n, body, se, sls);
-        assert(qprefix(all, dom, bits, n + 1, body, se, sls) == qstep(all, st, s));
-        if s == Ok::<bool, ErrKind>(all) {
-            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);
-        } else if s is Err {
-            lemma_qscan(all, ty, qb, env, l, bits, dom, body, se, sls, n + 1);
-        } else {
-            lemma_qprefix_stuck(all, dom, bits, n + 1, bits.len() as int, body, se, sls);
-        }
-    } else {
-        assert(bits.take(n) =~= bits.take(bits.len() as int));
-    }
-}
-
-/// すべての位置を選ぶと、列そのものになる。
-pub proof fn lemma_select_all(dom: Seq<SVal>, n: nat)
-    requires
-        n <= dom.len(),
-    ensures
-        select_bits(dom, Seq::new(n, |i: int| true)) == dom.take(n as int),
-    decreases n,
-{
-    if n > 0 {
-        let bits = Seq::new(n, |i: int| true);
-        assert(bits.drop_last() =~= Seq::new((n - 1) as nat, |i: int| true));
-        lemma_select_all(dom, (n - 1) as nat);
-        assert(dom.take(n - 1).push(dom[n - 1]) =~= dom.take(n as int));
-    } else {
-        assert(dom.take(0) =~= Seq::<SVal>::empty());
-    }
-}
 
 } // verus!

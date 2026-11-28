@@ -7,7 +7,11 @@
 #[allow(unused_imports)]
 use crate::eval::*;
 use crate::model::*;
-use crate::step::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::{args_ok, encode_spec, in_type, state_ok, type_range, vals_ok};
+use crate::state_enc::{type_range_exec, vals_ok_exec};
+#[cfg(verus_keep_ghost)]
+use crate::step::{act_env, apply_updates, step_spec, Step};
 use vstd::prelude::*;
 
 verus! {

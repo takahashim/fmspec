@@ -9,6 +9,8 @@
 use crate::encoding::xwidth_sum;
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{lemma_xwidth_of, to_xty, to_xtys, width, width_sum, xwidth, STy, XTy};
+#[cfg(verus_keep_ghost)]
+use crate::fits::{fits_s, lemma_fits_to};
 use vstd::prelude::*;
 
 verus! {
@@ -130,32 +132,6 @@ pub proof fn lemma_xwidth_sum_prefix(ts: Seq<XTy>, enums: Seq<i64>, i: int)
     }
 }
 
-/// 格納の型から作った式の型は、その格納の型に合う。
-pub proof fn lemma_to_fits(t: STy)
-    ensures
-        fits_s(to_xty(t), t),
-    decreases t, 1nat,
-{
-    match t {
-        STy::Tuple(ts) => lemma_to_fits_seq(ts),
-        STy::Record(_, ts) => lemma_to_fits_seq(ts),
-        STy::Option(x) => lemma_to_fits(*x),
-        _ => {},
-    }
-}
-
-pub proof fn lemma_to_fits_seq(ts: Seq<STy>)
-    ensures
-        fits_all_s(to_xtys(ts), ts),
-    decreases ts, 0nat,
-{
-    if ts.len() > 0 {
-        lemma_to_fits_seq(ts.drop_last());
-        lemma_to_fits(ts.last());
-        assert(to_xtys(ts).drop_last() == to_xtys(ts.drop_last()));
-    }
-}
-
 /// 合う型の幅は等しい。
 pub proof fn lemma_fits_width(t: XTy, st: STy, enums: Seq<i64>)
     requires
@@ -233,39 +209,7 @@ pub proof fn lemma_lim_smalls(ts: Seq<STy>, enums: Seq<i64>)
     }
 }
 
-/// 式の型 `t` を格納の型 `st` の場所に置けるなら、`t` は `st` の式の型である。
-pub proof fn lemma_fits_to(t: XTy, st: STy)
-    requires
-        fits_s(t, st),
-    ensures
-        t == to_xty(st),
-    decreases t,
-{
-    match (t, st) {
-        (XTy::Tuple(xs), STy::Tuple(ts)) => lemma_fits_to_seq(xs, ts),
-        (XTy::Record(_, xs), STy::Record(_, ts)) => lemma_fits_to_seq(xs, ts),
-        (XTy::Option(x), STy::Option(u)) => lemma_fits_to(*x, *u),
-        _ => {},
-    }
-}
-
-pub proof fn lemma_fits_to_seq(xs: Seq<XTy>, ts: Seq<STy>)
-    requires
-        fits_all_s(xs, ts),
-    ensures
-        xs == to_xtys(ts),
-    decreases xs,
-{
-    if xs.len() > 0 {
-        lemma_fits_to_seq(xs.drop_last(), ts.drop_last());
-        lemma_fits_to(xs.last(), ts.last());
-        assert(xs =~= xs.drop_last().push(xs.last()));
-    } else {
-        assert(xs =~= Seq::<XTy>::empty());
-    }
-}
-
-/// 型の中のどのListも、長さの上限が `0x7fff_ffff` 以下である。
+/// 型の中のどのListも、長さの上限が `lim()` 以下である。
 pub open spec fn small(t: STy) -> bool
     decreases t,
 {
@@ -274,7 +218,7 @@ pub open spec fn small(t: STy) -> bool
         STy::Record(_, ts) => smalls(ts),
         STy::Option(x) => small(*x),
         STy::Map(_, x) => small(*x),
-        STy::List(e, max) => max <= 0x7fff_ffff && small(*e),
+        STy::List(e, max) => max <= lim() && small(*e),
         _ => true,
     }
 }
@@ -289,31 +233,33 @@ pub open spec fn smalls(ts: Seq<STy>) -> bool
     }
 }
 
-/// 式の型 `x` の値を、格納の型 `s` の場所に置ける（整数の範囲は問わない）。
-pub open spec fn fits_s(x: XTy, s: STy) -> bool
-    decreases x,
+pub proof fn lemma_lim_ss_intro(ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums),
+    ensures
+        lim_ss(ts, enums),
+    decreases ts.len(),
 {
-    match (x, s) {
-        (XTy::Bool, STy::Bool) => true,
-        (XTy::Int, STy::Int(_, _)) => true,
-        (XTy::Enum(a), STy::Enum(b)) => a == b,
-        (XTy::Tuple(xs), STy::Tuple(ts)) => fits_all_s(xs, ts),
-        (XTy::Record(a, xs), STy::Record(b, ts)) => a == b && fits_all_s(xs, ts),
-        (XTy::Option(x), STy::Option(u)) => fits_s(*x, *u),
-        (XTy::Set(a), STy::Set(b)) => a == b,
-        (XTy::Map(ka, va), STy::Map(kb, vb)) => ka == kb && va == vb,
-        (XTy::List(a, n), STy::List(b, m)) => n == m && a == b,
-        _ => false,
+    if ts.len() > 0 {
+        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_s(#[trigger] ts.drop_last()[i], enums) by {
+            assert(ts.drop_last()[i] == ts[i]);
+        }
+        lemma_lim_ss_intro(ts.drop_last(), enums);
     }
 }
 
-pub open spec fn fits_all_s(xs: Seq<XTy>, ts: Seq<STy>) -> bool
-    decreases xs,
+pub proof fn lemma_lim_xs_intro(ts: Seq<XTy>, enums: Seq<i64>)
+    requires
+        forall|i: int| 0 <= i < ts.len() ==> lim_x(#[trigger] ts[i], enums),
+    ensures
+        lim_xs(ts, enums),
+    decreases ts.len(),
 {
-    if xs.len() == 0 {
-        ts.len() == 0
-    } else {
-        ts.len() == xs.len() && fits_all_s(xs.drop_last(), ts.drop_last()) && fits_s(xs.last(), ts.last())
+    if ts.len() > 0 {
+        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_x(#[trigger] ts.drop_last()[i], enums) by {
+            assert(ts.drop_last()[i] == ts[i]);
+        }
+        lemma_lim_xs_intro(ts.drop_last(), enums);
     }
 }
 

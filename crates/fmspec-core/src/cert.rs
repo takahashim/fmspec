@@ -8,14 +8,17 @@
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::args_ok;
+use crate::state_enc::vals_ok_exec;
+use crate::state_set::find;
+#[cfg(verus_keep_ghost)]
+use crate::state_set::in_cert;
 use crate::step::*;
+use crate::sym::*;
 use vstd::prelude::*;
 
 verus! {
-
-pub open spec fn in_cert(cert: Seq<Vec<i64>>, s: Seq<i64>) -> bool {
-    exists|i: int| 0 <= i < cert.len() && (#[trigger] cert[i])@ == s
-}
 
 /// 引数 `args` での適用が、評価エラーでなく、有効なら遷移先が証明書に含まれ、契約を満たす。
 pub open spec fn trans_closed(
@@ -90,87 +93,117 @@ pub proof fn lemma_inductive_safe(m: RawModel, c: Conditions, cert: Seq<Vec<i64>
     }
 }
 
-// ---- 状態集合の所属判定 ----
-
-/// 符号化列の辞書順の比較。`0` を返すのは、2つの列が等しいときだけである。
-pub(crate) fn cmp_state(a: &Vec<i64>, b: &Vec<i64>) -> (r: i8)
-    ensures
-        r == 0 ==> a@ == b@,
-{
-    let mut i: usize = 0;
-    while i < a.len() && i < b.len()
-        invariant
-            i <= a@.len(),
-            i <= b@.len(),
-            forall|j: int| 0 <= j < i ==> a@[j] == b@[j],
-        decreases a@.len() - i,
-    {
-        if a[i] < b[i] {
-            return -1;
-        }
-        if a[i] > b[i] {
-            return 1;
-        }
-        i = i + 1;
-    }
-    if a.len() < b.len() {
-        -1
-    } else if a.len() > b.len() {
-        1
-    } else {
-        assert(a@ =~= b@);
-        0
-    }
-}
-
-/// 二分探索による所属判定。`true` を返すのは、状態が証明書に含まれるときだけである。
-/// 証明書が整列されていなければ、含まれる状態を見落として `false` を返すことがある。
-/// その場合は証明書を拒否するだけで、誤って受理することはない（仕様書 §7.3）。
-pub(crate) fn find(cert: &Vec<Vec<i64>>, t: &Vec<i64>) -> (r: bool)
-    ensures
-        r ==> in_cert(cert@, t@),
-{
-    let mut lo: usize = 0;
-    let mut hi: usize = cert.len();
-    while lo < hi
-        invariant
-            lo <= hi <= cert@.len(),
-        decreases hi - lo,
-    {
-        let mid = lo + (hi - lo) / 2;
-        let c = cmp_state(&cert[mid], t);
-        if c == 0 {
-            assert(cert@[mid as int]@ == t@);
-            return true;
-        } else if c < 0 {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    false
-}
-
 // ---- 検査器 ----
+//
+// 対称性による削減の有無によらず、検査器は1つである。後続の状態の所属を、入れ替えの列 `sw` のもとでの
+// 代表元（`reps`）で判定する。`sw` が空なら、代表元は状態そのもので、所属は `in_cert` と同じである
+// （`lemma_reps_empty`）。
 
-spec fn tr_closed(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, a: int, s: Seq<i64>, t: Transition) -> bool {
-    in_cert(cert, t.state@) && cons_hold(m, c, a, s, t.args@, t.state@, t.output)
+/// 入れ替えの列が空なら、代表元は状態そのものである。
+pub proof fn lemma_reps_empty(cert: Seq<Vec<i64>>, s: Seq<i64>)
+    ensures
+        reps(Seq::<SwapMaps>::empty(), cert, s) <==> in_cert(cert, s),
+{
+    let sw = Seq::<SwapMaps>::empty();
+    if reps(sw, cert, s) {
+        let w = choose|w: Seq<usize>| word_ok(sw, w) && #[trigger] in_cert(cert, apply_word(sw, w, s));
+        if w.len() > 0 {
+            assert(w[0] < sw.len());
+        }
+        assert(apply_word(sw, w, s) == s);
+    }
+    if in_cert(cert, s) {
+        let w = Seq::<usize>::empty();
+        assert(word_ok(sw, w));
+        assert(apply_word(sw, w, s) == s);
+        assert(in_cert(cert, apply_word(sw, w, s)));
+    }
+}
+
+/// 入れ替えのない検査で閉じている状態は、`state_closed` を満たす。
+pub proof fn lemma_closed_without_swaps(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>, s: Seq<i64>)
+    requires
+        sym_state_closed(m, c, Seq::empty(), cert, s),
+    ensures
+        state_closed(m, c, cert, s),
+{
+    assert forall|a: int| #[trigger] act_on(m, c, a) implies act_closed(m, c, cert, a, s) by {
+        assert forall|args: Seq<i64>| #[trigger] args_ok(m, a, args) implies trans_closed(m, c, cert, a, args, s) by {
+            match step_spec(m, a, args, s) {
+                Step::To(t, _) => {
+                    lemma_reps_empty(cert, t);
+                },
+                _ => {},
+            }
+        }
+    }
+}
+
+/// 入れ替えのない検査で帰納的な証明書は、`inductive` を満たす。
+pub proof fn lemma_inductive_without_swaps(m: RawModel, c: Conditions, cert: Seq<Vec<i64>>)
+    requires
+        sym_inductive(m, c, Seq::empty(), cert),
+    ensures
+        inductive(m, c, cert),
+{
+    assert forall|i: int| 0 <= i < m.inits@.len() implies in_cert(cert, (#[trigger] m.inits@[i])@) by {
+        lemma_reps_empty(cert, m.inits@[i]@);
+    }
+    assert forall|j: int| 0 <= j < cert.len() implies state_closed(m, c, cert, (#[trigger] cert[j])@) by {
+        lemma_closed_without_swaps(m, c, cert, cert[j]@);
+    }
+}
+
+/// 状態 `t` の代表元が証明書に含まれるかを確かめる。入れ替えがなければ、正規化せずに探す。
+fn find_rep(sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>, t: &Vec<i64>) -> (r: bool)
+    ensures
+        r ==> reps(sw@, cert@, t@),
+{
+    if sw.len() == 0 {
+        let found = find(cert, t);
+        proof {
+            if found {
+                let w = Seq::<usize>::empty();
+                assert(word_ok(sw@, w));
+                assert(apply_word(sw@, w, t@) == t@);
+                assert(in_cert(cert@, apply_word(sw@, w, t@)));
+            }
+        }
+        return found;
+    }
+    let (ct, _w) = canonicalize(sw, t);
+    if find(cert, &ct) {
+        assert(word_ok(sw@, _w@) && in_cert(cert@, apply_word(sw@, _w@, t@)));
+        true
+    } else {
+        false
+    }
 }
 
 /// 証明書の `k` 番目の状態 `s` で操作 `a` を検査する。有効な遷移があれば `Ok(true)`。
 #[verifier::loop_isolation(false)]
-fn check_action(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize, a: usize, s: &Vec<i64>) -> (r: Result<
-    bool,
-    Reject,
->)
+fn check_action(
+    m: &RawModel,
+    c: &Conditions,
+    sw: &Vec<SwapMaps>,
+    cert: &Vec<Vec<i64>>,
+    k: usize,
+    a: usize,
+    s: &Vec<i64>,
+) -> (r: Result<bool, Reject>)
     requires
         a < m.actions@.len(),
     ensures
-        r matches Ok(enabled) ==> act_closed(*m, *c, cert@, a as int, s@) && (enabled <==> !all_disabled(
+        r matches Ok(enabled) ==> (forall|args: Seq<i64>| #[trigger] args_ok(*m, a as int, args) ==> match step_spec(
             *m,
             a as int,
+            args,
             s@,
-        )),
+        ) {
+            Step::Disabled => true,
+            Step::Fail(_, _) => false,
+            Step::To(t, o) => cons_hold(*m, *c, a as int, s@, args, t, o) && reps(sw@, cert@, t),
+        }) && (enabled <==> !all_disabled(*m, a as int, s@)),
 {
     let ghost ai = a as int;
     match enumerate(m, a, s) {
@@ -180,11 +213,13 @@ fn check_action(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize, a:
             while i < ts.len()
                 invariant
                     i <= ts@.len(),
-                    forall|j: int| 0 <= j < i ==> tr_closed(*m, *c, cert@, ai, s@, #[trigger] ts@[j]),
+                    forall|j: int|
+                        0 <= j < i ==> cons_hold(*m, *c, ai, s@, (#[trigger] ts@[j]).args@, ts@[j].state@, ts@[j].output)
+                            && reps(sw@, cert@, ts@[j].state@),
                 decreases ts@.len() - i,
             {
                 let t = &ts[i];
-                if !find(cert, &t.state) {
+                if !find_rep(sw, cert, &t.state) {
                     return Err(Reject::MissingSuccessor(k, a));
                 }
                 match check_contracts(m, c, a, s, &t.args, &t.state, &t.output) {
@@ -197,19 +232,15 @@ fn check_action(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize, a:
             }
             proof {
                 lemma_enum_enabled(*m, ai, s@, ts@);
-                assert forall|args: Seq<i64>| #[trigger] args_ok(*m, ai, args) implies trans_closed(
-                    *m,
-                    *c,
-                    cert@,
-                    ai,
-                    args,
-                    s@,
-                ) by {
+                assert forall|args: Seq<i64>| #[trigger] args_ok(*m, ai, args) implies match step_spec(*m, ai, args, s@) {
+                    Step::Disabled => true,
+                    Step::Fail(_, _) => false,
+                    Step::To(t, o) => cons_hold(*m, *c, ai, s@, args, t, o) && reps(sw@, cert@, t),
+                } by {
                     assert(covered(*m, ai, s@, ts@, args));
                     if step_spec(*m, ai, args, s@) is To {
                         let j = choose|j: int| 0 <= j < ts@.len() && (#[trigger] ts@[j]).args@ == args;
                         assert(tr_sound(*m, ai, s@, ts@[j]));
-                        assert(tr_closed(*m, *c, cert@, ai, s@, ts@[j]));
                     }
                 }
             }
@@ -220,11 +251,11 @@ fn check_action(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize, a:
 
 /// 証明書の `k` 番目の状態を検査する。
 #[verifier::loop_isolation(false)]
-pub(crate) fn check_state(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k: usize) -> (r: Option<Reject>)
+pub(crate) fn check_state(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>, k: usize) -> (r: Option<Reject>)
     requires
         k < cert@.len(),
     ensures
-        r is None ==> state_closed(*m, *c, cert@, cert@[k as int]@),
+        r is None ==> sym_state_closed(*m, *c, sw@, cert@, cert@[k as int]@),
 {
     let s = &cert[k];
     if !vals_ok_exec(&m.enums, &m.state_types, s) {
@@ -241,13 +272,23 @@ pub(crate) fn check_state(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k:
     while a < m.actions.len()
         invariant
             a <= m.actions@.len(),
-            forall|b: int| 0 <= b < a && #[trigger] act_on(*m, *c, b) ==> act_closed(*m, *c, cert@, b, s@),
+            forall|b: int, args: Seq<i64>|
+                0 <= b < a && #[trigger] act_on(*m, *c, b) && #[trigger] args_ok(*m, b, args) ==> match step_spec(
+                    *m,
+                    b,
+                    args,
+                    s@,
+                ) {
+                    Step::Disabled => true,
+                    Step::Fail(_, _) => false,
+                    Step::To(t, o) => cons_hold(*m, *c, b, s@, args, t, o) && reps(sw@, cert@, t),
+                },
             enabled ==> !stuck(*m, *c, s@),
             !enabled ==> forall|b: int| 0 <= b < a && #[trigger] act_on(*m, *c, b) ==> all_disabled(*m, b, s@),
         decreases m.actions@.len() - a,
     {
         if act_on_exec(m, c, a) {
-            match check_action(m, c, cert, k, a, s) {
+            match check_action(m, c, sw, cert, k, a, s) {
                 Err(r) => {
                     return Some(r);
                 },
@@ -269,22 +310,38 @@ pub(crate) fn check_state(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>, k:
             },
         }
     }
+    proof {
+        assert forall|b: int, args: Seq<i64>| #[trigger] act_on(*m, *c, b) && #[trigger] args_ok(*m, b, args) implies match step_spec(
+            *m,
+            b,
+            args,
+            s@,
+        ) {
+            Step::Disabled => true,
+            Step::Fail(_, _) => false,
+            Step::To(t, o) => cons_hold(*m, *c, b, s@, args, t, o) && reps(sw@, cert@, t),
+        } by {
+            assert(0 <= b < m.actions@.len());
+        }
+    }
     None
 }
 
-/// 証明書が初期状態をすべて含むことを検査する。
-pub(crate) fn check_initials(m: &RawModel, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
+/// 証明書が初期状態の代表元をすべて含むことを検査する。
+pub(crate) fn check_initials(m: &RawModel, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
     ensures
-        r is None ==> forall|j: int| 0 <= j < m.inits@.len() ==> in_cert(cert@, (#[trigger] m.inits@[j])@),
+        r is None ==> forall|j: int|
+            0 <= j < m.inits@.len() ==> (#[trigger] m.inits@[j])@.len() == m.state_types@.len() && reps(sw@, cert@, m.inits@[j]@),
 {
     let mut i: usize = 0;
     while i < m.inits.len()
         invariant
             i <= m.inits@.len(),
-            forall|j: int| 0 <= j < i ==> in_cert(cert@, (#[trigger] m.inits@[j])@),
+            forall|j: int|
+                0 <= j < i ==> (#[trigger] m.inits@[j])@.len() == m.state_types@.len() && reps(sw@, cert@, m.inits@[j]@),
         decreases m.inits@.len() - i,
     {
-        if !find(cert, &m.inits[i]) {
+        if m.inits[i].len() != m.state_types.len() || !find_rep(sw, cert, &m.inits[i]) {
             return Some(Reject::MissingInitial(i));
         }
         i = i + 1;
@@ -292,12 +349,12 @@ pub(crate) fn check_initials(m: &RawModel, cert: &Vec<Vec<i64>>) -> (r: Option<R
     None
 }
 
-/// 安全性証明書を検査する。`None`（受理）を返すなら、証明書は帰納的で、モデルは安全である。
-pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
+/// 入れ替えの列 `sw` のもとで、証明書を検査する。`None`（受理）なら、証明書は代表元の証明書として帰納的である。
+fn check_with_swaps(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
     ensures
-        r is None ==> inductive(*m, *c, cert@) && safe(*m, *c),
+        r is None ==> sym_inductive(*m, *c, sw@, cert@),
 {
-    match check_initials(m, cert) {
+    match check_initials(m, sw, cert) {
         Some(r) => {
             return Some(r);
         },
@@ -307,10 +364,12 @@ pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> 
     while k < cert.len()
         invariant
             k <= cert@.len(),
-            forall|j: int| 0 <= j < k ==> state_closed(*m, *c, cert@, (#[trigger] cert@[j])@),
+            forall|j: int|
+                0 <= j < m.inits@.len() ==> (#[trigger] m.inits@[j])@.len() == m.state_types@.len() && reps(sw@, cert@, m.inits@[j]@),
+            forall|j: int| 0 <= j < k ==> sym_state_closed(*m, *c, sw@, cert@, (#[trigger] cert@[j])@),
         decreases cert@.len() - k,
     {
-        match check_state(m, c, cert, k) {
+        match check_state(m, c, sw, cert, k) {
             Some(r) => {
                 return Some(r);
             },
@@ -318,10 +377,42 @@ pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> 
         }
         k = k + 1;
     }
-    proof {
-        lemma_inductive_safe(*m, *c, cert@);
-    }
     None
+}
+
+/// 安全性証明書を検査する。`None`（受理）を返すなら、証明書は帰納的で、モデルは安全である。
+pub fn check_certificate(m: &RawModel, c: &Conditions, cert: &Vec<Vec<i64>>) -> (r: Option<Reject>)
+    ensures
+        r is None ==> inductive(*m, *c, cert@) && safe(*m, *c),
+{
+    let none: Vec<SwapMaps> = Vec::new();
+    let r = check_with_swaps(m, c, &none, cert);
+    proof {
+        if r is None {
+            assert(none@ =~= Seq::<SwapMaps>::empty());
+            lemma_inductive_without_swaps(*m, *c, cert@);
+            lemma_inductive_safe(*m, *c, cert@);
+        }
+    }
+    r
+}
+
+/// 代表元の証明書を検査する。入れ替えは、どれも `sym_ok` を満たすものとする。
+pub(crate) fn check_sym_certificate(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>) -> (r: Option<
+    Reject,
+>)
+    requires
+        all_sym(*m, *c, sw@),
+    ensures
+        r is None ==> safe(*m, *c),
+{
+    let r = check_with_swaps(m, c, sw, cert);
+    proof {
+        if r is None {
+            lemma_sym_safe(*m, *c, sw@, cert@);
+        }
+    }
+    r
 }
 
 } // verus!

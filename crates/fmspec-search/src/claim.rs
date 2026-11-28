@@ -1,8 +1,8 @@
 //! 状態と遷移の性質を検査し、違反の主張を作る。幅優先探索とシミュレーションで共有する。
 
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::Claim;
-use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 
 /// 検査条件の選択 `mask` で、`i` 番目が対象か。範囲外は対象外とする。

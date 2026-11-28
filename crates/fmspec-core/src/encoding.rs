@@ -1110,575 +1110,79 @@ pub proof fn lemma_wf_stypes(ts: Seq<STy>, enums: Seq<i64>)
     }
 }
 
-pub fn copy_stype(t: &SType) -> (r: SType)
-    ensures
-        sty(r) == sty(*t),
-    decreases t,
-{
-    match t {
-        SType::Bool => SType::Bool,
-        SType::Int(lo, hi) => SType::Int(*lo, *hi),
-        SType::Enum(id) => SType::Enum(*id),
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            SType::Tuple(copy_stypes(t, ts))
-        },
-        SType::Record(names, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            SType::Record(names.clone(), copy_stypes(t, ts))
-        },
-        SType::Option(x) => SType::Option(Box::new(copy_stype(x))),
-        SType::Set(e) => SType::Set(Box::new(copy_stype(e))),
-        SType::Map(k, v) => SType::Map(Box::new(copy_stype(k)), Box::new(copy_stype(v))),
-        SType::List(e, max) => SType::List(Box::new(copy_stype(e)), *max),
-    }
-}
-
-fn copy_stypes(_parent: &SType, ts: &Vec<SType>) -> (r: Vec<SType>)
+pub proof fn lemma_wf_xtypes_at(ts: Seq<XTy>, enums: Seq<i64>, i: int)
     requires
-        decreases_to!(*_parent => *ts),
+        wf_xtypes(ts, enums),
+        0 <= i < ts.len(),
     ensures
-        stys(r@) == stys(ts@),
-    decreases _parent, 0nat,
+        wf_xtype(ts[i], enums),
+    decreases ts.len(),
 {
-    let mut out: Vec<SType> = Vec::new();
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            out@.len() == i,
-            forall|j: int| 0 <= j < i ==> sty(#[trigger] out@[j]) == sty(ts@[j]),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-        }
-        out.push(copy_stype(&ts[i]));
-        i += 1;
-    }
-    proof {
-        lemma_stys_ext(out@, ts@);
-    }
-    out
-}
-
-/// 格納の型の式の型。
-pub fn to_xtype(t: &SType) -> (r: XType)
-    ensures
-        xty(r) == to_xty(sty(*t)),
-    decreases t,
-{
-    match t {
-        SType::Bool => XType::Bool,
-        SType::Int(_, _) => XType::Int,
-        SType::Enum(id) => XType::Enum(*id),
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            XType::Tuple(to_xtypes(t, ts))
-        },
-        SType::Record(names, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            XType::Record(names.clone(), to_xtypes(t, ts))
-        },
-        SType::Option(x) => XType::Option(Box::new(to_xtype(x))),
-        SType::Set(e) => XType::Set(Box::new(copy_stype(e))),
-        SType::Map(k, v) => XType::Map(Box::new(copy_stype(k)), Box::new(copy_stype(v))),
-        SType::List(e, max) => XType::List(Box::new(copy_stype(e)), *max),
+    if i < ts.len() - 1 {
+        assert(ts.drop_last()[i] == ts[i]);
+        lemma_wf_xtypes_at(ts.drop_last(), enums, i);
     }
 }
 
-fn to_xtypes(_parent: &SType, ts: &Vec<SType>) -> (r: Vec<XType>)
+pub proof fn lemma_wf_xtypes_intro(ts: Seq<XTy>, enums: Seq<i64>)
     requires
-        decreases_to!(*_parent => *ts),
+        forall|i: int| 0 <= i < ts.len() ==> wf_xtype(#[trigger] ts[i], enums),
     ensures
-        xtys(r@) == to_xtys(stys(ts@)),
-    decreases _parent, 0nat,
+        wf_xtypes(ts, enums),
+    decreases ts.len(),
 {
-    let mut out: Vec<XType> = Vec::new();
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            out@.len() == i,
-            forall|j: int| 0 <= j < i ==> xty(#[trigger] out@[j]) == to_xty(sty(ts@[j])),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+    if ts.len() > 0 {
+        assert forall|i: int| 0 <= i < ts.len() - 1 implies wf_xtype(#[trigger] ts.drop_last()[i], enums) by {
+            assert(ts.drop_last()[i] == ts[i]);
         }
-        out.push(to_xtype(&ts[i]));
-        i += 1;
-    }
-    proof {
-        lemma_xtys(out@);
-        lemma_stys(ts@);
-        lemma_to_xtys(stys(ts@));
-        assert(xtys(out@) =~= to_xtys(stys(ts@)));
-    }
-    out
-}
-
-pub fn copy_xtype(t: &XType) -> (r: XType)
-    ensures
-        xty(r) == xty(*t),
-    decreases t,
-{
-    match t {
-        XType::Bool => XType::Bool,
-        XType::Int => XType::Int,
-        XType::Enum(id) => XType::Enum(*id),
-        XType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            XType::Tuple(copy_xtypes(t, ts))
-        },
-        XType::Record(names, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            XType::Record(names.clone(), copy_xtypes(t, ts))
-        },
-        XType::Option(x) => XType::Option(Box::new(copy_xtype(x))),
-        XType::Set(e) => XType::Set(Box::new(copy_stype(e))),
-        XType::Map(k, v) => XType::Map(Box::new(copy_stype(k)), Box::new(copy_stype(v))),
-        XType::List(e, max) => XType::List(Box::new(copy_stype(e)), *max),
+        lemma_wf_xtypes_intro(ts.drop_last(), enums);
     }
 }
 
-fn copy_xtypes(_parent: &XType, ts: &Vec<XType>) -> (r: Vec<XType>)
+pub proof fn lemma_items_member_all(items: Seq<SVal>, t: STy, enums: Seq<i64>)
     requires
-        decreases_to!(*_parent => *ts),
+        forall|k: int| 0 <= k < items.len() ==> member(#[trigger] items[k], t, enums),
     ensures
-        xtys(r@) == xtys(ts@),
-    decreases _parent, 0nat,
+        list_items_member(items, t, enums),
+    decreases items.len(),
 {
-    let mut out: Vec<XType> = Vec::new();
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            out@.len() == i,
-            forall|j: int| 0 <= j < i ==> xty(#[trigger] out@[j]) == xty(ts@[j]),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
+    if items.len() > 0 {
+        let a = items.drop_last();
+        assert forall|k: int| 0 <= k < a.len() implies member(#[trigger] a[k], t, enums) by {
+            assert(a[k] == items[k]);
         }
-        out.push(copy_xtype(&ts[i]));
-        i += 1;
-    }
-    proof {
-        lemma_xtys_ext(out@, ts@);
-    }
-    out
-}
-
-pub fn usizes_eq(a: &Vec<usize>, b: &Vec<usize>) -> (r: bool)
-    ensures
-        r == (a@ == b@),
-{
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < a.len()
-        invariant
-            a.len() == b.len(),
-            i <= a.len(),
-            forall|j: int| 0 <= j < i ==> a@[j] == b@[j],
-        decreases a.len() - i,
-    {
-        if a[i] != b[i] {
-            return false;
-        }
-        i += 1;
-    }
-    assert(a@ =~= b@);
-    true
-}
-
-/// 2つの格納の型が等しいかを判定する。真なら仕様の型が等しい。
-pub fn stype_eq(a: &SType, b: &SType) -> (r: bool)
-    ensures
-        r == (sty(*a) == sty(*b)),
-    decreases a,
-{
-    match (a, b) {
-        (SType::Bool, SType::Bool) => true,
-        (SType::Int(l1, h1), SType::Int(l2, h2)) => *l1 == *l2 && *h1 == *h2,
-        (SType::Enum(x), SType::Enum(y)) => *x == *y,
-        (SType::Tuple(xs), SType::Tuple(ys)) => {
-            proof {
-                assert(decreases_to!(*a => *xs));
-            }
-            stypes_eq(a, xs, ys)
-        },
-        (SType::Record(m, xs), SType::Record(n, ys)) => {
-            proof {
-                assert(decreases_to!(*a => *xs));
-            }
-            usizes_eq(m, n) && stypes_eq(a, xs, ys)
-        },
-        (SType::Option(x), SType::Option(y)) => stype_eq(x, y),
-        (SType::Set(x), SType::Set(y)) => stype_eq(x, y),
-        (SType::Map(k1, v1), SType::Map(k2, v2)) => stype_eq(k1, k2) && stype_eq(v1, v2),
-        (SType::List(x, m), SType::List(y, n)) => *m == *n && stype_eq(x, y),
-        _ => false,
+        lemma_items_member_all(a, t, enums);
+        assert(member(items[items.len() - 1], t, enums));
     }
 }
 
-fn stypes_eq(_parent: &SType, xs: &Vec<SType>, ys: &Vec<SType>) -> (r: bool)
+/// Listの要素は、要素の型に属する。
+pub proof fn lemma_items_member(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int)
     requires
-        decreases_to!(*_parent => *xs),
+        list_items_member(items, t, enums),
+        0 <= k < items.len(),
     ensures
-        r == (stys(xs@) == stys(ys@)),
-    decreases _parent, 0nat,
+        member(items[k], t, enums),
+    decreases items.len(),
 {
-    proof {
-        lemma_stys(xs@);
-        lemma_stys(ys@);
-    }
-    if xs.len() != ys.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < xs.len()
-        invariant
-            decreases_to!(*_parent => *xs),
-            xs.len() == ys.len(),
-            i <= xs.len(),
-            forall|j: int| 0 <= j < i ==> sty(#[trigger] xs@[j]) == sty(ys@[j]),
-        decreases xs.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
-        }
-        if !stype_eq(&xs[i], &ys[i]) {
-            proof {
-                lemma_stys(xs@);
-                lemma_stys(ys@);
-                assert(stys(xs@)[i as int] != stys(ys@)[i as int]);
-            }
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        lemma_stys_ext(xs@, ys@);
-    }
-    true
-}
-
-/// 2つの式の型が等しいかを判定する。真なら仕様の型が等しい。
-pub fn xtype_eq(a: &XType, b: &XType) -> (r: bool)
-    ensures
-        r == (xty(*a) == xty(*b)),
-    decreases a,
-{
-    match (a, b) {
-        (XType::Bool, XType::Bool) => true,
-        (XType::Int, XType::Int) => true,
-        (XType::Enum(x), XType::Enum(y)) => *x == *y,
-        (XType::Tuple(xs), XType::Tuple(ys)) => {
-            proof {
-                assert(decreases_to!(*a => *xs));
-            }
-            xtypes_eq(a, xs, ys)
-        },
-        (XType::Record(m, xs), XType::Record(n, ys)) => {
-            proof {
-                assert(decreases_to!(*a => *xs));
-            }
-            usizes_eq(m, n) && xtypes_eq(a, xs, ys)
-        },
-        (XType::Option(x), XType::Option(y)) => xtype_eq(x, y),
-        (XType::Set(x), XType::Set(y)) => stype_eq(x, y),
-        (XType::Map(k1, v1), XType::Map(k2, v2)) => stype_eq(k1, k2) && stype_eq(v1, v2),
-        (XType::List(x, m), XType::List(y, n)) => *m == *n && stype_eq(x, y),
-        _ => false,
+    if k < items.len() - 1 {
+        lemma_items_member(items.drop_last(), t, enums, k);
+        assert(items.drop_last()[k] == items[k]);
     }
 }
 
-fn xtypes_eq(_parent: &XType, xs: &Vec<XType>, ys: &Vec<XType>) -> (r: bool)
+pub proof fn lemma_map_rows_member_index(rows: Seq<Option<SVal>>, t: STy, enums: Seq<i64>, r: int)
     requires
-        decreases_to!(*_parent => *xs),
+        map_rows_member(rows, t, enums),
+        0 <= r < rows.len(),
     ensures
-        r == (xtys(xs@) == xtys(ys@)),
-    decreases _parent, 0nat,
+        rows[r] matches Some(x) ==> member(x, t, enums),
+    decreases rows.len(),
 {
-    proof {
-        lemma_xtys(xs@);
-        lemma_xtys(ys@);
+    if r < rows.len() - 1 {
+        lemma_map_rows_member_index(rows.drop_last(), t, enums, r);
+        assert(rows.drop_last()[r] == rows[r]);
     }
-    if xs.len() != ys.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < xs.len()
-        invariant
-            decreases_to!(*_parent => *xs),
-            xs.len() == ys.len(),
-            i <= xs.len(),
-            forall|j: int| 0 <= j < i ==> xty(#[trigger] xs@[j]) == xty(ys@[j]),
-        decreases xs.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*xs, i as int);
-        }
-        if !xtype_eq(&xs[i], &ys[i]) {
-            proof {
-                lemma_xtys(xs@);
-                lemma_xtys(ys@);
-                assert(xtys(xs@)[i as int] != xtys(ys@)[i as int]);
-            }
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        lemma_xtys_ext(xs@, ys@);
-    }
-    true
-}
-
-
-/// キーの型の値の数。
-pub fn keys_exec(t: &SType, enums: &Vec<i64>) -> (r: Option<u64>)
-    ensures
-        match r {
-            Some(k) => keys(sty(*t), enums@) == Some(k as nat),
-            None => keys(sty(*t), enums@) is None,
-        },
-    decreases t,
-{
-    let n: Option<u64> = match t {
-        SType::Bool => Some(2),
-        SType::Int(lo, hi) => {
-            let d = (*hi as i128) - (*lo as i128) + 1;
-            if *lo <= *hi && d <= MAX_KEYS as i128 {
-                Some(d as u64)
-            } else {
-                None
-            }
-        },
-        SType::Enum(id) => if *id < enums.len() && enums[*id] >= 0 {
-            Some(enums[*id] as u64)
-        } else {
-            None
-        },
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            keys_product_exec(t, ts, enums)
-        },
-        SType::Record(_, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            keys_product_exec(t, ts, enums)
-        },
-        SType::Option(x) => match keys_exec(x, enums) {
-            Some(k) => Some(k + 1),
-            None => None,
-        },
-        _ => None,
-    };
-    match n {
-        Some(k) => if k <= MAX_KEYS {
-            Some(k)
-        } else {
-            None
-        },
-        None => None,
-    }
-}
-
-fn keys_product_exec(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Option<u64>)
-    requires
-        decreases_to!(*_parent => *ts),
-    ensures
-        match r {
-            Some(k) => keys_product(stys(ts@), enums@) == Some(k as nat) && k <= MAX_KEYS,
-            None => keys_product(stys(ts@), enums@) is None,
-        },
-    decreases _parent, 0nat,
-{
-    let ghost ss = stys(ts@);
-    proof {
-        lemma_stys(ts@);
-        assert(ss.take(0) =~= Seq::<STy>::empty());
-    }
-    let mut acc: Option<u64> = Some(1);
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            ss == stys(ts@),
-            ss.len() == ts.len(),
-            forall|j: int| 0 <= j < ts.len() ==> #[trigger] ss[j] == sty(ts@[j]),
-            i <= ts.len(),
-            match acc {
-                Some(p) => keys_product(ss.take(i as int), enums@) == Some(p as nat) && p <= MAX_KEYS,
-                None => keys_product(ss.take(i as int), enums@) is None,
-            },
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-            assert(ss.take(i + 1).drop_last() =~= ss.take(i as int));
-            assert(ss.take(i + 1).last() == ss[i as int]);
-        }
-        acc = match acc {
-            Some(p) => match keys_exec(&ts[i], enums) {
-                Some(k) => {
-                    proof {
-                        assert(k <= MAX_KEYS);
-                        assert(p * k <= MAX_KEYS * MAX_KEYS) by (nonlinear_arith)
-                            requires
-                                p <= MAX_KEYS,
-                                k <= MAX_KEYS,
-                        ;
-                    }
-                    if p * k <= MAX_KEYS {
-                        Some(p * k)
-                    } else {
-                        None
-                    }
-                },
-                None => None,
-            },
-            None => None,
-        };
-        i += 1;
-    }
-    proof {
-        assert(ss.take(ts.len() as int) =~= ss);
-    }
-    acc
-}
-
-/// 名前の番号に重複がないかを判定する。真なら重複がない。
-pub fn distinct_names(names: &Vec<usize>) -> (r: bool)
-    ensures
-        r == names@.no_duplicates(),
-{
-    let mut i = 0;
-    while i < names.len()
-        invariant
-            i <= names.len(),
-            forall|a: int, b: int| 0 <= a < b < i ==> names@[a] != names@[b],
-        decreases names.len() - i,
-    {
-        let mut j = 0;
-        while j < i
-            invariant
-                i < names.len(),
-                j <= i,
-                forall|a: int, b: int| 0 <= a < b < i ==> names@[a] != names@[b],
-                forall|a: int| 0 <= a < j ==> names@[a] != names@[i as int],
-            decreases i - j,
-        {
-            if names[j] == names[i] {
-                proof {
-                    assert(!names@.no_duplicates()) by {
-                        assert(names@[j as int] == names@[i as int] && j != i);
-                    }
-                }
-                return false;
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// 格納の型が整形式かを判定する。真なら整形式である。
-pub fn wf_stype_exec(t: &SType, enums: &Vec<i64>) -> (r: bool)
-    ensures
-        r == wf_stype(sty(*t), enums@),
-    decreases t,
-{
-    match t {
-        SType::Bool => true,
-        SType::Int(lo, hi) => *lo <= *hi,
-        SType::Enum(id) => *id < enums.len() && enums[*id] >= 1,
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-                lemma_stys(ts@);
-            }
-            ts.len() >= 1 && wf_stypes_exec(t, ts, enums)
-        },
-        SType::Record(names, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-                lemma_stys(ts@);
-            }
-            ts.len() >= 1 && names.len() == ts.len() && distinct_names(names) && wf_stypes_exec(t, ts, enums)
-        },
-        SType::Option(x) => wf_stype_exec(x, enums),
-        SType::Set(e) => wf_stype_exec(e, enums) && keys_exec(e, enums).is_some(),
-        SType::Map(k, v) => wf_stype_exec(k, enums) && keys_exec(k, enums).is_some() && wf_stype_exec(v, enums),
-        SType::List(e, _) => wf_stype_exec(e, enums),
-    }
-}
-
-fn wf_stypes_exec(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: bool)
-    requires
-        decreases_to!(*_parent => *ts),
-    ensures
-        r == wf_stypes(stys(ts@), enums@),
-        stys(ts@).len() == ts.len(),
-    decreases _parent, 0nat,
-{
-    proof {
-        lemma_stys(ts@);
-    }
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            forall|j: int| 0 <= j < i ==> wf_stype(sty(#[trigger] ts@[j]), enums@),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-        }
-        if !wf_stype_exec(&ts[i], enums) {
-            proof {
-                lemma_stys(ts@);
-                if wf_stypes(stys(ts@), enums@) {
-                    lemma_wf_stypes_at(stys(ts@), enums@, i as int);
-                }
-            }
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        lemma_stys(ts@);
-        let ss = stys(ts@);
-        assert forall|j: int| 0 <= j < ss.len() implies wf_stype(#[trigger] ss[j], enums@) by {
-            assert(ss[j] == sty(ts@[j]));
-        }
-        lemma_wf_stypes(ss, enums@);
-    }
-    true
 }
 
 } // verus!

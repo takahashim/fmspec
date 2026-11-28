@@ -5,52 +5,74 @@
 //!
 //! - [`model`]：IR検証前のモデル、値、型、式
 //! - [`encoding`]：IRの複合型と値の意味、スロットの列への符号化（仕様）
+//! - [`stype_exec`]：型（`SType`、`XType`）の上の実行関数（複製、比較、値の数、整形式性、幅）
+//! - [`fits`]：値の型を、格納の型の場所に置けるか（`fits_s`）の仕様と補題
 //! - [`keys`]：キーの型の値の正規順と番号（仕様）
 //! - [`ranking`]：Setの要素とMapのキーに付ける番号（rank）の計算
+//! - [`rank_code`]：`fmspec-ir` が値に付ける番号（u64）の計算
 //! - [`map_encoding`]：キーに番号を付けたあとの、Mapの符号化
 //! - [`source`]：IRの式の型付き構文木と、値の上の意味論（仕様）
 //! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
-//! - [`slots`]：下ろしで使う、スロットの式の組み立て
+//! - [`ir`]、[`ir_check`]：IRのJSONと名前を解決したモデルの対応（仕様）と、その検査
+//! - [`slots`]：下ろしで使う、スロットの式の操作と、束縛の列（`Block`）の操作
+//! - [`slot_store`]：格納の型の値を正規形のスロットに置く式（`store`）と、キーの番号の式
 //! - [`lower_ctx`]：下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）
 //! - [`expr_build`]：中核の式の組み立て（spec の構築子と、対応する exec の構築子）
+//! - [`rows`]：ListとMapのスロットの、行への区切りの仕様
 //! - [`bindings`]：評価の順に並べた束縛の列を、中核の `let` の入れ子にする
 //! - [`expr_copy`]：中核の式の複製
-//! - [`canon`]：スロットの型と、正規形の判定
+//! - [`canon`]：正規形の判定
+//! - [`lower_types`]：スロットの型と、下ろした中核の式の型
 //! - [`lists`]：Listのスロットの補題（行への区切り、行の選択、行のつなぎ直し）
 //! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
 //! - [`map_lookup`]：Mapの参照の下ろし
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
+//! - [`lower_core`]、[`lower_struct`]、[`lower_quant`]、[`lower_set`]、[`lower_map`]、[`lower_list`]：
+//!   葉と演算子と条件式、Tuple と Record と Option、量化、Set、Map、List の下ろし（`lowering` の `low` が振り分ける）
+//! - [`state_set`]：状態の集合への所属（`in_cert`）と、整列した列の二分探索
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
 //! - [`preserve_ops`]、[`preserve_tuple`]、[`preserve_list`]、[`preserve_set`]、[`preserve_map`]、[`preserve_quant`]：
 //!   演算子と `let` と条件式、Tuple と Record と Option、List、Set と大きさ、Map、量化の下ろしが意味を保存することの補題
+//! - [`preserve_elem`]：要素とキーの下ろしが意味を保存することの補題
 //! - [`limits`]：下ろしが大きさの理由で失敗しないための条件（仕様）
 //! - [`total`]：下ろしの全域性の仕様
 //! - [`total_check`]：下ろしの全域性の前提を、実行時に確かめる検査
 //! - [`smodel`]：名前を解決したIRのモデルと、値の上の意味論
+//! - [`srel`]：中核の符号の列と値の列の対応（`rel`）
+//! - [`action_lower`]：操作の下ろし
 //! - [`model_lower`]：モデル全体の下ろし
 //! - [`model_safe`]：モデル全体の下ろしが安全性を保存することの証明
 //! - [`model_total`]：モデル全体の型付けと大きさの条件
+//! - [`model_wf`]：下ろしたモデルの整形式性
 //! - [`equality`]：等しさの下ろしの補題（符号化の単射性と、値の種類）
 //! - [`quant`]：量化の下ろしの部品（値の番号から正規形のスロットを作る式）
 //! - [`eval`]：式の形式意味論（spec）と実行Evaluator
 //! - [`typing`]：型規則、整形式性、`validate`、型健全性
 //! - [`step`]：遷移の意味論と遷移列挙
+//! - [`state_enc`]：状態と引数の符号化列（各スロットが型に属すこと、値の符号化）
 //! - [`semantics`]：検査条件、到達可能性、安全性の定義
 //! - [`evidence`]：証拠（証明書、トレース、主張）の型
 //! - [`cert`]：安全性証明書の検査器
+//! - [`checked`]：IR検証を通ったモデル（`CheckedModel`）
 //! - [`trace`]：トレースの検査器
 //! - [`gate`]：判定ゲートと、未検証コード向けの公開API
+//! - [`refine`]：詳細化の検査器と判定
+//! - [`sym`]：対称性による状態の削減（入れ替えの検査と代表元）
 //! - [`mbt`]：Model-Based Testing の候補集合
+//! - `impls`：未検証コードが使う、標準トレイトの手書きの実装（証明の対象外）
 
+pub mod action_lower;
 pub mod bindings;
 pub mod canon;
 pub mod cert;
+pub mod checked;
 pub mod encoding;
 pub mod equality;
 pub mod eval;
 pub mod evidence;
 pub mod expr_build;
 pub mod expr_copy;
+pub mod fits;
 pub mod gate;
 mod impls;
 pub mod infer;
@@ -59,7 +81,13 @@ pub mod ir_check;
 pub mod keys;
 pub mod limits;
 pub mod lists;
+pub mod lower_core;
 pub mod lower_ctx;
+pub mod lower_list;
+pub mod lower_map;
+pub mod lower_quant;
+pub mod lower_set;
+pub mod lower_struct;
 pub mod lower_types;
 pub mod lowering;
 pub mod map_encoding;
@@ -72,6 +100,7 @@ pub mod model_safe;
 pub mod model_total;
 pub mod model_wf;
 pub mod preserve;
+pub mod preserve_elem;
 pub mod preserve_list;
 pub mod preserve_map;
 pub mod preserve_ops;
@@ -79,13 +108,20 @@ pub mod preserve_quant;
 pub mod preserve_set;
 pub mod preserve_tuple;
 pub mod quant;
+pub mod rank_code;
 pub mod ranking;
 pub mod refine;
+pub mod rows;
 pub mod semantics;
+pub mod slot_store;
 pub mod slots;
 pub mod smodel;
 pub mod source;
+pub mod srel;
+pub mod state_enc;
+pub mod state_set;
 pub mod step;
+pub mod stype_exec;
 pub mod sym;
 pub mod total;
 pub mod total_check;

@@ -1,21 +1,22 @@
 //! IRの式の型付け規則（仕様）と型検査器。
 //!
-//! [`type_of`] は、型付き構文木の式の型を決める規則である。型が付かなければ `None`。
+//! [`ir_type_of`] は、型付き構文木の式の型を決める規則である。型が付かなければ `None`。
 //! 整数の範囲は式の型に持たない。この規則は `fmspec-ir` の型検査とは別に定めてあり、両者の一致は証明していない。
 //! `fmspec-ir` が受理したモデルを中核の型検査も受理することは、ランダムなテスト（`crates/fmspec-ir/tests/random_ir.rs`）で確かめる。
 //! Setの要素、Mapのキーと値、Listの要素になる式の型は、格納の型の式の型 [`to_xty`] と等しくなければならない。
 //! 要素の型の注釈は、実際の型と一致しなければならない。
 //!
-//! [`check`] は型検査器で、その結果が [`type_of`] の値と一致することを証明してある（型が付く式を拒否しない）。
+//! [`check`] は型検査器で、その結果が [`ir_type_of`] の値と一致することを証明してある（型が付く式を拒否しない）。
 //! 下ろしの前に、[`crate::model_total::check_model`] がモデル全体の式でこれと大きさの条件を確かめる。
 //! 型が付く式の下ろしが型の誤りで失敗しないこと（全域性）は [`crate::total`] の仕様で述べる。
 
-use crate::encoding::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, STy, SType};
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys, lemma_stys, lemma_xtys, sty, stys, to_xty, wf_stype, xty, xtys, XTy};
-use crate::encoding::{to_xtype, wf_stype_exec, xtype_eq, XType};
+use crate::encoding::{STy, SType, XType};
 use crate::model::{BinOp, Value};
 use crate::source::{Item, Over, SetOp, TExpr};
+use crate::stype_exec::{copy_stype, copy_xtype, distinct_names, keys_exec, stype_eq, to_xtype};
+use crate::stype_exec::{wf_stype_exec, xtype_eq};
 use vstd::prelude::*;
 
 verus! {
@@ -67,7 +68,7 @@ pub open spec fn element(t: STy, enums: Seq<i64>) -> Option<XTy> {
 }
 
 /// 式の型。`lt` は局所変数の型。
-pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
+pub open spec fn ir_type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
     decreases e, 0nat,
 {
     let enums = c.enums;
@@ -112,7 +113,7 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         } else {
             None
         },
-        TExpr::Bin(op, a, b) => if type_of(*a, c, lt) == Some(XTy::Int) && type_of(*b, c, lt) == Some(XTy::Int) {
+        TExpr::Bin(op, a, b) => if ir_type_of(*a, c, lt) == Some(XTy::Int) && ir_type_of(*b, c, lt) == Some(XTy::Int) {
             if is_arith(op) {
                 Some(XTy::Int)
             } else if is_compare(op) {
@@ -123,15 +124,15 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         } else {
             None
         },
-        TExpr::Eq(_, a, b) => match type_of(*a, c, lt) {
-            Some(x) => if type_of(*b, c, lt) == Some(x) {
+        TExpr::Eq(_, a, b) => match ir_type_of(*a, c, lt) {
+            Some(x) => if ir_type_of(*b, c, lt) == Some(x) {
                 Some(XTy::Bool)
             } else {
                 None
             },
             None => None,
         },
-        TExpr::Not(a) => if type_of(*a, c, lt) == Some(XTy::Bool) {
+        TExpr::Not(a) => if ir_type_of(*a, c, lt) == Some(XTy::Bool) {
             Some(XTy::Bool)
         } else {
             None
@@ -141,14 +142,14 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         } else {
             None
         },
-        TExpr::Implies(a, b) => if type_of(*a, c, lt) == Some(XTy::Bool) && type_of(*b, c, lt) == Some(XTy::Bool) {
+        TExpr::Implies(a, b) => if ir_type_of(*a, c, lt) == Some(XTy::Bool) && ir_type_of(*b, c, lt) == Some(XTy::Bool) {
             Some(XTy::Bool)
         } else {
             None
         },
-        TExpr::Ite(p, a, b) => if type_of(*p, c, lt) == Some(XTy::Bool) {
-            match type_of(*a, c, lt) {
-                Some(x) => if type_of(*b, c, lt) == Some(x) {
+        TExpr::Ite(p, a, b) => if ir_type_of(*p, c, lt) == Some(XTy::Bool) {
+            match ir_type_of(*a, c, lt) {
+                Some(x) => if ir_type_of(*b, c, lt) == Some(x) {
                     Some(x)
                 } else {
                     None
@@ -158,8 +159,8 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         } else {
             None
         },
-        TExpr::Let(a, b) => match type_of(*a, c, lt) {
-            Some(x) => type_of(*b, c, lt.push(x)),
+        TExpr::Let(a, b) => match ir_type_of(*a, c, lt) {
+            Some(x) => ir_type_of(*b, c, lt.push(x)),
             None => None,
         },
         TExpr::Quant(_, over, body) => {
@@ -169,12 +170,12 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
                 } else {
                     None
                 },
-                Over::Set(t, s) => if type_of(*s, c, lt) == Some(XTy::Set(Box::new(sty(t)))) {
+                Over::Set(t, s) => if ir_type_of(*s, c, lt) == Some(XTy::Set(Box::new(sty(t)))) {
                     Some(to_xty(sty(t)))
                 } else {
                     None
                 },
-                Over::Map(t, m) => match type_of(*m, c, lt) {
+                Over::Map(t, m) => match ir_type_of(*m, c, lt) {
                     Some(XTy::Map(k, _)) => if *k == sty(t) {
                         Some(to_xty(sty(t)))
                     } else {
@@ -182,13 +183,13 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
                     },
                     _ => None,
                 },
-                Over::List(l) => match type_of(*l, c, lt) {
+                Over::List(l) => match ir_type_of(*l, c, lt) {
                     Some(XTy::List(t, _)) => Some(to_xty(*t)),
                     _ => None,
                 },
             };
             match bound {
-                Some(x) => if type_of(*body, c, lt.push(x)) == Some(XTy::Bool) {
+                Some(x) => if ir_type_of(*body, c, lt.push(x)) == Some(XTy::Bool) {
                     Some(XTy::Bool)
                 } else {
                     None
@@ -212,7 +213,7 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
             },
             None => None,
         },
-        TExpr::Nth(a, i) => match type_of(*a, c, lt) {
+        TExpr::Nth(a, i) => match ir_type_of(*a, c, lt) {
             Some(XTy::Tuple(ts)) => if i < ts.len() {
                 Some(ts[i as int])
             } else {
@@ -220,7 +221,7 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
             },
             _ => None,
         },
-        TExpr::Field(a, name, i) => match type_of(*a, c, lt) {
+        TExpr::Field(a, name, i) => match ir_type_of(*a, c, lt) {
             Some(XTy::Record(names, ts)) => if i < ts.len() && i < names.len() && names[i as int] == name {
                 Some(ts[i as int])
             } else {
@@ -232,19 +233,19 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
             Some(x) => Some(XTy::Option(Box::new(x))),
             None => None,
         },
-        TExpr::Some(a) => match type_of(*a, c, lt) {
+        TExpr::Some(a) => match ir_type_of(*a, c, lt) {
             Some(x) => Some(XTy::Option(Box::new(x))),
             None => None,
         },
-        TExpr::IsSome(a) => match type_of(*a, c, lt) {
+        TExpr::IsSome(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::Option(_)) => Some(XTy::Bool),
             _ => None,
         },
-        TExpr::IsNone(a) => match type_of(*a, c, lt) {
+        TExpr::IsNone(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::Option(_)) => Some(XTy::Bool),
             _ => None,
         },
-        TExpr::Unwrap(a) => match type_of(*a, c, lt) {
+        TExpr::Unwrap(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::Option(x)) => Some(*x),
             _ => None,
         },
@@ -272,7 +273,7 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
                 None
             }
         },
-        TExpr::SetContains(t, a, x) => if type_of(*a, c, lt) == Some(XTy::Set(Box::new(sty(t)))) && type_of(
+        TExpr::SetContains(t, a, x) => if ir_type_of(*a, c, lt) == Some(XTy::Set(Box::new(sty(t)))) && ir_type_of(
             *x,
             c,
             lt,
@@ -281,8 +282,8 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         } else {
             None
         },
-        TExpr::ListContains(a, x) => match type_of(*a, c, lt) {
-            Some(XTy::List(t, _)) => if type_of(*x, c, lt) == Some(to_xty(*t)) {
+        TExpr::ListContains(a, x) => match ir_type_of(*a, c, lt) {
+            Some(XTy::List(t, _)) => if ir_type_of(*x, c, lt) == Some(to_xty(*t)) {
                 Some(XTy::Bool)
             } else {
                 None
@@ -291,7 +292,7 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         },
         TExpr::Insert(t, a, x) => {
             let s = XTy::Set(Box::new(sty(t)));
-            if type_of(*a, c, lt) == Some(s) && type_of(*x, c, lt) == Some(to_xty(sty(t))) {
+            if ir_type_of(*a, c, lt) == Some(s) && ir_type_of(*x, c, lt) == Some(to_xty(sty(t))) {
                 Some(s)
             } else {
                 None
@@ -299,14 +300,14 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
         },
         TExpr::Remove(t, a, x) => {
             let s = XTy::Set(Box::new(sty(t)));
-            if type_of(*a, c, lt) == Some(s) && type_of(*x, c, lt) == Some(to_xty(sty(t))) {
+            if ir_type_of(*a, c, lt) == Some(s) && ir_type_of(*x, c, lt) == Some(to_xty(sty(t))) {
                 Some(s)
             } else {
                 None
             }
         },
-        TExpr::SetBin(op, a, b) => match type_of(*a, c, lt) {
-            Some(XTy::Set(e)) => if type_of(*b, c, lt) == Some(XTy::Set(e)) {
+        TExpr::SetBin(op, a, b) => match ir_type_of(*a, c, lt) {
+            Some(XTy::Set(e)) => if ir_type_of(*b, c, lt) == Some(XTy::Set(e)) {
                 match op {
                     SetOp::Subset => Some(XTy::Bool),
                     _ => Some(XTy::Set(e)),
@@ -316,80 +317,80 @@ pub open spec fn type_of(e: TExpr, c: SCtx, lt: Seq<XTy>) -> Option<XTy>
             },
             _ => None,
         },
-        TExpr::Size(a) => match type_of(*a, c, lt) {
+        TExpr::Size(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::Set(_)) | Some(XTy::Map(_, _)) | Some(XTy::List(_, _)) => Some(XTy::Int),
             _ => None,
         },
-        TExpr::IsEmpty(a) => match type_of(*a, c, lt) {
+        TExpr::IsEmpty(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::Set(_)) | Some(XTy::Map(_, _)) | Some(XTy::List(_, _)) => Some(XTy::Bool),
             _ => None,
         },
-        TExpr::HasKey(t, a, x) => match type_of(*a, c, lt) {
-            Some(XTy::Map(k, _)) => if *k == sty(t) && type_of(*x, c, lt) == Some(to_xty(*k)) {
+        TExpr::HasKey(t, a, x) => match ir_type_of(*a, c, lt) {
+            Some(XTy::Map(k, _)) => if *k == sty(t) && ir_type_of(*x, c, lt) == Some(to_xty(*k)) {
                 Some(XTy::Bool)
             } else {
                 None
             },
             _ => None,
         },
-        TExpr::Get(t, a, x) => match type_of(*a, c, lt) {
-            Some(XTy::Map(k, v)) => if *k == sty(t) && type_of(*x, c, lt) == Some(to_xty(*k)) {
+        TExpr::Get(t, a, x) => match ir_type_of(*a, c, lt) {
+            Some(XTy::Map(k, v)) => if *k == sty(t) && ir_type_of(*x, c, lt) == Some(to_xty(*k)) {
                 Some(to_xty(*v))
             } else {
                 None
             },
             _ => None,
         },
-        TExpr::Put(kt, vt, a, x, y) => match type_of(*a, c, lt) {
-            Some(XTy::Map(k, v)) => if *k == sty(kt) && *v == sty(vt) && type_of(*x, c, lt) == Some(to_xty(*k))
-                && type_of(*y, c, lt) == Some(to_xty(*v)) {
+        TExpr::Put(kt, vt, a, x, y) => match ir_type_of(*a, c, lt) {
+            Some(XTy::Map(k, v)) => if *k == sty(kt) && *v == sty(vt) && ir_type_of(*x, c, lt) == Some(to_xty(*k))
+                && ir_type_of(*y, c, lt) == Some(to_xty(*v)) {
                 Some(XTy::Map(k, v))
             } else {
                 None
             },
             _ => None,
         },
-        TExpr::Delete(t, a, x) => match type_of(*a, c, lt) {
-            Some(XTy::Map(k, v)) => if *k == sty(t) && type_of(*x, c, lt) == Some(to_xty(*k)) {
+        TExpr::Delete(t, a, x) => match ir_type_of(*a, c, lt) {
+            Some(XTy::Map(k, v)) => if *k == sty(t) && ir_type_of(*x, c, lt) == Some(to_xty(*k)) {
                 Some(XTy::Map(k, v))
             } else {
                 None
             },
             _ => None,
         },
-        TExpr::Keys(a) => match type_of(*a, c, lt) {
+        TExpr::Keys(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::Map(k, _)) => Some(XTy::Set(k)),
             _ => None,
         },
-        TExpr::At(a, i) => match type_of(*a, c, lt) {
-            Some(XTy::List(t, _)) => if type_of(*i, c, lt) == Some(XTy::Int) {
+        TExpr::At(a, i) => match ir_type_of(*a, c, lt) {
+            Some(XTy::List(t, _)) => if ir_type_of(*i, c, lt) == Some(XTy::Int) {
                 Some(to_xty(*t))
             } else {
                 None
             },
             _ => None,
         },
-        TExpr::First(a) => match type_of(*a, c, lt) {
+        TExpr::First(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::List(t, _)) => Some(to_xty(*t)),
             _ => None,
         },
-        TExpr::Last(a) => match type_of(*a, c, lt) {
+        TExpr::Last(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::List(t, _)) => Some(to_xty(*t)),
             _ => None,
         },
         TExpr::Push(t, max, a, x) => {
             let l = XTy::List(Box::new(sty(t)), max);
-            if type_of(*a, c, lt) == Some(l) && type_of(*x, c, lt) == Some(to_xty(sty(t))) {
+            if ir_type_of(*a, c, lt) == Some(l) && ir_type_of(*x, c, lt) == Some(to_xty(sty(t))) {
                 Some(l)
             } else {
                 None
             }
         },
-        TExpr::Pop(a) => match type_of(*a, c, lt) {
+        TExpr::Pop(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::List(t, n)) => Some(XTy::List(t, n)),
             _ => None,
         },
-        TExpr::Shift(a) => match type_of(*a, c, lt) {
+        TExpr::Shift(a) => match ir_type_of(*a, c, lt) {
             Some(XTy::List(t, n)) => Some(XTy::List(t, n)),
             _ => None,
         },
@@ -403,7 +404,7 @@ pub open spec fn all_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>) -> bool
     if es.len() == 0 {
         true
     } else {
-        all_bool(es.drop_last(), c, lt) && type_of(es.last(), c, lt) == Some(XTy::Bool)
+        all_bool(es.drop_last(), c, lt) && ir_type_of(es.last(), c, lt) == Some(XTy::Bool)
     }
 }
 
@@ -414,7 +415,7 @@ pub open spec fn all_typed(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>) -> boo
     if es.len() == 0 {
         true
     } else {
-        all_typed(es.drop_last(), x, c, lt) && type_of(es.last(), c, lt) == Some(x)
+        all_typed(es.drop_last(), x, c, lt) && ir_type_of(es.last(), c, lt) == Some(x)
     }
 }
 
@@ -425,7 +426,7 @@ pub open spec fn items_typed(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt: Seq<
     if items.len() == 0 {
         true
     } else {
-        items_typed(items.drop_last(), k, v, c, lt) && type_of(items.last().key, c, lt) == Some(k) && type_of(
+        items_typed(items.drop_last(), k, v, c, lt) && ir_type_of(items.last().key, c, lt) == Some(k) && ir_type_of(
             items.last().value,
             c,
             lt,
@@ -440,7 +441,7 @@ pub open spec fn types_of(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>) -> Option<Seq<X
     if es.len() == 0 {
         Some(Seq::empty())
     } else {
-        match (types_of(es.drop_last(), c, lt), type_of(es.last(), c, lt)) {
+        match (types_of(es.drop_last(), c, lt), ir_type_of(es.last(), c, lt)) {
             (Some(ts), Some(x)) => Some(ts.push(x)),
             _ => None,
         }
@@ -527,11 +528,11 @@ pub open spec fn agrees(r: Option<XType>, t: Option<XTy>) -> bool {
     }
 }
 
-/// 型検査器。結果は [`type_of`] の値と一致する。`lt` は局所変数の型で、検査の後に元に戻る。
+/// 型検査器。結果は [`ir_type_of`] の値と一致する。`lt` は局所変数の型で、検査の後に元に戻る。
 pub fn check(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 2nat,
 {
     match e {
@@ -567,7 +568,7 @@ fn check_leaf(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Lit || e is Var || e is Next || e is Arg || e is Out || e is Local || e is Const,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     proof {
@@ -612,7 +613,7 @@ fn check_bin(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Bin,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -638,7 +639,7 @@ fn check_logic(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Eq || e is Not || e is Implies,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -668,7 +669,7 @@ fn check_fold(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Fold,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -698,7 +699,7 @@ fn check_ite(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Ite,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -723,7 +724,7 @@ fn check_let(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Let,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -753,7 +754,7 @@ fn check_quant(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Quant,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -815,7 +816,7 @@ fn check_tuple(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Tuple || e is Record,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -865,7 +866,7 @@ fn check_proj(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is Nth || e is Field,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -905,7 +906,7 @@ fn check_opt(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is None || e is Some || e is IsSome || e is IsNone || e is Unwrap,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -939,7 +940,7 @@ fn check_coll_lit(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType
         e is SetLit || e is MapLit || e is ListLit,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -986,7 +987,7 @@ fn check_set(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is SetContains || e is Insert || e is Remove || e is SetBin,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -1027,7 +1028,7 @@ fn check_size(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is ListContains || e is Size || e is IsEmpty,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -1057,7 +1058,7 @@ fn check_map(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is HasKey || e is Get || e is Put || e is Delete || e is Keys,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -1115,7 +1116,7 @@ fn check_list(e: &TExpr, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)
         e is At || e is First || e is Last || e is Push || e is Pop || e is Shift,
     ensures
         final(lt)@ == old(lt)@,
-        agrees(r, type_of(*e, scope_view(s), xtys(old(lt)@))),
+        agrees(r, ir_type_of(*e, scope_view(s), xtys(old(lt)@))),
     decreases e, 1nat,
 {
     match e {
@@ -1156,20 +1157,20 @@ pub proof fn lemma_all_typed_bool(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
 /// 列の型付けは、要素ごとの型付けと同じである。
 pub proof fn lemma_all_typed_iff(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>)
     ensures
-        all_typed(es, x, c, lt) == forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) == Some(x),
+        all_typed(es, x, c, lt) == forall|j: int| 0 <= j < es.len() ==> ir_type_of(#[trigger] es[j], c, lt) == Some(x),
     decreases es.len(),
 {
     if es.len() > 0 {
         let p = es.drop_last();
         lemma_all_typed_iff(p, x, c, lt);
         assert(es.last() == es[es.len() - 1]);
-        if forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) == Some(x) {
-            assert forall|j: int| 0 <= j < p.len() implies type_of(#[trigger] p[j], c, lt) == Some(x) by {
+        if forall|j: int| 0 <= j < es.len() ==> ir_type_of(#[trigger] es[j], c, lt) == Some(x) {
+            assert forall|j: int| 0 <= j < p.len() implies ir_type_of(#[trigger] p[j], c, lt) == Some(x) by {
                 assert(p[j] == es[j]);
             }
         }
         if all_typed(es, x, c, lt) {
-            assert forall|j: int| 0 <= j < es.len() implies type_of(#[trigger] es[j], c, lt) == Some(x) by {
+            assert forall|j: int| 0 <= j < es.len() implies ir_type_of(#[trigger] es[j], c, lt) == Some(x) by {
                 if j < p.len() {
                     assert(p[j] == es[j]);
                 }
@@ -1180,7 +1181,7 @@ pub proof fn lemma_all_typed_iff(es: Seq<TExpr>, x: XTy, c: SCtx, lt: Seq<XTy>)
 
 pub proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
     ensures
-        types_of(es, c, lt) is Some == forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) is Some,
+        types_of(es, c, lt) is Some == forall|j: int| 0 <= j < es.len() ==> ir_type_of(#[trigger] es[j], c, lt) is Some,
         types_of(es, c, lt) matches Some(ts) ==> ts.len() == es.len(),
     decreases es.len(),
 {
@@ -1188,13 +1189,13 @@ pub proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
         let p = es.drop_last();
         lemma_types_of_iff(p, c, lt);
         assert(es.last() == es[es.len() - 1]);
-        if forall|j: int| 0 <= j < es.len() ==> type_of(#[trigger] es[j], c, lt) is Some {
-            assert forall|j: int| 0 <= j < p.len() implies type_of(#[trigger] p[j], c, lt) is Some by {
+        if forall|j: int| 0 <= j < es.len() ==> ir_type_of(#[trigger] es[j], c, lt) is Some {
+            assert forall|j: int| 0 <= j < p.len() implies ir_type_of(#[trigger] p[j], c, lt) is Some by {
                 assert(p[j] == es[j]);
             }
         }
         if types_of(es, c, lt) is Some {
-            assert forall|j: int| 0 <= j < es.len() implies type_of(#[trigger] es[j], c, lt) is Some by {
+            assert forall|j: int| 0 <= j < es.len() implies ir_type_of(#[trigger] es[j], c, lt) is Some by {
                 if j < p.len() {
                     assert(p[j] == es[j]);
                 }
@@ -1206,7 +1207,7 @@ pub proof fn lemma_types_of_iff(es: Seq<TExpr>, c: SCtx, lt: Seq<XTy>)
 pub proof fn lemma_items_typed_iff(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt: Seq<XTy>)
     ensures
         items_typed(items, k, v, c, lt) == forall|j: int|
-            0 <= j < items.len() ==> type_of((#[trigger] items[j]).key, c, lt) == Some(k) && type_of(items[j].value, c, lt)
+            0 <= j < items.len() ==> ir_type_of((#[trigger] items[j]).key, c, lt) == Some(k) && ir_type_of(items[j].value, c, lt)
                 == Some(v),
     decreases items.len(),
 {
@@ -1215,9 +1216,9 @@ pub proof fn lemma_items_typed_iff(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt
         lemma_items_typed_iff(p, k, v, c, lt);
         assert(items.last() == items[items.len() - 1]);
         if forall|j: int|
-            0 <= j < items.len() ==> type_of((#[trigger] items[j]).key, c, lt) == Some(k) && type_of(items[j].value, c, lt)
+            0 <= j < items.len() ==> ir_type_of((#[trigger] items[j]).key, c, lt) == Some(k) && ir_type_of(items[j].value, c, lt)
                 == Some(v) {
-            assert forall|j: int| 0 <= j < p.len() implies type_of((#[trigger] p[j]).key, c, lt) == Some(k) && type_of(
+            assert forall|j: int| 0 <= j < p.len() implies ir_type_of((#[trigger] p[j]).key, c, lt) == Some(k) && ir_type_of(
                 p[j].value,
                 c,
                 lt,
@@ -1226,8 +1227,8 @@ pub proof fn lemma_items_typed_iff(items: Seq<Item>, k: XTy, v: XTy, c: SCtx, lt
             }
         }
         if items_typed(items, k, v, c, lt) {
-            assert forall|j: int| 0 <= j < items.len() implies type_of((#[trigger] items[j]).key, c, lt) == Some(k)
-                && type_of(items[j].value, c, lt) == Some(v) by {
+            assert forall|j: int| 0 <= j < items.len() implies ir_type_of((#[trigger] items[j]).key, c, lt) == Some(k)
+                && ir_type_of(items[j].value, c, lt) == Some(v) by {
                 if j < p.len() {
                     assert(p[j] == items[j]);
                 }

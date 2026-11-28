@@ -19,9 +19,9 @@
 
 use crate::graph;
 use crate::simulate::SplitMix64;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::eval::ErrKind;
-use fmspec_core::gate::CheckedModel;
-use fmspec_core::mbt::{self, Begun, Update};
+use fmspec_core::mbt::{self, Begun, ObserveOutcome};
 pub use fmspec_core::mbt::{Seen, SeenOutput};
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::{Enumerated, Site};
@@ -307,7 +307,7 @@ impl Session {
         let before = core.candidates().clone();
         let update = core.observe(action, &params.to_vec(), output, &seen.to_vec());
         match update {
-            Update::Continue => {
+            ObserveOutcome::Continue => {
                 self.matched += 1;
                 let transition = self
                     .core
@@ -319,13 +319,13 @@ impl Session {
                 };
                 Observed::Continue
             }
-            Update::Failure => Observed::Failure {
+            ObserveOutcome::Failure => Observed::Failure {
                 possible: self.possible(action, params),
             },
-            Update::InvalidInput => Observed::InvalidInput,
-            Update::TooMany => Observed::TooManyCandidates,
-            Update::ModelError(e) => Observed::ModelError(e.into()),
-            Update::ModelViolation(invariant, index, state) => Observed::ModelViolation {
+            ObserveOutcome::InvalidInput => Observed::InvalidInput,
+            ObserveOutcome::TooMany => Observed::TooManyCandidates,
+            ObserveOutcome::ModelError(e) => Observed::ModelError(e.into()),
+            ObserveOutcome::ModelViolation(invariant, index, state) => Observed::ModelViolation {
                 invariant,
                 index,
                 state,

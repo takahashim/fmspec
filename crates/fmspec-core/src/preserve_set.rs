@@ -7,23 +7,25 @@ use crate::encoding::{enc, enc_rows, keys, keys_or_zero, member, sty, width, STy
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{and_s, bool_lit, implies_s, int_lit, or_s, tree_s, Join};
+use crate::expr_build::tree_s;
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, mark_s, pure_below, setop_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{at_rank, lemma_bin_const, picks, vals_at};
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::{added, all_pure, pure_below};
+use crate::lower_ctx::{added, extends, Block, Bound, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::model::{BinOp, Expr, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::source::{count_some, count_true, eval_set_items, eval_src, SEnv, FAIL_NOT_IN_DOMAIN};
+use crate::preserve_elem::elem_rank_lowers;
 #[cfg(verus_keep_ghost)]
-use crate::source::{SetOp, TExpr};
+use crate::rows::{lemma_enc_rows_index, row_slots};
+#[cfg(verus_keep_ghost)]
+use crate::source::{count_some, count_true, eval_set_items, eval_src, SEnv, SetOp, TExpr};
 use vstd::prelude::*;
 
 verus! {
@@ -684,16 +686,6 @@ pub proof fn lemma_is_empty(e: TExpr, a: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0
     }
 }
 
-/// Setの演算の、要素ごとのスロットの式。
-pub open spec fn setop_s(op: SetOp, x: Expr, y: Expr) -> Expr {
-    match op {
-        SetOp::Union => or_s(x, y),
-        SetOp::Intersection => and_s(x, y),
-        SetOp::Difference => and_s(x, Expr::Not(Box::new(y))),
-        SetOp::Subset => implies_s(x, y),
-    }
-}
-
 pub open spec fn setop_b(op: SetOp, a: bool, b: bool) -> bool {
     match op {
         SetOp::Union => a || b,
@@ -920,14 +912,6 @@ pub proof fn lemma_setbin_at(
     }
 }
 
-pub open spec fn mark_s(on: bool, bit: Expr, r: Expr, k: i64) -> Expr {
-    if on {
-        or_s(bit, Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
-    } else {
-        and_s(bit, Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
-    }
-}
-
 /// 番号 `i` の位置を `on` にしたSetのスロットの値。
 pub proof fn lemma_mark(on: bool, bits: Seq<Expr>, r: Expr, out: Seq<Expr>, p: Seq<bool>, i: i64, env: Env, l: Seq<Value>)
     requires
@@ -959,28 +943,6 @@ pub proof fn lemma_mark(on: bool, bits: Seq<Expr>, r: Expr, out: Seq<Expr>, p: S
         }
     }
     assert(slot_vals(out, env, l) =~= Seq::new(p.len(), |j: int| Value::Bool(if on { p[j] || i == j } else { p[j] && i != j })));
-}
-
-/// 要素の番号の下ろしの正しさ。値が型に属さなければ `FAIL_NOT_IN_DOMAIN` で失敗する。
-pub open spec fn elem_rank_lowers(e: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0: Block, b1: Block, st: STy, x: Expr) -> bool {
-    forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-        #[trigger] ctx_ok(cx, sc, env, se, ls, sls) && ls.len() == b0.depth_s() ==> match eval_src(e, se, sls) {
-            Err(k) => run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(k),
-            Ok(v) => if member(v, st, se.enums) {
-                run(fresh(b0, b1), env, ls) matches Ok(l) && l.len() == b1.depth_s() && prefix(ls, l) && ctx_ok(
-                    cx,
-                    sc,
-                    env,
-                    se,
-                    l,
-                    sls,
-                ) && pure_below(x, l.len()) && eval_l(x, env, l) == Ok::<Value, ErrKind>(
-                    Value::Int(rank(v, st, se.enums) as i64),
-                )
-            } else {
-                run(fresh(b0, b1), env, ls) == Err::<Seq<Value>, ErrKind>(ErrKind::Failed(FAIL_NOT_IN_DOMAIN))
-            },
-        }
 }
 
 } // verus!

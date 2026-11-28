@@ -2,17 +2,18 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{default_val, default_vals, enc, enc_items, enc_repeat, enc_rows, enc_seq};
-use crate::encoding::{keys_exec, SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{keys_or_zero, lemma_default_vals_len, lemma_stys, lemma_xtys, STy, MAX_KEYS};
+use crate::encoding::{lemma_default_vals_len, lemma_stys, lemma_xtys, sty, stys, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, stys, width, width_sum, xty, xtys, xwidth, xwidth_sum, SVal, XTy};
+use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
+use crate::encoding::{SType, XType};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::limits::{lemma_lim_ss_at, lemma_lim_xs_at, lemma_width_sum_prefix};
-#[cfg(verus_keep_ghost)]
-use crate::limits::{lemma_xwidth_sum_prefix, lim, lim_s, lim_ss, lim_x, lim_xs};
+use crate::limits::{lemma_lim_xs_at, lemma_xwidth_sum_prefix, lim, lim_xs};
 use crate::model::{BinOp, Expr, Value};
+#[cfg(verus_keep_ghost)]
+use crate::source::SetOp;
+use crate::stype_exec::{keys_or_zero_exec, xtype_width};
 use vstd::prelude::*;
 
 verus! {
@@ -273,212 +274,6 @@ pub fn all_of(items: &Vec<Expr>) -> (r: Expr)
         r == tree_s(items@, bool_lit(true), Join::And),
 {
     tree(items, cb(true), Join::And)
-}
-
-pub fn keys_or_zero_exec(t: &SType, enums: &Vec<i64>) -> (r: usize)
-    ensures
-        r == keys_or_zero(sty(*t), enums@),
-        r <= MAX_KEYS,
-{
-    match keys_exec(t, enums) {
-        Some(k) => k as usize,
-        None => 0,
-    }
-}
-
-/// 格納の型のスロット数。`usize` に収まらなければ `None`。
-pub fn stype_width(t: &SType, enums: &Vec<i64>) -> (r: Option<usize>)
-    ensures
-        r matches Some(w) ==> w == width(sty(*t), enums@),
-        lim_s(sty(*t), enums@) ==> r is Some,
-    decreases t, 1nat,
-{
-    match t {
-        SType::Bool | SType::Int(_, _) | SType::Enum(_) => Some(1),
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            stype_width_sum(t, ts, enums)
-        },
-        SType::Record(_, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            stype_width_sum(t, ts, enums)
-        },
-        SType::Option(x) => {
-            let w = stype_width(x, enums)?;
-            w.checked_add(1)
-        },
-        SType::Set(e) => Some(keys_or_zero_exec(e, enums)),
-        SType::Map(k, v) => {
-            let n = keys_or_zero_exec(k, enums);
-            let w = stype_width(v, enums)?;
-            proof {
-                assert(usize::MAX >= 0xffff_ffff);
-                if lim_s(sty(*t), enums@) {
-                    assert(lim_s(sty(**v), enums@));
-                    assert(width(sty(**v), enums@) <= lim());
-                }
-            }
-            let w1 = w.checked_add(1)?;
-            proof {
-                if lim_s(sty(*t), enums@) {
-                    assert(n as nat * w1 as nat == width(sty(*t), enums@));
-                }
-            }
-            n.checked_mul(w1)
-        },
-        SType::List(e, n) => {
-            let w = stype_width(e, enums)?;
-            proof {
-                assert(usize::MAX >= 0xffff_ffff);
-                if lim_s(sty(*t), enums@) {
-                    assert(*n as nat * w as nat + 1 == width(sty(*t), enums@));
-                }
-            }
-            n.checked_mul(w)?.checked_add(1)
-        },
-    }
-}
-
-pub(crate) fn stype_width_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: Option<usize>)
-    requires
-        decreases_to!(*_parent => *ts),
-    ensures
-        r matches Some(w) ==> w == width_sum(stys(ts@), enums@),
-        lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim() ==> r is Some,
-    decreases _parent, 0nat,
-{
-    let ghost pre = lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim();
-    let mut acc: usize = 0;
-    let mut i = 0;
-    proof {
-        lemma_stys(ts@);
-        assert(stys(ts@).take(0) =~= Seq::<STy>::empty());
-    }
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            stys(ts@).len() == ts@.len(),
-            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] stys(ts@)[j] == sty(ts@[j]),
-            acc == width_sum(stys(ts@).take(i as int), enums@),
-            pre == (lim_ss(stys(ts@), enums@) && width_sum(stys(ts@), enums@) <= lim()),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-            let xs = stys(ts@);
-            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
-            assert(xs.take(i + 1).last() == xs[i as int]);
-            if pre {
-                lemma_lim_ss_at(xs, enums@, i as int);
-                lemma_width_sum_prefix(xs, enums@, i + 1);
-            }
-        }
-        let w = stype_width(&ts[i], enums)?;
-        acc = acc.checked_add(w)?;
-        proof {
-            let xs = stys(ts@);
-            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
-            assert(xs.take(i + 1).last() == xs[i as int]);
-        }
-        i += 1;
-    }
-    proof {
-        assert(stys(ts@).take(ts@.len() as int) =~= stys(ts@));
-    }
-    Some(acc)
-}
-
-/// 式の型のスロット数。
-pub fn xtype_width(t: &XType, enums: &Vec<i64>) -> (r: Option<usize>)
-    ensures
-        r matches Some(w) ==> w == xwidth(xty(*t), enums@),
-        lim_x(xty(*t), enums@) ==> r is Some,
-    decreases t, 1nat,
-{
-    match t {
-        XType::Bool | XType::Int | XType::Enum(_) => Some(1),
-        XType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            xtype_width_sum(t, ts, enums)
-        },
-        XType::Record(_, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            xtype_width_sum(t, ts, enums)
-        },
-        XType::Option(x) => {
-            let w = xtype_width(x, enums)?;
-            w.checked_add(1)
-        },
-        XType::Set(e) => Some(keys_or_zero_exec(e, enums)),
-        XType::Map(k, v) => {
-            let n = keys_or_zero_exec(k, enums);
-            let w = stype_width(v, enums)?;
-            n.checked_mul(w.checked_add(1)?)
-        },
-        XType::List(e, n) => {
-            let w = stype_width(e, enums)?;
-            n.checked_mul(w)?.checked_add(1)
-        },
-    }
-}
-
-pub(crate) fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: Option<usize>)
-    requires
-        decreases_to!(*_parent => *ts),
-    ensures
-        r matches Some(w) ==> w == xwidth_sum(xtys(ts@), enums@),
-        lim_xs(xtys(ts@), enums@) && xwidth_sum(xtys(ts@), enums@) <= lim() ==> r is Some,
-    decreases _parent, 0nat,
-{
-    let ghost pre = lim_xs(xtys(ts@), enums@) && xwidth_sum(xtys(ts@), enums@) <= lim();
-    let mut acc: usize = 0;
-    let mut i = 0;
-    proof {
-        lemma_xtys(ts@);
-        assert(xtys(ts@).take(0) =~= Seq::<XTy>::empty());
-    }
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            xtys(ts@).len() == ts@.len(),
-            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] xtys(ts@)[j] == xty(ts@[j]),
-            acc == xwidth_sum(xtys(ts@).take(i as int), enums@),
-            pre == (lim_xs(xtys(ts@), enums@) && xwidth_sum(xtys(ts@), enums@) <= lim()),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-            let xs = xtys(ts@);
-            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
-            assert(xs.take(i + 1).last() == xs[i as int]);
-            if pre {
-                lemma_lim_xs_at(xs, enums@, i as int);
-                lemma_xwidth_sum_prefix(xs, enums@, i + 1);
-            }
-        }
-        let w = xtype_width(&ts[i], enums)?;
-        acc = acc.checked_add(w)?;
-        proof {
-            let xs = xtys(ts@);
-            assert(xs.take(i + 1).drop_last() =~= xs.take(i as int));
-            assert(xs.take(i + 1).last() == xs[i as int]);
-        }
-        i += 1;
-    }
-    proof {
-        assert(xtys(ts@).take(ts@.len() as int) =~= xtys(ts@));
-    }
-    Some(acc)
 }
 
 /// 値の列を、定数の式の列にする。
@@ -768,14 +563,68 @@ pub open spec fn split_ok(part: Seq<Expr>, slots: Seq<Expr>, ts: Seq<XTy>, i: in
     &&& part == slots.subrange(xoff(ts, i, enums), xoff(ts, i, enums) + xwidth(ts[i], enums))
 }
 
-/// 各行の先頭のスロット。
-pub open spec fn heads_ok(h: Seq<Expr>, rows: Seq<Seq<Expr>>) -> bool {
-    &&& h.len() == rows.len()
-    &&& forall|q: int| 0 <= q < rows.len() ==> #[trigger] head_at(h[q], rows[q])
+/// 束縛子（`let`、量化）を含まず、局所変数は `n` 未満だけを参照する。
+pub open spec fn pure_below(e: Expr, n: nat) -> bool
+    decreases e,
+{
+    match e {
+        Expr::Local(i) => i < n,
+        Expr::Bin(_, a, b) => pure_below(*a, n) && pure_below(*b, n),
+        Expr::And(a, b) => pure_below(*a, n) && pure_below(*b, n),
+        Expr::Or(a, b) => pure_below(*a, n) && pure_below(*b, n),
+        Expr::Implies(a, b) => pure_below(*a, n) && pure_below(*b, n),
+        Expr::Not(a) => pure_below(*a, n),
+        Expr::Code(a) => pure_below(*a, n),
+        Expr::Ite(c, a, b) => pure_below(*c, n) && pure_below(*a, n) && pure_below(*b, n),
+        Expr::Let(_, _) => false,
+        Expr::Forall(_, _, _, _) => false,
+        Expr::Exists(_, _, _, _) => false,
+        _ => true,
+    }
 }
 
-pub open spec fn head_at(x: Expr, row: Seq<Expr>) -> bool {
-    row.len() > 0 && x == row[0]
+pub open spec fn all_pure(s: Seq<Expr>, n: nat) -> bool {
+    forall|j: int| 0 <= j < s.len() ==> pure_below(#[trigger] s[j], n)
+}
+
+/// 式の列の列をつなげる。
+pub open spec fn concat(xss: Seq<Seq<Expr>>) -> Seq<Expr>
+    decreases xss.len(),
+{
+    if xss.len() == 0 {
+        Seq::empty()
+    } else {
+        concat(xss.drop_last()) + xss.last()
+    }
+}
+
+/// 状態変数、遷移後の状態変数、引数の参照。
+pub open spec fn kind_expr(kind: u8, i: usize) -> Expr {
+    if kind == 0 {
+        Expr::Var(i)
+    } else if kind == 1 {
+        Expr::Next(i)
+    } else {
+        Expr::Arg(i)
+    }
+}
+
+/// Setの演算の、要素ごとのスロットの式。
+pub open spec fn setop_s(op: SetOp, x: Expr, y: Expr) -> Expr {
+    match op {
+        SetOp::Union => or_s(x, y),
+        SetOp::Intersection => and_s(x, y),
+        SetOp::Difference => and_s(x, Expr::Not(Box::new(y))),
+        SetOp::Subset => implies_s(x, y),
+    }
+}
+
+pub open spec fn mark_s(on: bool, bit: Expr, r: Expr, k: i64) -> Expr {
+    if on {
+        or_s(bit, Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
+    } else {
+        and_s(bit, Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
+    }
 }
 
 } // verus!

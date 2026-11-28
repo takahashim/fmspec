@@ -10,11 +10,14 @@
 //! 写した状態からの `a` の後続も遷移列挙で計算し直す。探索器の記録した対応は使わない。
 
 use crate::cert::*;
+use crate::checked::CheckedModel;
 use crate::eval::*;
 use crate::evidence::*;
-use crate::gate::*;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::{args_ok, encode_spec};
+use crate::state_enc::{encode, vec_eq};
 use crate::step::*;
 use crate::trace::*;
 #[cfg(verus_keep_ghost)]
@@ -205,7 +208,7 @@ pub enum Mapped {
 }
 
 /// 状態 `s` を写す。
-pub fn map_state(b: &RawModel, a: &RawModel, f: &Vec<Expr>, s: &Vec<i64>) -> (r: Mapped)
+pub(crate) fn map_state(b: &RawModel, a: &RawModel, f: &Vec<Expr>, s: &Vec<i64>) -> (r: Mapped)
     ensures
         match r {
             Mapped::Ok(x) => maps_ok(*b, *a, f@, s@) && x@ == mapped(*b, *a, f@, s@),
@@ -262,7 +265,7 @@ pub enum Move {
 
 /// `x` から `y` へ、状態の変わらないステップか、抽象モデルの遷移で移れるか。
 #[verifier::loop_isolation(false)]
-pub fn find_move(a: &RawModel, x: &Vec<i64>, y: &Vec<i64>) -> (r: Move)
+pub(crate) fn find_move(a: &RawModel, x: &Vec<i64>, y: &Vec<i64>) -> (r: Move)
     ensures
         r is Yes ==> abs_move(*a, x@, y@),
         r is No ==> !abs_move(*a, x@, y@),
@@ -372,15 +375,15 @@ fn check_ref_action(
             {
                 match map_state(b, a, f, &ts[i].state) {
                     Mapped::Arity => {
-                        return Some(Reject::MappingFailed(k, f.len()));
+                        return Some(Reject::Refine(RefReject::MappingFailed(k, f.len())));
                     },
                     Mapped::Fail(slot, _) => {
-                        return Some(Reject::MappingFailed(k, slot));
+                        return Some(Reject::Refine(RefReject::MappingFailed(k, slot)));
                     },
                     Mapped::Ok(y) => match find_move(a, x, &y) {
                         Move::Yes => {},
                         _ => {
-                            return Some(Reject::StepNotMapped(k, ac));
+                            return Some(Reject::Refine(RefReject::StepNotMapped(k, ac)));
                         },
                     },
                 }
@@ -414,10 +417,10 @@ fn check_ref_state(b: &RawModel, cb: &Conditions, a: &RawModel, f: &Vec<Expr>, c
     let s = &cert[k];
     let x = match map_state(b, a, f, s) {
         Mapped::Arity => {
-            return Some(Reject::MappingFailed(k, f.len()));
+            return Some(Reject::Refine(RefReject::MappingFailed(k, f.len())));
         },
         Mapped::Fail(slot, _) => {
-            return Some(Reject::MappingFailed(k, slot));
+            return Some(Reject::Refine(RefReject::MappingFailed(k, slot)));
         },
         Mapped::Ok(x) => x,
     };
@@ -475,14 +478,14 @@ fn check_ref_initials(b: &RawModel, a: &RawModel, f: &Vec<Expr>) -> (r: Option<R
     {
         match map_state(b, a, f, &b.inits[i]) {
             Mapped::Arity => {
-                return Some(Reject::InitialMappingFailed(i, f.len()));
+                return Some(Reject::Refine(RefReject::InitialMappingFailed(i, f.len())));
             },
             Mapped::Fail(slot, _) => {
-                return Some(Reject::InitialMappingFailed(i, slot));
+                return Some(Reject::Refine(RefReject::InitialMappingFailed(i, slot)));
             },
             Mapped::Ok(x) => {
                 if !is_initial(a, &x) {
-                    return Some(Reject::InitialNotMapped(i));
+                    return Some(Reject::Refine(RefReject::InitialNotMapped(i)));
                 }
             },
         }
@@ -1009,6 +1012,30 @@ pub fn decide_refinement(
         },
         RefEvidence::Unavailable(limit) => RefVerdict { kind: RefVerdictKind::Inconclusive, reject: None, limit: Some(*limit) },
     }
+}
+
+
+// ---- 未検証コード向けの公開関数 ----
+
+/// 具体モデルの状態 `s` を、写像 `f` で抽象モデルの状態に写す（`map_state` と同じ）。
+pub fn map_state_of(b: &CheckedModel, a: &CheckedModel, f: &Vec<Expr>, s: &Vec<i64>) -> (r: Mapped)
+    ensures
+        match r {
+            Mapped::Ok(x) => maps_ok(b@, a@, f@, s@) && x@ == mapped(b@, a@, f@, s@),
+            Mapped::Fail(i, k) => i < f@.len() && map_slot(b@, a@, f@, s@, i as int) == Err::<i64, ErrKind>(k),
+            Mapped::Arity => !map_wf(a@, f@),
+        },
+{
+    map_state(b.raw(), a.raw(), f, s)
+}
+
+/// 抽象モデルで、状態 `x` から `y` へ、1つの遷移か状態の変わらないステップで移れるか（`find_move` と同じ）。
+pub fn find_move_of(a: &CheckedModel, x: &Vec<i64>, y: &Vec<i64>) -> (r: Move)
+    ensures
+        r is Yes ==> abs_move(a@, x@, y@),
+        r is No ==> !abs_move(a@, x@, y@),
+{
+    find_move(a.raw(), x, y)
 }
 
 } // verus!

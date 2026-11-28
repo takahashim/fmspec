@@ -1,164 +1,23 @@
 //! 判定ゲートと、未検証コード向けの公開API。
 //!
 //! 利用者が受け取る判定の意味は `decide` だけで決まる（仕様書 §3.1、§14.1 Verdict Gate）。
-//! `Verdict` と `CheckedModel` のフィールドは非公開で、このモジュールの外では構築できない。
+//! `Verdict` のフィールドは非公開で、このモジュールの外では構築できない。
+//! 判定ゲートに渡すモデル（`CheckedModel`）は `crate::checked` にあり、同じく `validate` を通らずには作れない。
 //! ここにある公開関数は前提条件を持たない。
 
 use crate::cert::*;
-use crate::eval::*;
+use crate::checked::CheckedModel;
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
-use crate::step::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_set::in_cert;
+use crate::sym::SwapMaps;
 use crate::trace::*;
 use crate::typing::*;
 use vstd::prelude::*;
 
 verus! {
-
-/// IR検証を通過したモデル。`validate` だけが構築する。
-pub struct CheckedModel {
-    raw: RawModel,
-}
-
-impl CheckedModel {
-    #[verifier::type_invariant]
-    spec fn well_formed(self) -> bool {
-        wf(self.raw)
-    }
-
-    pub closed spec fn view(self) -> RawModel {
-        self.raw
-    }
-
-    /// 検証済みのモデルの中身。整形式である。
-    pub fn raw(&self) -> (r: &RawModel)
-        ensures
-            *r == self@,
-            wf(*r),
-    {
-        proof {
-            use_type_invariant(self);
-        }
-        &self.raw
-    }
-
-    /// 初期状態の符号化列。1つ以上ある。
-    pub fn initials(&self) -> (r: &Vec<Vec<i64>>)
-        ensures
-            *r == self@.inits,
-            r@.len() >= 1,
-    {
-        proof {
-            use_type_invariant(self);
-        }
-        &self.raw.inits
-    }
-
-    /// 符号化列が状態型に従うか。
-    pub fn state_ok(&self, s: &Vec<i64>) -> (r: bool)
-        ensures
-            r == state_ok(self@, s@),
-    {
-        vals_ok_exec(&self.raw.enums, &self.raw.state_types, s)
-    }
-
-    /// 状態 `s` での操作 `a` の有効な遷移を、引数の辞書順に、漏れなく列挙する。
-    /// 操作が未定義か、状態が状態型に従わなければ `None`。それ以外は `Some`。
-    pub fn successors(&self, a: usize, s: &Vec<i64>) -> (r: Option<Enumerated>)
-        ensures
-            r is Some <==> a < self@.actions@.len() && state_ok(self@, s@),
-            r matches Some(e) ==> enumerated_ok(self@, a as int, s@, e),
-    {
-        if a < self.raw.actions.len() && self.state_ok(s) {
-            Some(enumerate(&self.raw, a, s))
-        } else {
-            None
-        }
-    }
-
-    /// 状態 `s` で操作 `a` を引数 `args`（公開引数と内部選択）で適用した結果を計算する。
-    /// 他の引数の評価に関係しないので、列挙が評価エラーになる状態でも、この引数の遷移を計算できる。
-    /// 操作が未定義か、状態が状態型に、引数が操作のドメインに従わなければ `None`。それ以外は `Some`。
-    pub fn apply(&self, a: usize, args: &Vec<i64>, s: &Vec<i64>) -> (r: Option<StepR>)
-        ensures
-            r is Some <==> a < self@.actions@.len() && state_ok(self@, s@) && args_ok(self@, a as int, args@),
-            r matches Some(x) ==> x@ == step_spec(self@, a as int, args@, s@),
-    {
-        if a < self.raw.actions.len() && self.state_ok(s) && vals_ok_exec(
-            &self.raw.enums,
-            &self.raw.actions[a].domains,
-            args,
-        ) {
-            Some(step(&self.raw, a, args, s))
-        } else {
-            None
-        }
-    }
-
-    /// 対象の不変条件を定義順に評価し、真でない最初のものと、その評価結果を返す。
-    /// `None` なら対象の不変条件はすべて真で、`Some((i, v))` なら `i` は対象の不変条件で、`v` はその評価結果
-    /// （真でない）である。
-    pub fn invariants(&self, c: &Conditions, s: &Vec<i64>) -> (r: Option<(usize, Result<bool, ErrKind>)>)
-        ensures
-            match r {
-                None => invs_hold(self@, *c, s@),
-                Some((i, v)) => inv_on(self@, *c, i as int) && inv_spec(self@, i as int, s@) == v && not_true(v),
-            },
-    {
-        check_invariants(&self.raw, c, s)
-    }
-
-    /// 操作 `a` の遷移に適用する対象の契約を定義順に評価し、真でない最初のものと、その評価結果を返す。
-    /// `None` なら適用する対象の契約はすべて真で、`Some((k, v))` なら `k` は操作 `a` の対象の契約で、`v` は
-    /// その評価結果（真でない）である。
-    pub fn contracts(
-        &self,
-        c: &Conditions,
-        a: usize,
-        pre: &Vec<i64>,
-        args: &Vec<i64>,
-        post: &Vec<i64>,
-        o: &Option<i64>,
-    ) -> (r: Option<(usize, Result<bool, ErrKind>)>)
-        ensures
-            match r {
-                None => cons_hold(self@, *c, a as int, pre@, args@, post@, *o),
-                Some((k, v)) => con_on(self@, *c, k as int) && self@.contracts@[k as int].action == a && con_spec(
-                    self@,
-                    k as int,
-                    pre@,
-                    args@,
-                    post@,
-                    *o,
-                ) == v && not_true(v),
-            },
-    {
-        check_contracts(&self.raw, c, a, pre, args, post, o)
-    }
-
-    /// 終端条件を評価する。
-    pub fn terminal(&self, s: &Vec<i64>) -> (r: Result<bool, ErrKind>)
-        ensures
-            r == terminal_spec(self@, s@),
-    {
-        eval_terminal(&self.raw, s)
-    }
-}
-
-/// IRを検証する。受理するのは、モデルが整形式であるとき、かつそのときに限る。
-pub fn validate(raw: RawModel) -> (r: Result<CheckedModel, InvalidModel>)
-    ensures
-        match r {
-            Ok(cm) => cm@ == raw && wf(raw),
-            Err(_) => !wf(raw),
-        },
-{
-    match validate_raw(&raw) {
-        Ok(()) => Ok(CheckedModel { raw }),
-        Err(e) => Err(e),
-    }
-}
 
 /// 判定の種類（仕様書 §8.3）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -347,70 +206,6 @@ pub open spec fn verdict_sound(m: RawModel, c: Conditions, ev: Evidence, k: Verd
     }
 }
 
-/// 検査条件の列の `i` 番目が対象である。列より後ろは対象外とする（`act_on` などと同じ）。
-pub open spec fn flag_on(a: Seq<bool>, i: int) -> bool {
-    0 <= i < a.len() && a[i]
-}
-
-/// 2つの列が、添字 `n` 未満で同じものを対象にする。
-pub open spec fn flags_same(n: int, a: Seq<bool>, b: Seq<bool>) -> bool {
-    forall|i: int| 0 <= i < n ==> #[trigger] flag_on(a, i) == flag_on(b, i)
-}
-
-/// 2つの検査条件が、モデル `m` について同じ意味を持つ。対象の操作、不変条件、契約と、デッドロック検査の
-/// 有無が同じである。列の長さは問わない（列より後ろと、モデルにない添字は対象外）。
-pub open spec fn same_conditions(m: RawModel, x: Conditions, y: Conditions) -> bool {
-    &&& flags_same(m.actions@.len() as int, x.actions@, y.actions@)
-    &&& flags_same(m.invariants@.len() as int, x.invariants@, y.invariants@)
-    &&& flags_same(m.contracts@.len() as int, x.contracts@, y.contracts@)
-    &&& x.deadlock == y.deadlock
-}
-
-fn flags_eq(n: usize, a: &Vec<bool>, b: &Vec<bool>) -> (r: bool)
-    ensures
-        r == flags_same(n as int, a@, b@),
-{
-    let mut i: usize = 0;
-    while i < n
-        invariant
-            i <= n,
-            forall|j: int| 0 <= j < i ==> #[trigger] flag_on(a@, j) == flag_on(b@, j),
-        decreases n - i,
-    {
-        let x = i < a.len() && a[i];
-        let y = i < b.len() && b[i];
-        if x != y {
-            assert(flag_on(a@, i as int) != flag_on(b@, i as int));
-            return false;
-        }
-        i = i + 1;
-    }
-    true
-}
-
-/// 証明書の検査条件 `a` と要求された検査条件 `b` を、モデル `m` についての意味で比べる。
-/// 判定の健全性はこの比較に依らない（証明書は要求された検査条件で検査する）。別の検査条件で作られた
-/// 証明書を、取り違えとして拒否するための比較である。
-pub(crate) fn conditions_eq(m: &RawModel, a: &Conditions, b: &Conditions) -> (r: bool)
-    ensures
-        r == same_conditions(*m, *a, *b),
-{
-    flags_eq(m.actions.len(), &a.actions, &b.actions) && flags_eq(m.invariants.len(), &a.invariants, &b.invariants)
-        && flags_eq(m.contracts.len(), &a.contracts, &b.contracts) && a.deadlock == b.deadlock
-}
-
-pub(crate) fn is_violation_exec(claim: &Claim) -> (r: bool)
-    ensures
-        r == is_violation(*claim),
-{
-    match claim {
-        Claim::Invariant(_) => true,
-        Claim::Contract(_) => true,
-        Claim::Deadlock => true,
-        _ => false,
-    }
-}
-
 fn decide_wf(m: &RawModel, c: &Conditions, ev: &Evidence) -> (v: Verdict)
     requires
         wf(*m),
@@ -514,9 +309,18 @@ impl<'a> CertCheck<'a> {
         if !conditions_eq(m, &cert.conditions, c) {
             return Err(Verdict::rejected(Reject::ConditionMismatch));
         }
-        match check_initials(m, &cert.states) {
+        let none: Vec<SwapMaps> = Vec::new();
+        match check_initials(m, &none, &cert.states) {
             Some(r) => Err(Verdict::rejected(r)),
-            None => Ok(CertCheck { model, cond: c, cert, next: 0 }),
+            None => {
+                proof {
+                    assert(none@ =~= Seq::<SwapMaps>::empty());
+                    assert forall|i: int| 0 <= i < m.inits@.len() implies in_cert(cert.states@, (#[trigger] m.inits@[i])@) by {
+                        lemma_reps_empty(cert.states@, m.inits@[i]@);
+                    }
+                }
+                Ok(CertCheck { model, cond: c, cert, next: 0 })
+            },
         }
     }
 
@@ -547,19 +351,27 @@ impl<'a> CertCheck<'a> {
         }
         let m = self.model.raw();
         let states = &self.cert.states;
+        let none: Vec<SwapMaps> = Vec::new();
+        proof {
+            assert(none@ =~= Seq::<SwapMaps>::empty());
+        }
         let mut k = self.next;
         let mut left = n;
         while k < states.len() && left > 0
             invariant
                 self.next <= k <= states@.len(),
+                none@ == Seq::<SwapMaps>::empty(),
                 forall|j: int| 0 <= j < k ==> state_closed(*m, *self.cond, states@, (#[trigger] states@[j])@),
             decreases states@.len() - k,
         {
-            match check_state(m, self.cond, states, k) {
+            match check_state(m, self.cond, &none, states, k) {
                 Some(r) => {
                     return Some(Verdict::rejected(r));
                 },
                 None => {},
+            }
+            proof {
+                lemma_closed_without_swaps(*m, *self.cond, states@, states@[k as int]@);
             }
             k = k + 1;
             left = left - 1;
@@ -611,7 +423,7 @@ pub fn decide_symmetric(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<us
             }
             match crate::sym::symmetry(m, c, swaps) {
                 Err(i) => Verdict::rejected(Reject::NotSymmetric(i)),
-                Ok(sw) => match crate::sym::check_sym_certificate(m, c, &sw, &cert.states) {
+                Ok(sw) => match check_sym_certificate(m, c, &sw, &cert.states) {
                     None => Verdict::of(VerdictKind::Verified),
                     Some(r) => Verdict::rejected(r),
                 },

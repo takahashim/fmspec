@@ -9,11 +9,9 @@ use crate::encoding::{to_xty, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{bool_lit, ite_s, lits, split_ok};
+use crate::expr_build::{bool_lit, ite_s, lits, pure_below, split_ok};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{extends, Block, Bound, LowerCtx};
-#[cfg(verus_keep_ghost)]
-use crate::lower_types::pure_below;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, Type, Value};
 #[cfg(verus_keep_ghost)]

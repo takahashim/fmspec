@@ -20,11 +20,16 @@
 //! 候補の列は辞書順に整列し、重複を持たない。整列と重複の排除は候補数の上限の判定にだけ効き、
 //! 集合としての正しさは整列に依存しない。
 
-use crate::cert::*;
+use crate::checked::CheckedModel;
 use crate::eval::*;
-use crate::gate::CheckedModel;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::args_ok;
+use crate::state_enc::{copy_vec, vec_eq};
+use crate::state_set::cmp_state;
+#[cfg(verus_keep_ghost)]
+use crate::state_set::in_cert;
 use crate::step::*;
 use std::sync::Arc;
 use vstd::prelude::*;
@@ -887,7 +892,7 @@ pub enum Begun {
 }
 
 /// `observe` の結果。
-pub enum Update {
+pub enum ObserveOutcome {
     /// 候補が残った。
     Continue,
     /// 入力はどの候補でも有効で、応答と矛盾しない状態がない。
@@ -1261,7 +1266,7 @@ impl Session {
     /// 実装の応答（入力 `(action, input)` に対する戻り値 `output` と観測 `seen`）で候補集合を更新する。
     /// 候補を更新するのは `Continue` のときだけで、それ以外では何も変えない。
     #[verifier::loop_isolation(false)]
-    pub fn observe(&mut self, action: usize, input: &Vec<i64>, output: SeenOutput, seen: &Vec<Seen>) -> (r: Update)
+    pub fn observe(&mut self, action: usize, input: &Vec<i64>, output: SeenOutput, seen: &Vec<Seen>) -> (r: ObserveOutcome)
         ensures
             final(self).spec_model() == old(self).spec_model(),
             final(self).spec_cond() == old(self).spec_cond(),
@@ -1289,11 +1294,11 @@ impl Session {
                 action as int,
                 input@,
             ),
-            r matches Update::ModelViolation(inv, k, st) ==> {
+            r matches ObserveOutcome::ModelViolation(inv, k, st) ==> {
                 &&& old(self).possible_after(action, input@, output, seen@, st@)
                 &&& exists|s: Seq<i64>| #[trigger] old(self).possible(s) && violation_at(old(self).spec_model(), old(self).spec_cond(), s, action as int, inv, k as int, st@)
             },
-            r matches Update::ModelError(e) ==> old(self).possible(e.state@) && model_error_at(
+            r matches ObserveOutcome::ModelError(e) ==> old(self).possible(e.state@) && model_error_at(
                 old(self).spec_model(),
                 old(self).spec_cond(),
                 e,
@@ -1332,18 +1337,18 @@ impl Session {
             let ts = match transitions_of(m, &self.cond, s, action) {
                 Ok(ts) => ts,
                 Err(e) => {
-                    return Update::ModelError(e);
+                    return ObserveOutcome::ModelError(e);
                 },
             };
             let ghost next0 = next@;
             let ghost viol0 = violation;
             match absorb(m, &self.cond, &self.observed, &self.injected, s, action, &ts, input, output, seen, self.max, &mut next, &mut violation) {
                 Absorbed::TooMany => {
-                    return Update::TooMany;
+                    return ObserveOutcome::TooMany;
                 },
                 Absorbed::Disabled => {
                     assert(s0.possible(s@));
-                    return Update::InvalidInput;
+                    return ObserveOutcome::InvalidInput;
                 },
                 Absorbed::Enabled => {},
             }
@@ -1379,7 +1384,7 @@ impl Session {
                     assert(!in_cert(next@, t));
                 }
             }
-            return Update::Failure;
+            return ObserveOutcome::Failure;
         }
         if let Some((invariant, index, state)) = violation {
             proof {
@@ -1387,10 +1392,10 @@ impl Session {
                 assert(in_cert(self.cands.states@, self.cands.states@[p]@));
                 assert(s0.possible(self.cands.states@[p]@));
             }
-            return Update::ModelViolation(invariant, index, state);
+            return ObserveOutcome::ModelViolation(invariant, index, state);
         }
         self.cands = Candidates { states: next, hist: Ghost(h1) };
-        Update::Continue
+        ObserveOutcome::Continue
     }
 }
 

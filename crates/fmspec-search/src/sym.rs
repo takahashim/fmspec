@@ -8,9 +8,10 @@ use crate::bfs::{BfsOptions, Stats};
 use crate::check::{inconsistent, status_of, Outcome};
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
-use fmspec_core::gate::{decide_symmetric, CheckedModel};
+use fmspec_core::gate::decide_symmetric;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
 use fmspec_core::sym::{canonicalize, SwapMaps};
@@ -284,7 +285,7 @@ pub fn check_sym(
     swaps: &Vec<Vec<usize>>,
     opts: &BfsOptions,
 ) -> Result<Outcome, usize> {
-    let sw = fmspec_core::sym::symmetry(model.raw(), cond, swaps)?;
+    let sw = fmspec_core::sym::symmetry_of(model, cond, swaps)?;
     let started = Instant::now();
     let (found, stats) = bfs_sym(model, cond, &sw, opts);
     let search_time = started.elapsed();

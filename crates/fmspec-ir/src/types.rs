@@ -22,7 +22,7 @@
 
 use crate::model::EnumNames;
 use fmspec_core::model::Type;
-use fmspec_core::ranking::{rank_digits_exec, rank_interval_code, rank_option_code};
+use fmspec_core::rank_code::{rank_digits_exec, rank_interval_code, rank_option_code};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
 pub const MAX_KEYS: u64 = 4096;

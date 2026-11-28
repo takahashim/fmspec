@@ -8,8 +8,9 @@
 
 use crate::claim::selected;
 use crate::stop::stopped;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::evidence::{Evidence, Limit};
-use fmspec_core::gate::{decide, CertCheck, CheckedModel, Verdict};
+use fmspec_core::gate::{decide, CertCheck, Verdict};
 use fmspec_core::model::{Expr, RawModel, Type};
 use fmspec_core::semantics::Conditions;
 use std::time::Instant;

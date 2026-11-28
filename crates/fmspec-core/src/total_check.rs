@@ -3,22 +3,23 @@
 //! 式の型の整形式性（[`wf_xtype_exec`]）、型の大きさの条件（[`lim_s_exec`]、[`lim_x_exec`]）、
 //! 式とその部分式の条件（[`check_lim`]）を、仕様と一致する実行関数として持つ。
 
-use crate::encoding::{distinct_names, keys_exec, stype_eq, to_xtype, wf_stype_exec, SType, XType};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_stys, lemma_xtys, sty, stys, wf_xtype, wf_xtypes, width, STy};
+use crate::encoding::{lemma_stys, lemma_xtys, sty, stys, width, width_sum, xty, xtys, STy, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{width_sum, xty, xtys, xwidth, xwidth_sum, XTy};
-use crate::expr_build::keys_or_zero_exec;
+use crate::encoding::{xwidth, xwidth_sum};
+use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::infer::{agrees, scope_view};
 use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
 use crate::source::{Item, Over, TExpr};
+use crate::stype_exec::wf_xtype_exec;
+use crate::stype_exec::{keys_exec, keys_or_zero_exec, stype_eq, to_xtype, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
-use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_seq_at, lim_ok, lim_ok_items};
+use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_items_intro, lemma_lim_ok_seq_at};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok_seq, quant_bound};
+use crate::total::{lemma_lim_ok_seq_intro, lim_ok, lim_ok_items, lim_ok_seq, quant_bound};
 use vstd::prelude::*;
 
 verus! {
@@ -179,65 +180,6 @@ fn cap_s_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: u128)
     acc
 }
 
-pub proof fn lemma_lim_ss_intro(ts: Seq<STy>, enums: Seq<i64>)
-    requires
-        forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums),
-    ensures
-        lim_ss(ts, enums),
-    decreases ts.len(),
-{
-    if ts.len() > 0 {
-        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_s(#[trigger] ts.drop_last()[i], enums) by {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-        lemma_lim_ss_intro(ts.drop_last(), enums);
-    }
-}
-
-pub proof fn lemma_lim_xs_intro(ts: Seq<XTy>, enums: Seq<i64>)
-    requires
-        forall|i: int| 0 <= i < ts.len() ==> lim_x(#[trigger] ts[i], enums),
-    ensures
-        lim_xs(ts, enums),
-    decreases ts.len(),
-{
-    if ts.len() > 0 {
-        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_x(#[trigger] ts.drop_last()[i], enums) by {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-        lemma_lim_xs_intro(ts.drop_last(), enums);
-    }
-}
-
-pub proof fn lemma_wf_xtypes_at(ts: Seq<XTy>, enums: Seq<i64>, i: int)
-    requires
-        wf_xtypes(ts, enums),
-        0 <= i < ts.len(),
-    ensures
-        wf_xtype(ts[i], enums),
-    decreases ts.len(),
-{
-    if i < ts.len() - 1 {
-        assert(ts.drop_last()[i] == ts[i]);
-        lemma_wf_xtypes_at(ts.drop_last(), enums, i);
-    }
-}
-
-pub proof fn lemma_wf_xtypes_intro(ts: Seq<XTy>, enums: Seq<i64>)
-    requires
-        forall|i: int| 0 <= i < ts.len() ==> wf_xtype(#[trigger] ts[i], enums),
-    ensures
-        wf_xtypes(ts, enums),
-    decreases ts.len(),
-{
-    if ts.len() > 0 {
-        assert forall|i: int| 0 <= i < ts.len() - 1 implies wf_xtype(#[trigger] ts.drop_last()[i], enums) by {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-        lemma_wf_xtypes_intro(ts.drop_last(), enums);
-    }
-}
-
 /// 格納の型が大きさの条件を満たすか。
 pub fn lim_s_exec(t: &SType, enums: &Vec<i64>) -> (r: bool)
     ensures
@@ -326,12 +268,12 @@ pub fn cap_x(t: &XType, enums: &Vec<i64>) -> (r: u128)
                 1 + w
             }
         },
-        XType::Set(e) => cap_s(&SType::Set(Box::new(crate::encoding::copy_stype(e))), enums),
+        XType::Set(e) => cap_s(&SType::Set(Box::new(crate::stype_exec::copy_stype(e))), enums),
         XType::Map(k, v) => cap_s(
-            &SType::Map(Box::new(crate::encoding::copy_stype(k)), Box::new(crate::encoding::copy_stype(v))),
+            &SType::Map(Box::new(crate::stype_exec::copy_stype(k)), Box::new(crate::stype_exec::copy_stype(v))),
             enums,
         ),
-        XType::List(e, max) => cap_s(&SType::List(Box::new(crate::encoding::copy_stype(e)), *max), enums),
+        XType::List(e, max) => cap_s(&SType::List(Box::new(crate::stype_exec::copy_stype(e)), *max), enums),
     }
 }
 
@@ -443,107 +385,7 @@ fn lim_xs_exec(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: bool)
     true
 }
 
-/// 式の型が整形式か。
-pub fn wf_xtype_exec(t: &XType, enums: &Vec<i64>) -> (r: bool)
-    ensures
-        r == wf_xtype(xty(*t), enums@),
-    decreases t, 1nat,
-{
-    match t {
-        XType::Bool | XType::Int => true,
-        XType::Enum(id) => *id < enums.len() && enums[*id] >= 1,
-        XType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-                lemma_xtys(ts@);
-            }
-            ts.len() >= 1 && wf_xtypes_exec(t, ts, enums)
-        },
-        XType::Record(names, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-                lemma_xtys(ts@);
-            }
-            ts.len() >= 1 && names.len() == ts.len() && distinct_names(names) && wf_xtypes_exec(t, ts, enums)
-        },
-        XType::Option(x) => wf_xtype_exec(x, enums),
-        XType::Set(e) => wf_stype_exec(e, enums) && keys_exec(e, enums).is_some(),
-        XType::Map(k, v) => wf_stype_exec(k, enums) && keys_exec(k, enums).is_some() && wf_stype_exec(v, enums),
-        XType::List(e, _) => wf_stype_exec(e, enums),
-    }
-}
-
-fn wf_xtypes_exec(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: bool)
-    requires
-        decreases_to!(*_parent => *ts),
-    ensures
-        r == wf_xtypes(xtys(ts@), enums@),
-    decreases _parent, 0nat,
-{
-    proof {
-        lemma_xtys(ts@);
-    }
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            xtys(ts@).len() == ts@.len(),
-            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] xtys(ts@)[j] == xty(ts@[j]),
-            forall|j: int| 0 <= j < i ==> wf_xtype(#[trigger] xtys(ts@)[j], enums@),
-        decreases ts.len() - i,
-    {
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-        }
-        if !wf_xtype_exec(&ts[i], enums) {
-            proof {
-                if wf_xtypes(xtys(ts@), enums@) {
-                    lemma_wf_xtypes_at(xtys(ts@), enums@, i as int);
-                }
-            }
-            return false;
-        }
-        i += 1;
-    }
-    proof {
-        lemma_wf_xtypes_intro(xtys(ts@), enums@);
-    }
-    true
-}
-
 // ---- 式の条件 ----
-
-pub proof fn lemma_lim_ok_seq_intro(es: Seq<TExpr>, c: crate::infer::SCtx, lt: Seq<XTy>)
-    requires
-        forall|i: int| 0 <= i < es.len() ==> lim_ok(#[trigger] es[i], c, lt),
-    ensures
-        lim_ok_seq(es, c, lt),
-    decreases es.len(),
-{
-    if es.len() > 0 {
-        assert forall|i: int| 0 <= i < es.len() - 1 implies lim_ok(#[trigger] es.drop_last()[i], c, lt) by {
-            assert(es.drop_last()[i] == es[i]);
-        }
-        lemma_lim_ok_seq_intro(es.drop_last(), c, lt);
-    }
-}
-
-pub proof fn lemma_lim_ok_items_intro(items: Seq<Item>, c: crate::infer::SCtx, lt: Seq<XTy>)
-    requires
-        forall|i: int| 0 <= i < items.len() ==> lim_ok((#[trigger] items[i]).key, c, lt) && lim_ok(items[i].value, c, lt),
-    ensures
-        lim_ok_items(items, c, lt),
-    decreases items.len(),
-{
-    if items.len() > 0 {
-        assert forall|i: int| 0 <= i < items.len() - 1 implies lim_ok((#[trigger] items.drop_last()[i]).key, c, lt)
-            && lim_ok(items.drop_last()[i].value, c, lt) by {
-            assert(items.drop_last()[i] == items[i]);
-        }
-        lemma_lim_ok_items_intro(items.drop_last(), c, lt);
-    }
-}
 
 /// 量化でたどる値の型（[`quant_bound`] と一致する）。
 fn quant_bound_exec(over: &Over, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)

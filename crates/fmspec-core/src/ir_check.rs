@@ -3,11 +3,11 @@
 //! [`check_ir`] が真を返すなら、[`crate::ir::ir_rel`] が成り立つ。
 //! [`lower_checked`] は、対応を確かめてからモデルを下ろす。
 
+use crate::action_lower::LowerError;
 use crate::encoding::SType;
 use crate::ir::*;
 use crate::model::{BinOp, Expr, RawModel, Value};
 use crate::model_lower::{lower_model_map, SMap};
-use crate::smodel::LowerError;
 use crate::smodel::{SAction, SModel};
 use crate::source::{Over, SetOp, TExpr};
 use vstd::prelude::*;
@@ -1518,7 +1518,7 @@ fn widths(ts: &Vec<SType>, n: usize, enums: &Vec<i64>) -> (r: Option<usize>)
             w as int == crate::encoding::width_sum(crate::encoding::stys(ts@.take(i as int)), enums@),
         decreases n - i,
     {
-        let x = match crate::expr_build::stype_width(&ts[i], enums) {
+        let x = match crate::stype_exec::stype_width(&ts[i], enums) {
             Some(x) => x,
             None => return None,
         };
@@ -1885,7 +1885,7 @@ pub fn lower_checked(j: &Json, ns: &IrNames, sm: &SModel, maps: &Vec<SMap>) -> (
         r is Some ==> ir_rel(*j, *ns, *sm),
         r matches Some(Ok((m, _))) ==> crate::model_lower::lowers_model(*sm, m),
         r matches Some(Ok((m, _))) ==> crate::model_wf::sm_wf(*sm) ==> crate::typing::wf(m),
-        r matches Some(Err(e)) ==> crate::smodel::user_err(e) || (crate::smodel::type_err(e)
+        r matches Some(Err(e)) ==> crate::action_lower::user_err(e) || (crate::action_lower::type_err(e)
             && !crate::model_total::model_typed(*sm)) || (e is Mapping && maps@.len() > 0),
 {
     if !check_ir(j, ns, sm) {

@@ -10,12 +10,18 @@
 //! 後続に入れ替えを並べて施した状態（`canonicalize`）が証明書に含まれることを確かめる。
 //! 正規化が一意であることは証明しない。正規化が探索器とずれても、拒否になるだけで、誤った `Verified` にはならない。
 
-use crate::cert::*;
+use crate::checked::CheckedModel;
 use crate::eval::*;
-use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
-use crate::step::*;
+use crate::state_enc::copy_vec;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::{args_ok, encode_spec};
+use crate::state_set::cmp_state;
+#[cfg(verus_keep_ghost)]
+use crate::state_set::in_cert;
+#[cfg(verus_keep_ghost)]
+use crate::step::{act_env, all_disabled, apply_updates, step_spec, Step};
 use vstd::prelude::*;
 
 verus! {
@@ -1251,213 +1257,9 @@ pub fn canonicalize(sw: &Vec<SwapMaps>, s: &Vec<i64>) -> (r: (Vec<i64>, Vec<usiz
     (cur, word)
 }
 
-// ---- 代表元の証明書の検査 ----
-
-/// 状態 `t` を正規化して、証明書に含まれるかを確かめる。
-fn find_rep(sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>, t: &Vec<i64>) -> (r: bool)
-    ensures
-        r ==> reps(sw@, cert@, t@),
-{
-    let (ct, _w) = canonicalize(sw, t);
-    if find(cert, &ct) {
-        assert(word_ok(sw@, _w@) && in_cert(cert@, apply_word(sw@, _w@, t@)));
-        true
-    } else {
-        false
-    }
-}
-
-#[verifier::loop_isolation(false)]
-fn check_sym_action(
-    m: &RawModel,
-    c: &Conditions,
-    sw: &Vec<SwapMaps>,
-    cert: &Vec<Vec<i64>>,
-    k: usize,
-    a: usize,
-    s: &Vec<i64>,
-) -> (r: Result<bool, Reject>)
-    requires
-        a < m.actions@.len(),
-    ensures
-        r matches Ok(enabled) ==> (forall|args: Seq<i64>| #[trigger] args_ok(*m, a as int, args) ==> match step_spec(
-            *m,
-            a as int,
-            args,
-            s@,
-        ) {
-            Step::Disabled => true,
-            Step::Fail(_, _) => false,
-            Step::To(t, o) => cons_hold(*m, *c, a as int, s@, args, t, o) && reps(sw@, cert@, t),
-        }) && (enabled <==> !all_disabled(*m, a as int, s@)),
-{
-    let ghost ai = a as int;
-    match enumerate(m, a, s) {
-        Enumerated::Fail(_, _, _) => Err(Reject::StepFailed(k, a)),
-        Enumerated::Ok(ts) => {
-            let mut i: usize = 0;
-            while i < ts.len()
-                invariant
-                    i <= ts@.len(),
-                    forall|j: int|
-                        0 <= j < i ==> cons_hold(*m, *c, ai, s@, (#[trigger] ts@[j]).args@, ts@[j].state@, ts@[j].output)
-                            && reps(sw@, cert@, ts@[j].state@),
-                decreases ts@.len() - i,
-            {
-                let t = &ts[i];
-                if !find_rep(sw, cert, &t.state) {
-                    return Err(Reject::MissingSuccessor(k, a));
-                }
-                match check_contracts(m, c, a, s, &t.args, &t.state, &t.output) {
-                    Some((con, _)) => {
-                        return Err(Reject::ContractNotHeld(k, con));
-                    },
-                    None => {},
-                }
-                i = i + 1;
-            }
-            proof {
-                lemma_enum_enabled(*m, ai, s@, ts@);
-                assert forall|args: Seq<i64>| #[trigger] args_ok(*m, ai, args) implies match step_spec(*m, ai, args, s@) {
-                    Step::Disabled => true,
-                    Step::Fail(_, _) => false,
-                    Step::To(t, o) => cons_hold(*m, *c, ai, s@, args, t, o) && reps(sw@, cert@, t),
-                } by {
-                    assert(covered(*m, ai, s@, ts@, args));
-                    if step_spec(*m, ai, args, s@) is To {
-                        let j = choose|j: int| 0 <= j < ts@.len() && (#[trigger] ts@[j]).args@ == args;
-                        assert(tr_sound(*m, ai, s@, ts@[j]));
-                    }
-                }
-            }
-            Ok(ts.len() > 0)
-        },
-    }
-}
-
-#[verifier::loop_isolation(false)]
-fn check_sym_state(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>, k: usize) -> (r: Option<Reject>)
-    requires
-        k < cert@.len(),
-    ensures
-        r is None ==> sym_state_closed(*m, *c, sw@, cert@, cert@[k as int]@),
-{
-    let s = &cert[k];
-    if !vals_ok_exec(&m.enums, &m.state_types, s) {
-        return Some(Reject::IllTypedState(k));
-    }
-    match check_invariants(m, c, s) {
-        Some((i, _)) => {
-            return Some(Reject::InvariantNotHeld(k, i));
-        },
-        None => {},
-    }
-    let mut enabled = false;
-    let mut a: usize = 0;
-    while a < m.actions.len()
-        invariant
-            a <= m.actions@.len(),
-            forall|b: int, args: Seq<i64>|
-                0 <= b < a && #[trigger] act_on(*m, *c, b) && #[trigger] args_ok(*m, b, args) ==> match step_spec(
-                    *m,
-                    b,
-                    args,
-                    s@,
-                ) {
-                    Step::Disabled => true,
-                    Step::Fail(_, _) => false,
-                    Step::To(t, o) => cons_hold(*m, *c, b, s@, args, t, o) && reps(sw@, cert@, t),
-                },
-            enabled ==> !stuck(*m, *c, s@),
-            !enabled ==> forall|b: int| 0 <= b < a && #[trigger] act_on(*m, *c, b) ==> all_disabled(*m, b, s@),
-        decreases m.actions@.len() - a,
-    {
-        if act_on_exec(m, c, a) {
-            match check_sym_action(m, c, sw, cert, k, a, s) {
-                Err(r) => {
-                    return Some(r);
-                },
-                Ok(en) => {
-                    if en {
-                        enabled = true;
-                        assert(act_on(*m, *c, a as int) && !all_disabled(*m, a as int, s@));
-                    }
-                },
-            }
-        }
-        a = a + 1;
-    }
-    if c.deadlock && !enabled {
-        match eval_terminal(m, s) {
-            Ok(true) => {},
-            _ => {
-                return Some(Reject::Deadlock(k));
-            },
-        }
-    }
-    proof {
-        assert forall|b: int, args: Seq<i64>| #[trigger] act_on(*m, *c, b) && #[trigger] args_ok(*m, b, args) implies match step_spec(
-            *m,
-            b,
-            args,
-            s@,
-        ) {
-            Step::Disabled => true,
-            Step::Fail(_, _) => false,
-            Step::To(t, o) => cons_hold(*m, *c, b, s@, args, t, o) && reps(sw@, cert@, t),
-        } by {
-            assert(0 <= b < m.actions@.len());
-        }
-    }
-    None
-}
-
-/// 代表元の証明書を検査する。入れ替えは、どれも `sym_ok` を満たすものとする。
-pub(crate) fn check_sym_certificate(m: &RawModel, c: &Conditions, sw: &Vec<SwapMaps>, cert: &Vec<Vec<i64>>) -> (r: Option<
-    Reject,
->)
-    requires
-        all_sym(*m, *c, sw@),
-    ensures
-        r is None ==> safe(*m, *c),
-{
-    let mut i: usize = 0;
-    while i < m.inits.len()
-        invariant
-            i <= m.inits@.len(),
-            forall|j: int|
-                0 <= j < i ==> (#[trigger] m.inits@[j])@.len() == m.state_types@.len() && reps(sw@, cert@, m.inits@[j]@),
-        decreases m.inits@.len() - i,
-    {
-        if m.inits[i].len() != m.state_types.len() || !find_rep(sw, cert, &m.inits[i]) {
-            return Some(Reject::MissingInitial(i));
-        }
-        i = i + 1;
-    }
-    let mut k: usize = 0;
-    while k < cert.len()
-        invariant
-            k <= cert@.len(),
-            forall|j: int| 0 <= j < k ==> sym_state_closed(*m, *c, sw@, cert@, (#[trigger] cert@[j])@),
-        decreases cert@.len() - k,
-    {
-        match check_sym_state(m, c, sw, cert, k) {
-            Some(r) => {
-                return Some(r);
-            },
-            None => {},
-        }
-        k = k + 1;
-    }
-    proof {
-        lemma_sym_safe(*m, *c, sw@, cert@);
-    }
-    None
-}
-
 /// 入れ替えの列 `swaps`（各要素はスロットの置換）が、どれもモデルと検査条件の対称性かを確かめる。
 /// 対称性でない最初の入れ替えの添字を `Err` で返す。
-pub fn symmetry(m: &RawModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Result<Vec<SwapMaps>, usize>)
+pub(crate) fn symmetry(m: &RawModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Result<Vec<SwapMaps>, usize>)
     ensures
         r matches Ok(sw) ==> sw@.len() == swaps@.len() && all_sym(*m, *c, sw@),
 {
@@ -1489,6 +1291,15 @@ pub fn symmetry(m: &RawModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Re
         i = i + 1;
     }
     Ok(sw)
+}
+
+
+/// 入れ替えの列が、どれもモデルと検査条件の対称性かを確かめる（`symmetry` と同じ）。未検証コード向け。
+pub fn symmetry_of(model: &CheckedModel, c: &Conditions, swaps: &Vec<Vec<usize>>) -> (r: Result<Vec<SwapMaps>, usize>)
+    ensures
+        r matches Ok(sw) ==> sw@.len() == swaps@.len() && all_sym(model@, *c, sw@),
+{
+    symmetry(model.raw(), c, swaps)
 }
 
 } // verus!

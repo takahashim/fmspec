@@ -7,15 +7,17 @@
 //! 値を表す状態どうしでは、不変条件、遷移、遷移契約、終端条件の評価が一致する（[`lemma_state_safe`]）。
 
 #[cfg(verus_keep_ghost)]
+use crate::action_lower::{act_ok, lemma_step, lemma_step_off, out_ok, out_rel, step_rel};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{enc, enc_seq, member, sty, wf_stypes, width, STy, SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{decode, eval_l, prop_spec, Env};
 #[cfg(verus_keep_ghost)]
 use crate::limits::smalls;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{Constant, Layout, LowerCtx};
+use crate::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{layout_at, layouts_at, slot_tys_seq};
+use crate::lower_types::slot_tys_seq;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Expr, RawModel, Type};
 #[cfg(verus_keep_ghost)]
@@ -27,23 +29,18 @@ use crate::smodel::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv, TExpr};
 #[cfg(verus_keep_ghost)]
-use crate::step::{act_env, all_disabled, args_ok, step_spec, vals_ok, Step};
+use crate::srel::{arg_vals, canon_from, codes, consts_rel, lemma_canon_rel, lemma_code_in};
+#[cfg(verus_keep_ghost)]
+use crate::srel::{lemma_rel_codes, rel};
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::{args_ok, vals_ok};
+#[cfg(verus_keep_ghost)]
+use crate::step::{act_env, all_disabled, step_spec, Step};
 use vstd::prelude::*;
 
 verus! {
 
 // ---- 下ろしの結果の性質 ----
-
-/// 定数のスロットは、定数の値の符号化である。
-pub open spec fn consts_rel(cs: Seq<Constant>, cv: Seq<SVal>, enums: Seq<i64>) -> bool {
-    &&& cs.len() == cv.len()
-    &&& forall|i: int|
-        0 <= i < cs.len() ==> member(#[trigger] cv[i], sty(cs[i].ty), enums) && cs[i].slots@ == enc(
-            cv[i],
-            sty(cs[i].ty),
-            enums,
-        )
-}
 
 /// 文脈の出力の型は、操作の出力の型である。
 pub open spec fn out_ty(t: Option<SType>, so: Option<SOutput>) -> bool {
