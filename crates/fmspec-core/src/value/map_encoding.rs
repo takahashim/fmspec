@@ -1,5 +1,14 @@
 //! キーに番号（rank）を付けたあとの、Mapの符号化。
+//!
+//! 各行の値の符号が値の符号化なら、[`encode_map_rows`] の結果はMapの符号化 `enc_rows` の符号である
+//! （[`lemma_encodes_enc_rows`]）。
 
+#[cfg(verus_keep_ghost)]
+use crate::kernel::model::Value;
+#[cfg(verus_keep_ghost)]
+use crate::value::encoding::{codes, default_val, enc, enc_rows, lemma_codes_concat, lemma_default_len};
+#[cfg(verus_keep_ghost)]
+use crate::value::encoding::{lemma_enc_len, lemma_map_rows_member_index, map_rows_member, STy, SVal};
 use vstd::prelude::*;
 
 verus! {
@@ -135,6 +144,103 @@ pub proof fn encoded_payload_matches_row(
             assert(flat[base + (i + 1)] == row_codes(rows[rank], default)[i + 1]);
         }
         assert(slots =~= payload@);
+    }
+}
+
+/// 行 `rows` の値の符号が、Mapの行 `vals` の値の符号化の符号である。
+pub open spec fn rows_encode(rows: Seq<Option<Vec<i64>>>, vals: Seq<Option<SVal>>, t: STy, enums: Seq<i64>) -> bool {
+    &&& rows.len() == vals.len()
+    &&& forall|r: int| 0 <= r < rows.len() ==> match (#[trigger] rows[r], vals[r]) {
+        (Some(p), Some(v)) => p@ == codes(enc(v, t, enums)),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// 各行の値の符号が値の符号化で、ない行の値が既定値の符号化なら、行の列の符号はMapの符号化の符号である。
+pub proof fn lemma_encodes_enc_rows(
+    rows: Seq<Option<Vec<i64>>>,
+    vals: Seq<Option<SVal>>,
+    t: STy,
+    enums: Seq<i64>,
+    default: Seq<i64>,
+    flat: Seq<i64>,
+)
+    requires
+        map_rows_member(vals, t, enums),
+        rows_encode(rows, vals, t, enums),
+        default == codes(enc(default_val(t, enums), t, enums)),
+        encodes_rows(rows, default, flat, rows.len() as int),
+    ensures
+        flat == codes(enc_rows(vals, t, enums)),
+{
+    lemma_encodes_prefix(rows, vals, t, enums, default, flat, rows.len() as int);
+    assert(vals.take(rows.len() as int) =~= vals);
+    let stride = 1 + default.len() as int;
+    assert(flat.take(rows.len() * stride) =~= flat);
+}
+
+proof fn lemma_encodes_prefix(
+    rows: Seq<Option<Vec<i64>>>,
+    vals: Seq<Option<SVal>>,
+    t: STy,
+    enums: Seq<i64>,
+    default: Seq<i64>,
+    flat: Seq<i64>,
+    n: int,
+)
+    requires
+        0 <= n <= rows.len(),
+        map_rows_member(vals, t, enums),
+        rows_encode(rows, vals, t, enums),
+        default == codes(enc(default_val(t, enums), t, enums)),
+        encodes_rows(rows, default, flat, rows.len() as int),
+    ensures
+        flat.take(n * (1 + default.len() as int)) == codes(enc_rows(vals.take(n), t, enums)),
+    decreases n,
+{
+    let stride = 1 + default.len() as int;
+    if n == 0 {
+        assert(flat.take(0) =~= codes(enc_rows(vals.take(0), t, enums)));
+    } else {
+        let m = n - 1;
+        lemma_encodes_prefix(rows, vals, t, enums, default, flat, m);
+        let vs = vals.take(n);
+        assert(vs.drop_last() =~= vals.take(m));
+        assert(vs.last() == vals[m]);
+        lemma_map_rows_member_index(vals, t, enums, m);
+        lemma_default_len(t, enums);
+        let row = match vals[m] {
+            Some(x) => seq![Value::Bool(true)] + enc(x, t, enums),
+            None => seq![Value::Bool(false)] + enc(default_val(t, enums), t, enums),
+        };
+        lemma_codes_concat(enc_rows(vals.take(m), t, enums), row);
+        // 行 m の符号は row_codes(rows[m], default) である。
+        let rc = row_codes(rows[m], default);
+        match vals[m] {
+            Some(x) => {
+                lemma_enc_len(x, t, enums);
+                lemma_codes_concat(seq![Value::Bool(true)], enc(x, t, enums));
+                assert(codes(seq![Value::Bool(true)]) =~= seq![1i64]);
+                assert(codes(row) =~= rc);
+            },
+            None => {
+                lemma_codes_concat(seq![Value::Bool(false)], enc(default_val(t, enums), t, enums));
+                assert(codes(seq![Value::Bool(false)]) =~= seq![0i64]);
+                assert(codes(row) =~= rc);
+            },
+        }
+        assert(rc.len() == stride);
+        vstd::arithmetic::mul::lemma_mul_is_distributive_add_other_way(stride, m, 1);
+        vstd::arithmetic::mul::lemma_mul_inequality(n, rows.len() as int, stride);
+        vstd::arithmetic::mul::lemma_mul_inequality(0, m, stride);
+        let a = flat.take(m * stride);
+        let b = flat.subrange(m * stride, n * stride);
+        assert forall|col: int| 0 <= col < stride implies #[trigger] b[col] == rc[col] by {
+            assert(flat[m * stride + col] == row_codes(rows[m], default)[col]);
+        }
+        assert(b =~= rc);
+        assert(flat.take(n * stride) =~= a + b);
     }
 }
 

@@ -22,7 +22,8 @@
 
 use crate::model::EnumNames;
 use fmspec_core::kernel::model::Type;
-use fmspec_core::value::rank_code::{rank_digits_exec, rank_interval_code, rank_option_code};
+use fmspec_core::value::encoding::SType as CoreSType;
+use fmspec_core::value::rank_code::{rank_codes, unrank_codes};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
 pub const MAX_KEYS: u64 = 4096;
@@ -158,45 +159,42 @@ impl SType {
         out.extend(tys.iter().map(default_code));
     }
 
-    /// 正規順で `r` 番目の値の符号。`keys` が `Some` の型に限る。
-    pub fn unrank(&self, enums: &[EnumNames], r: u64, out: &mut Vec<i64>) {
-        match self {
-            SType::Bool | SType::Enum(_) => out.push(r as i64),
-            SType::Int(lo, _) => out.push(lo + r as i64),
-            SType::Tuple(ts) => unrank_all(ts.iter(), enums, r, out),
-            SType::Record(fs) => unrank_all(fs.iter().map(|(_, t)| t), enums, r, out),
-            SType::Option(t) => {
-                if r == 0 {
-                    out.push(0);
-                    t.defaults(enums, out);
-                } else {
-                    out.push(1);
-                    t.unrank(enums, r - 1, out);
-                }
-            }
-            SType::Set(_) | SType::Map(_, _) | SType::List(_, _) => {}
-        }
+    /// 正規順で `r` 番目の値の符号。キーの型でないか、`r` が値の数以上なら `None`。
+    /// 中核の [`unrank_codes`] で求める（番号 `r` の値の符号化であることが証明されている）。
+    pub fn unrank(&self, enums: &[EnumNames], r: u64) -> Option<Vec<i64>> {
+        unrank_codes(&self.key_stype(), &label_counts(enums), r)
     }
 
     /// 符号の正規順での番号。値が型に属さなければ `None`。Option が空なら中身の符号は見ない。
+    /// 中核の [`rank_codes`] で求める（値の符号化なら、値の番号であることが証明されている）。
     pub fn rank(&self, enums: &[EnumNames], codes: &[i64]) -> Option<u64> {
+        rank_codes(&self.key_stype(), &label_counts(enums), &codes.to_vec())
+    }
+
+    /// 番号の計算に使う中核の型。Recordのフィールドの名前は番号に関わらないので、位置の番号を付ける。
+    fn key_stype(&self) -> CoreSType {
         match self {
-            SType::Bool => rank_interval_code(*codes.first()?, 0, 1),
-            SType::Int(lo, hi) => rank_interval_code(*codes.first()?, *lo, *hi),
-            SType::Enum(id) => {
-                let max = i64::try_from(enums.get(*id)?.variants.len().checked_sub(1)?).ok()?;
-                rank_interval_code(*codes.first()?, 0, max)
+            SType::Bool => CoreSType::Bool,
+            SType::Int(lo, hi) => CoreSType::Int(*lo, *hi),
+            SType::Enum(id) => CoreSType::Enum(*id),
+            SType::Tuple(ts) => CoreSType::Tuple(ts.iter().map(SType::key_stype).collect()),
+            SType::Record(fs) => {
+                CoreSType::Record((0..fs.len()).collect(), fs.iter().map(|(_, t)| t.key_stype()).collect())
             }
-            SType::Tuple(ts) => rank_all(ts.iter(), enums, codes),
-            SType::Record(fs) => rank_all(fs.iter().map(|(_, t)| t), enums, codes),
-            SType::Option(t) => match *codes.first()? {
-                0 => rank_option_code(0, None),
-                1 => rank_option_code(1, Some(t.rank(enums, &codes[1..])?)),
-                _ => None,
-            },
-            SType::Set(_) | SType::Map(_, _) | SType::List(_, _) => None,
+            SType::Option(t) => CoreSType::Option(Box::new(t.key_stype())),
+            SType::Set(t) => CoreSType::Set(Box::new(t.key_stype())),
+            SType::Map(k, v) => CoreSType::Map(Box::new(k.key_stype()), Box::new(v.key_stype())),
+            SType::List(t, n) => CoreSType::List(Box::new(t.key_stype()), *n),
         }
     }
+}
+
+/// 各列挙型のラベルの数（中核の `enums`）。
+fn label_counts(enums: &[EnumNames]) -> Vec<i64> {
+    enums
+        .iter()
+        .map(|e| i64::try_from(e.variants.len()).unwrap_or(i64::MAX))
+        .collect()
 }
 
 impl XType {
@@ -231,38 +229,6 @@ fn product(it: impl Iterator<Item = Option<u64>>) -> Option<u64> {
         }
     }
     Some(n)
-}
-
-fn unrank_all<'a>(
-    ts: impl DoubleEndedIterator<Item = &'a SType> + Clone,
-    enums: &[EnumNames],
-    r: u64,
-    out: &mut Vec<i64>,
-) {
-    // 辞書順。最後の要素が最も速く変わる。
-    let sizes: Vec<u64> = ts.clone().map(|t| t.keys(enums).unwrap_or(1)).collect();
-    let mut digits = vec![0u64; sizes.len()];
-    let mut rest = r;
-    for (i, n) in sizes.iter().enumerate().rev() {
-        digits[i] = rest % n;
-        rest /= n;
-    }
-    for (t, d) in ts.zip(digits) {
-        t.unrank(enums, d, out);
-    }
-}
-
-fn rank_all<'a>(ts: impl Iterator<Item = &'a SType>, enums: &[EnumNames], codes: &[i64]) -> Option<u64> {
-    let mut digits = Vec::new();
-    let mut at = 0;
-    for t in ts {
-        let w = t.width(enums);
-        let n = t.keys(enums)?;
-        let digit = t.rank(enums, codes.get(at..at + w)?)?;
-        digits.push((digit, n));
-        at += w;
-    }
-    rank_digits_exec(&digits)
 }
 
 /// 中核の型の既定値の符号。

@@ -27,7 +27,7 @@ use crate::model::model_safe::lemma_prop;
 #[cfg(verus_keep_ghost)]
 use crate::model::model_total::{const_ctx, consts_match, lemma_const_ctx, model_typed, styped};
 #[cfg(verus_keep_ghost)]
-use crate::model::srel::{codes, consts_rel, lemma_code_in, lemma_rel_codes, rel};
+use crate::model::srel::{consts_rel, lemma_code_in, lemma_rel_codes, rel};
 #[cfg(verus_keep_ghost)]
 use crate::slot::lower_ctx::{layouts_at, Layout};
 use crate::slot::lower_ctx::{Fail, LowerCtx};
@@ -38,6 +38,8 @@ use crate::slot::slot_types::slot_types;
 use crate::slot::slot_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::slot::total::{cx_wf, ok_s, sctx};
+#[cfg(verus_keep_ghost)]
+use crate::value::encoding::{codes, lemma_codes_concat};
 #[cfg(verus_keep_ghost)]
 use crate::value::encoding::{enc, enc_seq, lemma_stys, lemma_width_pos, member, members, sty, stys, STy};
 #[cfg(verus_keep_ghost)]
@@ -520,13 +522,6 @@ pub(crate) fn product_step(ps: &Vec<Vec<i64>>, cs: &Vec<Vec<i64>>) -> (r: Vec<Ve
         p += 1;
     }
     r
-}
-
-pub proof fn lemma_codes_concat(a: Seq<Value>, b: Seq<Value>)
-    ensures
-        codes(a + b) == codes(a) + codes(b),
-{
-    assert(codes(a + b) =~= codes(a) + codes(b));
 }
 
 /// 候補の組の直積を1つの状態変数だけ延ばす。

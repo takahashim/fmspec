@@ -1221,4 +1221,17 @@ pub proof fn lemma_items_index(items: Seq<SVal>, t: STy, enums: Seq<i64>, k: int
     }
 }
 
+/// 値の列の符号（状態と引数の符号化列での表現）。
+pub open spec fn codes(xs: Seq<Value>) -> Seq<i64> {
+    Seq::new(xs.len(), |q: int| crate::kernel::eval::code_of(xs[q]))
+}
+
+/// 列をつなげた符号は、符号をつなげた列である。
+pub proof fn lemma_codes_concat(a: Seq<Value>, b: Seq<Value>)
+    ensures
+        codes(a + b) == codes(a) + codes(b),
+{
+    assert(codes(a + b) =~= codes(a) + codes(b));
+}
+
 } // verus!

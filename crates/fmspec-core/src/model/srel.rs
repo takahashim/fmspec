@@ -21,6 +21,8 @@ use crate::slot::slot_types::{in_slot, in_slots, lemma_slot_tys_len, lemma_slot_
 #[cfg(verus_keep_ghost)]
 use crate::slot::slot_types::{lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
+use crate::value::encoding::codes;
+#[cfg(verus_keep_ghost)]
 use crate::value::encoding::{enc, enc_seq, lemma_enc_len, member, members, sty, wf_stypes, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::value::encoding::{width, width_sum};
@@ -33,11 +35,6 @@ verus! {
 /// 符号の列 `xs` は型 `tys` に従い、値の列 `vs` を表す。
 pub open spec fn rel(ls: Seq<Layout>, vs: Seq<SVal>, tys: Seq<Type>, xs: Seq<i64>, enums: Seq<i64>) -> bool {
     layouts_ok(ls, vs, tys, xs, enums) && vals_ok(enums, tys, xs)
-}
-
-/// 値の列の符号。
-pub open spec fn codes(xs: Seq<Value>) -> Seq<i64> {
-    Seq::new(xs.len(), |q: int| code_of(xs[q]))
 }
 
 /// スロットの型の値の符号は型に属し、符号を値に戻すと元の値になる。

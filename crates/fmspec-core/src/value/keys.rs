@@ -184,6 +184,27 @@ pub proof fn lemma_rank_seq_in_product(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i
     }
 }
 
+/// 値の数の積が `MAX_KEYS` に収まれば、先頭部分の積も収まる。
+pub proof fn lemma_keys_product_prefix(ts: Seq<STy>, i: int, enums: Seq<i64>)
+    requires
+        keys_product(ts, enums) is Some,
+        0 <= i <= ts.len(),
+    ensures
+        keys_product(ts.take(i), enums) is Some,
+        i < ts.len() ==> keys(ts[i], enums) is Some,
+    decreases ts.len(),
+{
+    if i == ts.len() {
+        assert(ts.take(i) =~= ts);
+    } else {
+        lemma_keys_product_prefix(ts.drop_last(), i, enums);
+        assert(ts.drop_last().take(i) =~= ts.take(i));
+        if i < ts.len() - 1 {
+            assert(ts.drop_last()[i] == ts[i]);
+        }
+    }
+}
+
 /// 正規順の列の位置 `i` の値は型に属し、その番号は `i` である。
 pub proof fn lemma_domain_rank(t: STy, enums: Seq<i64>, i: int)
     requires

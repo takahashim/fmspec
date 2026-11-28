@@ -44,7 +44,7 @@ use crate::value::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::value::fits::{fits_all_s, fits_s, lemma_fits_all};
 #[cfg(verus_keep_ghost)]
-use crate::value::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
+use crate::value::keys::{lemma_keys_product_prefix, lemma_rank_in_domain, radix, rank, rank_seq};
 #[cfg(verus_keep_ghost)]
 use crate::value::limits::{lemma_fits_width, lemma_lim_xs_at, lim, lim_x, lim_xs, small, smalls};
 use crate::value::stype_exec::keys_exec;
@@ -1017,27 +1017,6 @@ pub open spec fn rank_neg_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64
         } else {
             -1i64
         }))
-}
-
-/// 値の数の積が `MAX_KEYS` に収まれば、先頭部分の積も収まる。
-pub proof fn lemma_keys_product_prefix(ts: Seq<STy>, i: int, enums: Seq<i64>)
-    requires
-        keys_product(ts, enums) is Some,
-        0 <= i <= ts.len(),
-    ensures
-        keys_product(ts.take(i), enums) is Some,
-        i < ts.len() ==> keys(ts[i], enums) is Some,
-    decreases ts.len(),
-{
-    if i == ts.len() {
-        assert(ts.take(i) =~= ts);
-    } else {
-        lemma_keys_product_prefix(ts.drop_last(), i, enums);
-        assert(ts.drop_last().take(i) =~= ts.take(i));
-        if i < ts.len() - 1 {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-    }
 }
 
 /// 要素の番号の式を混合基数の桁として左から順にたたむと、組の番号になる。
