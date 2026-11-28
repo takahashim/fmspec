@@ -27,17 +27,6 @@ pub open spec fn row_at(row: Seq<Expr>, slots: Seq<Expr>, p: int, w: nat) -> boo
     1 + p * w + w <= slots.len() && row == slots.subrange(1 + p * w, 1 + p * w + w)
 }
 
-/// 行をつなげた列。
-pub open spec fn flat(rows: Seq<Seq<Expr>>) -> Seq<Expr>
-    decreases rows.len(),
-{
-    if rows.len() == 0 {
-        Seq::empty()
-    } else {
-        flat(rows.drop_last()) + rows.last()
-    }
-}
-
 /// `o` は、行 `r` の各スロットを、`k` が `p` なら `alt` のスロットに置き換える式の列である。
 pub open spec fn ite_row(o: Seq<Expr>, r: Seq<Expr>, k: Expr, alt: Seq<Expr>, p: int) -> bool {
     &&& o.len() == alt.len()

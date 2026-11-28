@@ -13,15 +13,15 @@ use crate::limits::{small, smalls};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
+use crate::lower_spec::{action_at, contract_at, init_ok, init_src};
+#[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_slot_tys_seq_len, slot_tys, slot_tys_seq, ty_repeat};
 #[cfg(verus_keep_ghost)]
-use crate::model::{Action, Contract, RawModel, Type, Update};
-#[cfg(verus_keep_ghost)]
-use crate::model_safe::{ctx_is, init_ok, init_src, prop_low};
+use crate::model::{RawModel, Type, Update};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, model_typed};
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{s_arg_tys, SModel};
+use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::state_ok;
 #[cfg(verus_keep_ghost)]
@@ -439,7 +439,7 @@ pub proof fn lemma_model_wf(m: RawModel)
 /// 状態変数だけを参照できる文脈の型検査の文脈は、不変条件の文脈である。
 pub proof fn lemma_inv_env(sm: SModel, cv: Seq<SVal>, stg: Seq<Layout>, sx: LowerCtx, m: RawModel)
     requires
-        crate::model_safe::ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
+        crate::lower_spec::ctx_is(sx, sm.enums@, cv, stg, Seq::empty(), false, None),
         layouts_at(stg, stys(sm.states@), sm.enums@),
         m.enums@ == sm.enums@,
         m.state_types@ == slot_tys_seq(stys(sm.states@), sm.enums@),
@@ -496,26 +496,6 @@ pub proof fn lemma_con_env(
     lemma_layout_tys_eq(kx.args@, crate::smodel::s_arg_tys(sm, a), sm.enums@);
     assert(crate::action_lower::out_ok(sm.actions@[a].output, cx, m.actions@[a].output));
     lemma_same_env(crate::lower_types::lenv(kx), crate::typing::con_tyenv(m, a));
-}
-
-/// 操作 `a` を文脈 `cx` で下ろした結果 `act` の性質。
-pub open spec fn action_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, cx: LowerCtx, a: int, act: Action) -> bool {
-    let ts = s_arg_tys(sm, a);
-    &&& ctx_is(cx, sm.enums@, cv, st, cx.args@, false, None)
-    &&& layouts_at(cx.args@, ts, sm.enums@)
-    &&& wf_stypes(ts, sm.enums@)
-    &&& smalls(ts)
-    &&& act_ok(sm.actions@[a], cx, act)
-}
-
-/// 遷移契約 `k` を文脈 `kx` で下ろした結果 `con` の性質。
-pub open spec fn contract_at(sm: SModel, cv: Seq<SVal>, st: Seq<Layout>, kx: LowerCtx, k: int, con: Contract) -> bool {
-    let a = sm.contracts@[k].action as int;
-    &&& con.action == sm.contracts@[k].action
-    &&& a < sm.actions@.len()
-    &&& ctx_is(kx, sm.enums@, cv, st, kx.args@, true, sm.actions@[a].output)
-    &&& layouts_at(kx.args@, s_arg_tys(sm, a), sm.enums@)
-    &&& prop_low(sm.contracts@[k].expr, kx, con.expr)
 }
 
 } // verus!

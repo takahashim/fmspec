@@ -49,7 +49,7 @@ use crate::model::{BinOp, Expr, Type};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, mparts_ok, mrow_at, parts_ok, row_at, row_slots};
+use crate::rows::{mparts_ok, mrow_at, parts_ok, row_at, row_slots};
 use crate::stype_exec::{keys_or_zero_exec, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
@@ -554,7 +554,7 @@ pub proof fn lemma_flat_split(s: Seq<Expr>, rows: Seq<Seq<Expr>>, w: nat)
         s.len() == rows.len() * w,
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] rows[p] == s.subrange(p * w, p * w + w),
     ensures
-        flat(rows) == s,
+        concat(rows) == s,
     decreases rows.len(),
 {
     if rows.len() == 0 {

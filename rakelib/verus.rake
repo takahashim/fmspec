@@ -301,7 +301,7 @@ VERUS_MUTANTS = [
   ["action_lower.rs", "SType::Int(lo, hi) => Type::Int(*lo, *hi),", "SType::Int(lo, hi) => Type::Int(*lo, *lo),", "出力の整数の範囲を変える"],
   ["action_lower.rs", "let domains = slot_types_list(&sa.args, &cx.enums);", "let domains: Vec<Type> = Vec::new();", "操作のドメインを空にする"],
   ["model_lower.rs", "            Ok(false) => {},\n            Ok(true) => {", "            Ok(true) => {},\n            Ok(false) => {", "初期条件が偽の状態を残す"],
-  ["model_lower.rs", "let x = concat(&ps[p], &cs[q]);", "let x = concat(&cs[q], &ps[p]);", "候補の符号を逆の順につなぐ"],
+  ["model_lower.rs", "let x = concat_codes(&ps[p], &cs[q]);", "let x = concat_codes(&cs[q], &ps[p]);", "候補の符号を逆の順につなぐ"],
   ["model_lower.rs", "if k < out.len() && vec_eq(&out[k], &x) {", "if k < out.len() {", "等しくない候補を捨てる"],
   ["model_lower.rs", "    if out.len() == 0 {\n        return Err(Fault::Lower);", "    if out.len() == usize::MAX {\n        return Err(Fault::Lower);", "スロットのない値を評価済みとする"],
   ["model_lower.rs", "cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: vals });", "cx.consts.push(Constant { ty: copy_stype(&c.ty), slots: Vec::new() });", "定数のスロットを空にする"],

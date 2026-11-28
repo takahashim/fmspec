@@ -14,9 +14,9 @@ use crate::checked::CheckedModel;
 use crate::eval::*;
 use crate::model::*;
 use crate::semantics::*;
-use crate::state_enc::copy_vec;
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::{args_ok, encode_spec};
+use crate::state_enc::{copy_usizes, copy_vec};
 use crate::state_set::cmp_state;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;
@@ -1154,26 +1154,6 @@ pub fn swap_maps(m: &RawModel, c: &Conditions, p: &Vec<usize>) -> (r: Option<Swa
         ) && act_on(*m, *c, a) == act_on(*m, *c, w.act@[a] as int) by {}
     }
     Some(w)
-}
-
-fn copy_usizes(v: &Vec<usize>) -> (r: Vec<usize>)
-    ensures
-        r@ == v@,
-{
-    let mut r: Vec<usize> = Vec::new();
-    let mut i: usize = 0;
-    while i < v.len()
-        invariant
-            i <= v@.len(),
-            r@ == v@.subrange(0, i as int),
-        decreases v@.len() - i,
-    {
-        r.push(v[i]);
-        i = i + 1;
-        assert(r@ =~= v@.subrange(0, i as int));
-    }
-    assert(r@ =~= v@);
-    r
 }
 
 /// スロットを `p` で入れ替える。長さが合わなければ `None`。

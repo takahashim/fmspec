@@ -8,7 +8,7 @@ use crate::encoding::{default_val, enc, enc_repeat, lemma_default_len, lemma_xwi
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{to_xty, wf_stype, width, xty, xwidth, XTy};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, lits, pure_below, Join};
+use crate::expr_build::{all_pure, bool_lit, concat, lits, pure_below, Join};
 use crate::expr_build::{and, bin, ci, defaults, extend};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
@@ -48,7 +48,7 @@ use crate::preserve_list::{lemma_list_contains, lemma_listlit_base, lemma_listli
 #[cfg(verus_keep_ghost)]
 use crate::preserve_list::{lemma_listlit_step, lemma_pop, lemma_push, lemma_shift, listlit_ok};
 #[cfg(verus_keep_ghost)]
-use crate::rows::{col, flat, parts_ok, row_at};
+use crate::rows::{col, parts_ok, row_at};
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
 use crate::slots::select;
@@ -946,7 +946,7 @@ pub(crate) fn low_push(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
                     assert(all_pure(r@, blk.depth_s())) by {
                         assert forall|j: int| 0 <= j < r@.len() implies pure_below(#[trigger] r@[j], blk.depth_s()) by {
                             if j > 0 {
-                                assert(r@[j] == flat(rows_view(out@))[j - 1]);
+                                assert(r@[j] == concat(rows_view(out@))[j - 1]);
                             }
                         }
                     }
@@ -1077,7 +1077,7 @@ pub(crate) fn low_pop_shift(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: 
                     assert(all_pure(r@, blk.depth_s())) by {
                         assert forall|j: int| 0 <= j < r@.len() implies pure_below(#[trigger] r@[j], blk.depth_s()) by {
                             if j > 0 {
-                                assert(r@[j] == flat(rows_view(out@))[j - 1]);
+                                assert(r@[j] == concat(rows_view(out@))[j - 1]);
                             }
                         }
                     }
@@ -1162,7 +1162,7 @@ pub(crate) fn low_pop_shift(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: 
                             assert(all_pure(r@, blk.depth_s())) by {
                                 assert forall|j: int| 0 <= j < r@.len() implies pure_below(#[trigger] r@[j], blk.depth_s()) by {
                                     if j > 0 {
-                                        assert(r@[j] == flat(og)[j - 1]);
+                                        assert(r@[j] == concat(og)[j - 1]);
                                     }
                                 }
                             }

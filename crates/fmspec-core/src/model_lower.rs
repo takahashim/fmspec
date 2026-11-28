@@ -25,20 +25,22 @@ use crate::limits::{lemma_lim_small, lemma_width_sum_prefix, small, smalls};
 use crate::lower_ctx::{layout_at, layouts_at};
 use crate::lower_ctx::{Constant, Fail, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
+use crate::lower_spec::{action_at, action_low, contract_at, contract_low, ctx_is, init_ok};
+#[cfg(verus_keep_ghost)]
+use crate::lower_spec::{init_src, model_ok, prop_low};
+#[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 use crate::lowering::{lower_prop, lower_stored};
 use crate::model::{Action, Contract, Expr, RawModel, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::model_safe::{action_low, contract_low, ctx_is, init_ok, init_src, lemma_prop};
-#[cfg(verus_keep_ghost)]
-use crate::model_safe::{lemma_safe, model_ok, prop_low};
+use crate::model_safe::{lemma_prop, lemma_safe};
 use crate::model_total::check_model;
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, const_ctx, consts_match, lemma_const_ctx, lemma_sa_typed};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{lemma_state_ctx, model_typed, out_sty, st_ctx, styped, tys_ok};
 #[cfg(verus_keep_ghost)]
-use crate::model_wf::{action_at, contract_at, lemma_model_frame, sm_wf, wf_frame};
+use crate::model_wf::{lemma_model_frame, sm_wf, wf_frame};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
@@ -53,6 +55,7 @@ use crate::srel::{codes, consts_rel, lemma_code_in, lemma_rel_codes, rel};
 #[cfg(verus_keep_ghost)]
 use crate::state_enc::encode_spec;
 use crate::state_enc::{copy_vec, encode, vec_eq};
+use crate::state_set::cmp_state;
 use crate::stype_exec::{copy_stype, stype_width, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
 use crate::total::{cx_wf, ok_s, sctx};
@@ -364,30 +367,14 @@ fn eval_stored(e: &crate::source::TExpr, cx: &LowerCtx, t: &SType) -> (r: Result
 // ---- 符号の列の集合 ----
 
 /// 列 `vs` は符号の列 `x` を含む。
-pub open spec fn has(vs: Seq<Vec<i64>>, x: Seq<i64>) -> bool {
+pub open spec fn in_cert(vs: Seq<Vec<i64>>, x: Seq<i64>) -> bool {
     exists|q: int| 0 <= q < vs.len() && #[trigger] vs[q]@ == x
-}
-
-/// 辞書順で `a < b`。
-fn lex_lt(a: &Vec<i64>, b: &Vec<i64>) -> bool {
-    let mut i = 0;
-    while i < a.len() && i < b.len()
-        invariant
-            i <= a.len(),
-        decreases a.len() - i,
-    {
-        if a[i] != b[i] {
-            return a[i] < b[i];
-        }
-        i += 1;
-    }
-    a.len() < b.len()
 }
 
 /// 辞書順に整列した列 `out` に `x` を加える。同じ列がすでにあれば加えない。
 fn insert_sorted(out: &mut Vec<Vec<i64>>, x: Vec<i64>)
     ensures
-        forall|y: Seq<i64>| #[trigger] has(final(out)@, y) <==> (has(old(out)@, y) || y == x@),
+        forall|y: Seq<i64>| #[trigger] in_cert(final(out)@, y) <==> (in_cert(old(out)@, y) || y == x@),
 {
     let ghost o = out@;
     let mut k = 0;
@@ -397,14 +384,14 @@ fn insert_sorted(out: &mut Vec<Vec<i64>>, x: Vec<i64>)
             out@ == o,
         decreases out@.len() - k,
     {
-        if k >= out.len() || !lex_lt(&out[k], &x) {
+        if k >= out.len() || !(cmp_state(&out[k], &x) < 0) {
             break;
         }
         k += 1;
     }
     if k < out.len() && vec_eq(&out[k], &x) {
         proof {
-            assert forall|y: Seq<i64>| #[trigger] has(out@, y) <==> (has(o, y) || y == x@) by {
+            assert forall|y: Seq<i64>| #[trigger] in_cert(out@, y) <==> (in_cert(o, y) || y == x@) by {
                 if y == x@ {
                     assert(out@[k as int]@ == y);
                 }
@@ -417,8 +404,8 @@ fn insert_sorted(out: &mut Vec<Vec<i64>>, x: Vec<i64>)
     proof {
         assert(out@ == o.insert(k as int, out@[k as int]));
         assert(out@[k as int]@ == xv);
-        assert forall|y: Seq<i64>| #[trigger] has(out@, y) <==> (has(o, y) || y == xv) by {
-            if has(out@, y) {
+        assert forall|y: Seq<i64>| #[trigger] in_cert(out@, y) <==> (in_cert(o, y) || y == xv) by {
+            if in_cert(out@, y) {
                 let q = choose|q: int| 0 <= q < out@.len() && #[trigger] out@[q]@ == y;
                 if q < k {
                     assert(o[q]@ == y);
@@ -426,7 +413,7 @@ fn insert_sorted(out: &mut Vec<Vec<i64>>, x: Vec<i64>)
                     assert(o[q - 1]@ == y);
                 }
             }
-            if has(o, y) {
+            if in_cert(o, y) {
                 let q = choose|q: int| 0 <= q < o.len() && #[trigger] o[q]@ == y;
                 if q < k {
                     assert(out@[q]@ == y);
@@ -471,9 +458,9 @@ pub open spec fn cand_codes(sm: SModel, cv: Seq<SVal>, i: int, w: SVal, y: Seq<i
 /// 列 `cs` は、状態変数 `i` の初期値の候補の値の符号を過不足なく含む。
 pub open spec fn cands_ok(sm: SModel, cv: Seq<SVal>, i: int, cs: Seq<Vec<i64>>) -> bool {
     let t = s_state_tys(sm)[i];
-    &&& forall|y: Seq<i64>| #[trigger] has(cs, y) ==> exists|w: SVal| #[trigger] cand_codes(sm, cv, i, w, y)
+    &&& forall|y: Seq<i64>| #[trigger] in_cert(cs, y) ==> exists|w: SVal| #[trigger] cand_codes(sm, cv, i, w, y)
     &&& forall|w: SVal|
-        #[trigger] s_init_var(sm, cv, i, w) ==> member(w, t, sm.enums@) && has(cs, codes(enc(w, t, sm.enums@)))
+        #[trigger] s_init_var(sm, cv, i, w) ==> member(w, t, sm.enums@) && in_cert(cs, codes(enc(w, t, sm.enums@)))
 }
 
 /// 状態変数 `i` の初期値の候補の符号を、辞書順に整列して重複を除いた列。
@@ -513,13 +500,13 @@ fn var_cands(sm: &SModel, cx: &LowerCtx, i: usize, Ghost(cv): Ghost<Seq<SVal>>) 
             top_ok(*cx, empty_env(), se, Seq::empty(), 0),
             se == s_env(*sm, cv, Seq::empty(), Seq::empty(), Seq::empty(), None),
             cx.enums@ == sm.enums@,
-            forall|y: Seq<i64>| #[trigger] has(out@, y) ==> exists|w: SVal| #[trigger] cand_codes(*sm, cv, i as int, w, y),
+            forall|y: Seq<i64>| #[trigger] in_cert(out@, y) ==> exists|w: SVal| #[trigger] cand_codes(*sm, cv, i as int, w, y),
             forall|q: int|
                 0 <= q < j ==> {
                     let r = #[trigger] s_cand(*sm, cv, es@[q]);
                     &&& r is Ok
                     &&& member(r->Ok_0, t, sm.enums@)
-                    &&& has(out@, codes(enc(r->Ok_0, t, sm.enums@)))
+                    &&& in_cert(out@, codes(enc(r->Ok_0, t, sm.enums@)))
                 },
             pre ==> cx_wf(*cx) && sctx(*cx) == const_ctx(*sm, sm.consts@.len() as int) && ok_s(t, sm.enums@),
             pre == (model_typed(*sm) && consts_match(*sm, cx.consts@) && cx.consts@.len() == sm.consts@.len()),
@@ -544,25 +531,25 @@ fn var_cands(sm: &SModel, cx: &LowerCtx, i: usize, Ghost(cv): Ghost<Seq<SVal>>) 
         let ghost o = out@;
         insert_sorted(&mut out, cs);
         proof {
-            assert(has(out@, cv0));
+            assert(in_cert(out@, cv0));
             assert forall|q: int| 0 <= q < j + 1 implies {
                 let r = #[trigger] s_cand(*sm, cv, es@[q]);
                 &&& r is Ok
                 &&& member(r->Ok_0, t, sm.enums@)
-                &&& has(out@, codes(enc(r->Ok_0, t, sm.enums@)))
+                &&& in_cert(out@, codes(enc(r->Ok_0, t, sm.enums@)))
             } by {
                 if q < j {
-                    assert(has(o, codes(enc(s_cand(*sm, cv, es@[q])->Ok_0, t, sm.enums@))));
+                    assert(in_cert(o, codes(enc(s_cand(*sm, cv, es@[q])->Ok_0, t, sm.enums@))));
                 }
             }
-            assert forall|y: Seq<i64>| #[trigger] has(out@, y) implies exists|w: SVal| #[trigger] cand_codes(
+            assert forall|y: Seq<i64>| #[trigger] in_cert(out@, y) implies exists|w: SVal| #[trigger] cand_codes(
                 *sm,
                 cv,
                 i as int,
                 w,
                 y,
             ) by {
-                if has(o, y) {
+                if in_cert(o, y) {
                 } else {
                     assert(cand_codes(*sm, cv, i as int, w, y));
                 }
@@ -571,7 +558,7 @@ fn var_cands(sm: &SModel, cx: &LowerCtx, i: usize, Ghost(cv): Ghost<Seq<SVal>>) 
         j += 1;
     }
     proof {
-        assert forall|w: SVal| #[trigger] s_init_var(*sm, cv, i as int, w) implies member(w, t, sm.enums@) && has(
+        assert forall|w: SVal| #[trigger] s_init_var(*sm, cv, i as int, w) implies member(w, t, sm.enums@) && in_cert(
             out@,
             codes(enc(w, t, sm.enums@)),
         ) by {
@@ -596,8 +583,8 @@ pub open spec fn combo(sm: SModel, cv: Seq<SVal>, k: int, ws: Seq<SVal>) -> bool
 pub open spec fn prod_ok(sm: SModel, cv: Seq<SVal>, k: int, ps: Seq<Vec<i64>>) -> bool {
     let ts = s_state_tys(sm).take(k);
     &&& forall|y: Seq<i64>|
-        #[trigger] has(ps, y) ==> exists|ws: Seq<SVal>| #[trigger] combo(sm, cv, k, ws) && y == codes(enc_seq(ws, ts, sm.enums@))
-    &&& forall|ws: Seq<SVal>| #[trigger] combo(sm, cv, k, ws) ==> has(ps, codes(enc_seq(ws, ts, sm.enums@)))
+        #[trigger] in_cert(ps, y) ==> exists|ws: Seq<SVal>| #[trigger] combo(sm, cv, k, ws) && y == codes(enc_seq(ws, ts, sm.enums@))
+    &&& forall|ws: Seq<SVal>| #[trigger] combo(sm, cv, k, ws) ==> in_cert(ps, codes(enc_seq(ws, ts, sm.enums@)))
 }
 
 /// 2つの符号の列をつなげる。
@@ -605,7 +592,7 @@ pub open spec fn cat(ps: Seq<Vec<i64>>, cs: Seq<Vec<i64>>, p: int, q: int) -> Se
     ps[p]@ + cs[q]@
 }
 
-fn concat(a: &Vec<i64>, b: &Vec<i64>) -> (r: Vec<i64>)
+fn concat_codes(a: &Vec<i64>, b: &Vec<i64>) -> (r: Vec<i64>)
     ensures
         r@ == a@ + b@,
 {
@@ -633,9 +620,9 @@ fn concat(a: &Vec<i64>, b: &Vec<i64>) -> (r: Vec<i64>)
 fn product_step(ps: &Vec<Vec<i64>>, cs: &Vec<Vec<i64>>) -> (r: Vec<Vec<i64>>)
     ensures
         forall|y: Seq<i64>|
-            #[trigger] has(r@, y) ==> exists|p: int, q: int|
+            #[trigger] in_cert(r@, y) ==> exists|p: int, q: int|
                 0 <= p < ps@.len() && 0 <= q < cs@.len() && y == #[trigger] cat(ps@, cs@, p, q),
-        forall|p: int, q: int| 0 <= p < ps@.len() && 0 <= q < cs@.len() ==> has(r@, #[trigger] cat(ps@, cs@, p, q)),
+        forall|p: int, q: int| 0 <= p < ps@.len() && 0 <= q < cs@.len() ==> in_cert(r@, #[trigger] cat(ps@, cs@, p, q)),
 {
     let mut r: Vec<Vec<i64>> = Vec::new();
     let mut p = 0;
@@ -643,9 +630,9 @@ fn product_step(ps: &Vec<Vec<i64>>, cs: &Vec<Vec<i64>>) -> (r: Vec<Vec<i64>>)
         invariant
             p <= ps@.len(),
             forall|y: Seq<i64>|
-                #[trigger] has(r@, y) ==> exists|p: int, q: int|
+                #[trigger] in_cert(r@, y) ==> exists|p: int, q: int|
                     0 <= p < ps@.len() && 0 <= q < cs@.len() && y == #[trigger] cat(ps@, cs@, p, q),
-            forall|p0: int, q: int| 0 <= p0 < p && 0 <= q < cs@.len() ==> has(r@, #[trigger] cat(ps@, cs@, p0, q)),
+            forall|p0: int, q: int| 0 <= p0 < p && 0 <= q < cs@.len() ==> in_cert(r@, #[trigger] cat(ps@, cs@, p0, q)),
         decreases ps@.len() - p,
     {
         let mut q = 0;
@@ -654,28 +641,28 @@ fn product_step(ps: &Vec<Vec<i64>>, cs: &Vec<Vec<i64>>) -> (r: Vec<Vec<i64>>)
                 p < ps@.len(),
                 q <= cs@.len(),
                 forall|y: Seq<i64>|
-                    #[trigger] has(r@, y) ==> exists|p: int, q: int|
+                    #[trigger] in_cert(r@, y) ==> exists|p: int, q: int|
                         0 <= p < ps@.len() && 0 <= q < cs@.len() && y == #[trigger] cat(ps@, cs@, p, q),
                 forall|p0: int, q0: int|
-                    0 <= p0 < p && 0 <= q0 < cs@.len() ==> has(r@, #[trigger] cat(ps@, cs@, p0, q0)),
-                forall|q0: int| 0 <= q0 < q ==> has(r@, #[trigger] cat(ps@, cs@, p as int, q0)),
+                    0 <= p0 < p && 0 <= q0 < cs@.len() ==> in_cert(r@, #[trigger] cat(ps@, cs@, p0, q0)),
+                forall|q0: int| 0 <= q0 < q ==> in_cert(r@, #[trigger] cat(ps@, cs@, p as int, q0)),
             decreases cs@.len() - q,
         {
-            let x = concat(&ps[p], &cs[q]);
+            let x = concat_codes(&ps[p], &cs[q]);
             let ghost o = r@;
             r.push(x);
             proof {
                 assert(r@[o.len() as int]@ == cat(ps@, cs@, p as int, q as int));
-                assert forall|y: Seq<i64>| has(o, y) implies #[trigger] has(r@, y) by {
+                assert forall|y: Seq<i64>| in_cert(o, y) implies #[trigger] in_cert(r@, y) by {
                     let k = choose|k: int| 0 <= k < o.len() && #[trigger] o[k]@ == y;
                     assert(r@[k]@ == y);
                 }
-                assert forall|y: Seq<i64>| #[trigger] has(r@, y) implies exists|p: int, q: int|
+                assert forall|y: Seq<i64>| #[trigger] in_cert(r@, y) implies exists|p: int, q: int|
                     0 <= p < ps@.len() && 0 <= q < cs@.len() && y == #[trigger] cat(ps@, cs@, p, q) by {
                     let k = choose|k: int| 0 <= k < r@.len() && #[trigger] r@[k]@ == y;
                     if k < o.len() {
                         assert(o[k]@ == y);
-                        assert(has(o, y));
+                        assert(in_cert(o, y));
                     }
                 }
             }
@@ -707,8 +694,8 @@ proof fn lemma_prod_step(
         prod_ok(sm, cv, k, ps),
         cands_ok(sm, cv, k, cs),
         forall|y: Seq<i64>|
-            #[trigger] has(r, y) ==> exists|p: int, q: int| 0 <= p < ps.len() && 0 <= q < cs.len() && y == #[trigger] cat(ps, cs, p, q),
-        forall|p: int, q: int| 0 <= p < ps.len() && 0 <= q < cs.len() ==> has(r, #[trigger] cat(ps, cs, p, q)),
+            #[trigger] in_cert(r, y) ==> exists|p: int, q: int| 0 <= p < ps.len() && 0 <= q < cs.len() && y == #[trigger] cat(ps, cs, p, q),
+        forall|p: int, q: int| 0 <= p < ps.len() && 0 <= q < cs.len() ==> in_cert(r, #[trigger] cat(ps, cs, p, q)),
     ensures
         prod_ok(sm, cv, k + 1, r),
 {
@@ -725,12 +712,12 @@ proof fn lemma_prod_step(
     ) + enc(ws[k], all[k], enums) by {
         assert(ws.last() == ws[k]);
     }
-    assert forall|y: Seq<i64>| #[trigger] has(r, y) implies exists|ws: Seq<SVal>| #[trigger] combo(sm, cv, k + 1, ws) && y
+    assert forall|y: Seq<i64>| #[trigger] in_cert(r, y) implies exists|ws: Seq<SVal>| #[trigger] combo(sm, cv, k + 1, ws) && y
         == codes(enc_seq(ws, ts1, enums)) by {
         let (p, q) = choose|p: int, q: int| 0 <= p < ps.len() && 0 <= q < cs.len() && y == #[trigger] cat(ps, cs, p, q);
-        assert(has(ps, ps[p]@));
+        assert(in_cert(ps, ps[p]@));
         let ws0 = choose|ws: Seq<SVal>| #[trigger] combo(sm, cv, k, ws) && ps[p]@ == codes(enc_seq(ws, ts, enums));
-        assert(has(cs, cs[q]@));
+        assert(in_cert(cs, cs[q]@));
         let w = choose|w: SVal| #[trigger] cand_codes(sm, cv, k, w, cs[q]@);
         let ws = ws0.push(w);
         assert(ws.drop_last() =~= ws0);
@@ -747,7 +734,7 @@ proof fn lemma_prod_step(
         assert(combo(sm, cv, k + 1, ws));
         lemma_codes_concat(enc_seq(ws0, ts, enums), enc(w, all[k], enums));
     }
-    assert forall|ws: Seq<SVal>| #[trigger] combo(sm, cv, k + 1, ws) implies has(r, codes(enc_seq(ws, ts1, enums))) by {
+    assert forall|ws: Seq<SVal>| #[trigger] combo(sm, cv, k + 1, ws) implies in_cert(r, codes(enc_seq(ws, ts1, enums))) by {
         let ws0 = ws.drop_last();
         assert forall|i: int| 0 <= i < k implies #[trigger] s_init_var(sm, cv, i, ws0[i]) && member(ws0[i], all[i], enums) by {
             assert(ws0[i] == ws[i]);
@@ -780,13 +767,13 @@ pub open spec fn keep(cc: Option<Expr>, tys: Seq<Type>, y: Seq<i64>) -> bool {
 /// 初期条件を満たす状態だけを、順に残す。評価に失敗すれば、その理由を返す。
 fn filter_inits(ps: Vec<Vec<i64>>, cc: &Option<Expr>, tys: &Vec<Type>) -> (r: Result<Vec<Vec<i64>>, Fault>)
     ensures
-        r matches Ok(f) ==> forall|y: Seq<i64>| #[trigger] has(f@, y) <==> has(ps@, y) && keep(*cc, tys@, y),
+        r matches Ok(f) ==> forall|y: Seq<i64>| #[trigger] in_cert(f@, y) <==> in_cert(ps@, y) && keep(*cc, tys@, y),
         r matches Err(f) ==> f is Eval,
 {
     let c = match cc {
         None => {
             proof {
-                assert forall|y: Seq<i64>| #[trigger] has(ps@, y) <==> has(ps@, y) && keep(*cc, tys@, y) by {}
+                assert forall|y: Seq<i64>| #[trigger] in_cert(ps@, y) <==> in_cert(ps@, y) && keep(*cc, tys@, y) by {}
             }
             return Ok(ps);
         },
@@ -802,8 +789,8 @@ fn filter_inits(ps: Vec<Vec<i64>>, cc: &Option<Expr>, tys: &Vec<Type>) -> (r: Re
             *cc == Some(*c),
             none_t@ == Seq::<Type>::empty(),
             none_v@ == Seq::<i64>::empty(),
-            forall|y: Seq<i64>| #[trigger] has(f@, y) ==> has(ps@, y) && keep(*cc, tys@, y),
-            forall|p0: int| 0 <= p0 < p && keep(*cc, tys@, ps@[p0]@) ==> has(f@, #[trigger] ps@[p0]@),
+            forall|y: Seq<i64>| #[trigger] in_cert(f@, y) ==> in_cert(ps@, y) && keep(*cc, tys@, y),
+            forall|p0: int| 0 <= p0 < p && keep(*cc, tys@, ps@[p0]@) ==> in_cert(f@, #[trigger] ps@[p0]@),
         decreases ps@.len() - p,
     {
         let ctx = Ctx { st_tys: tys, arg_tys: &none_t, pre: &ps[p], args: &none_v, post: &none_v, out: None };
@@ -818,16 +805,16 @@ fn filter_inits(ps: Vec<Vec<i64>>, cc: &Option<Expr>, tys: &Vec<Type>) -> (r: Re
                 f.push(copy_vec(&ps[p]));
                 proof {
                     assert(f@[o.len() as int]@ == ps@[p as int]@);
-                    assert(has(ps@, ps@[p as int]@));
-                    assert forall|y: Seq<i64>| has(o, y) implies #[trigger] has(f@, y) by {
+                    assert(in_cert(ps@, ps@[p as int]@));
+                    assert forall|y: Seq<i64>| in_cert(o, y) implies #[trigger] in_cert(f@, y) by {
                         let k = choose|k: int| 0 <= k < o.len() && #[trigger] o[k]@ == y;
                         assert(f@[k]@ == y);
                     }
-                    assert forall|y: Seq<i64>| #[trigger] has(f@, y) implies has(ps@, y) && keep(*cc, tys@, y) by {
+                    assert forall|y: Seq<i64>| #[trigger] in_cert(f@, y) implies in_cert(ps@, y) && keep(*cc, tys@, y) by {
                         let k = choose|k: int| 0 <= k < f@.len() && #[trigger] f@[k]@ == y;
                         if k < o.len() {
                             assert(o[k]@ == y);
-                            assert(has(o, y));
+                            assert(in_cert(o, y));
                         }
                     }
                 }
@@ -836,8 +823,8 @@ fn filter_inits(ps: Vec<Vec<i64>>, cc: &Option<Expr>, tys: &Vec<Type>) -> (r: Re
         p += 1;
     }
     proof {
-        assert forall|y: Seq<i64>| #[trigger] has(f@, y) <==> has(ps@, y) && keep(*cc, tys@, y) by {
-            if has(ps@, y) && keep(*cc, tys@, y) {
+        assert forall|y: Seq<i64>| #[trigger] in_cert(f@, y) <==> in_cert(ps@, y) && keep(*cc, tys@, y) by {
+            if in_cert(ps@, y) && keep(*cc, tys@, y) {
                 let k = choose|k: int| 0 <= k < ps@.len() && #[trigger] ps@[k]@ == y;
             }
         }
@@ -867,7 +854,7 @@ proof fn lemma_init_ok(
     requires
         sm.inits@.len() == sm.states@.len(),
         prod_ok(sm, cv, sm.states@.len() as int, ps),
-        forall|y: Seq<i64>| #[trigger] has(m.inits@, y) <==> has(ps, y) && keep(cc, m.state_types@, y),
+        forall|y: Seq<i64>| #[trigger] in_cert(m.inits@, y) <==> in_cert(ps, y) && keep(cc, m.state_types@, y),
         constraint_low(sm, sx, cc),
         ctx_is(sx, sm.enums@, cv, st, Seq::empty(), false, None),
         layouts_at(st, s_state_tys(sm), sm.enums@),
@@ -906,7 +893,7 @@ proof fn lemma_init_ok(
     }
     assert forall|k: int| 0 <= k < m.inits@.len() implies #[trigger] init_src(sm, cv, st, m.state_types@, m.inits@[k]@) by {
         let y = m.inits@[k]@;
-        assert(has(m.inits@, y));
+        assert(in_cert(m.inits@, y));
         let ws = choose|ws: Seq<SVal>| #[trigger] combo(sm, cv, n, ws) && y == codes(enc_seq(ws, ts.take(n), enums));
         assert(rel(st, ws, m.state_types@, y, enums));
         assert forall|i: int| 0 <= i < ws.len() implies #[trigger] s_init_var(sm, cv, i, ws[i]) by {}
@@ -921,8 +908,8 @@ proof fn lemma_init_ok(
         assert(combo(sm, cv, n, s));
         let y = codes(enc_seq(s, ts, enums));
         assert(rel(st, s, m.state_types@, y, enums));
-        assert(has(ps, y));
-        assert(has(m.inits@, y));
+        assert(in_cert(ps, y));
+        assert(in_cert(m.inits@, y));
         let k = choose|k: int| 0 <= k < m.inits@.len() && #[trigger] m.inits@[k]@ == y;
     }
 }
@@ -1130,12 +1117,12 @@ fn init_products(sm: &SModel, cx: &LowerCtx, Ghost(cv): Ghost<Seq<SVal>>) -> (r:
         let enums = sm.enums@;
         let ts0 = s_state_tys(*sm).take(0);
         assert(ts0 =~= Seq::<STy>::empty());
-        assert forall|y: Seq<i64>| #[trigger] has(ps@, y) implies exists|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) && y
+        assert forall|y: Seq<i64>| #[trigger] in_cert(ps@, y) implies exists|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) && y
             == codes(enc_seq(ws, ts0, enums)) by {
             assert(combo(*sm, cv, 0, Seq::<SVal>::empty()));
             assert(codes(enc_seq(Seq::<SVal>::empty(), ts0, enums)) =~= Seq::<i64>::empty());
         }
-        assert forall|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) implies has(ps@, codes(enc_seq(ws, ts0, enums))) by {
+        assert forall|ws: Seq<SVal>| #[trigger] combo(*sm, cv, 0, ws) implies in_cert(ps@, codes(enc_seq(ws, ts0, enums))) by {
             assert(codes(enc_seq(ws, ts0, enums)) =~= Seq::<i64>::empty());
             assert(ps@[0]@ =~= Seq::<i64>::empty());
         }
@@ -1553,7 +1540,7 @@ pub fn lower_model_map(sm: &SModel, maps: &Vec<SMap>) -> (r: Result<(RawModel, V
         assert forall|a: int| 0 <= a < cs.len() implies #[trigger] action_low(*sm, cv, m, stg, cs[a], a) by {
             assert(action_at(*sm, cv, stg, cs[a], a, actions@[a]));
         }
-        assert forall|q: int| 0 <= q < ks.len() implies #[trigger] contract_low(*sm, cv, m, stg, cs, ks[q], q) by {
+        assert forall|q: int| 0 <= q < ks.len() implies #[trigger] contract_low(*sm, cv, m, stg, ks[q], q) by {
             assert(contract_at(*sm, cv, stg, ks[q], q, contracts@[q]));
         }
         assert(model_ok(*sm, cv, m, stg, cs, ks, sx));

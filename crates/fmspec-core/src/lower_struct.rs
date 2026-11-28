@@ -22,9 +22,9 @@ use crate::lower_types::{blt, has_ty, lemma_check_typed, lemma_lim_x_small, lemm
 use crate::lower_types::{lemma_typed_blk, lemma_typed_concat, lemma_typed_sub, lemma_xetys_of};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{lemma_xetys_part, lenv, tok, typed, xetys, xetys_seq};
+use crate::lowering::low;
 #[cfg(verus_keep_ghost)]
 use crate::lowering::low_ok;
-use crate::lowering::{copy_usizes, low};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_extends_trans, lemma_lits};
@@ -36,6 +36,7 @@ use crate::preserve_tuple::{lemma_some, lemma_tuple_done, lemma_unwrap, lowers_s
 use crate::slots::lemma_extends_refl;
 use crate::slots::{check, copy_exprs, need, not};
 use crate::source::{TExpr, FAIL_NONE};
+use crate::state_enc::copy_usizes;
 use crate::stype_exec::{copy_xtype, to_xtype};
 #[cfg(verus_keep_ghost)]
 use crate::total::{bound_tys, here_ok, lemma_all_pure_mono, lemma_lim_ok_seq_at, lemma_sc_wf_mono};

@@ -87,6 +87,7 @@ pub mod lower_list;
 pub mod lower_map;
 pub mod lower_quant;
 pub mod lower_set;
+pub mod lower_spec;
 pub mod lower_struct;
 pub mod lower_types;
 pub mod lowering;

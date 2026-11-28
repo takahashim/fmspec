@@ -222,4 +222,28 @@ pub fn vec_eq(a: &Vec<i64>, b: &Vec<i64>) -> (r: bool)
     true
 }
 
+pub(crate) fn copy_usizes(xs: &Vec<usize>) -> (r: Vec<usize>)
+    ensures
+        r@ == xs@,
+{
+    let mut out: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i < xs.len()
+        invariant
+            i <= xs@.len(),
+            out@ == xs@.take(i as int),
+        decreases xs.len() - i,
+    {
+        out.push(xs[i]);
+        proof {
+            assert(xs@.take(i + 1) =~= xs@.take(i as int).push(xs@[i as int]));
+        }
+        i += 1;
+    }
+    proof {
+        assert(xs@.take(xs@.len() as int) =~= xs@);
+    }
+    out
+}
+
 } // verus!

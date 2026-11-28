@@ -3,7 +3,7 @@
 //! 長さの上限が `max` のListは、長さのスロットの後に `max` 個の行を並べて符号化する。
 //! 長さより前の行は要素の符号化で、後ろの行は要素の型の既定値の符号化である（[`pad`]）。
 //! 下ろしは、スロットの列を行に区切り（[`parts_ok`]）、行を選び（[`select_ok`]）、
-//! 行をつなぎ直す（[`flat`]）。
+//! 行をつなぎ直す（[`crate::expr_build::concat`]）。
 
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
@@ -14,7 +14,7 @@ use crate::encoding::{lemma_items_member, list_items_member, member, sty, width,
 use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 use crate::expr_build::sub_exprs;
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, ite_s, pure_below};
+use crate::expr_build::{all_pure, concat, ite_s, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_s;
@@ -26,7 +26,7 @@ use crate::model::{BinOp, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{col, flat, ite_row, ite_rows_ok, parts_ok, row_at};
+use crate::rows::{col, ite_row, ite_rows_ok, parts_ok, row_at};
 use crate::stype_exec::stype_width;
 #[cfg(verus_keep_ghost)]
 use crate::typing::{ETy, TyEnv};
@@ -250,12 +250,12 @@ pub proof fn lemma_flat(rows: Seq<Seq<Expr>>, xs: Seq<SVal>, st: STy, env: Env, 
     requires
         rows_at(rows, Seq::new(xs.len(), |p: int| enc(xs[p], st, enums)), env, l),
     ensures
-        clean(flat(rows), env, l),
-        slot_vals(flat(rows), env, l) == enc_items(xs, st, enums),
+        clean(concat(rows), env, l),
+        slot_vals(concat(rows), env, l) == enc_items(xs, st, enums),
     decreases rows.len(),
 {
     if rows.len() == 0 {
-        assert(slot_vals(flat(rows), env, l) =~= Seq::<Value>::empty());
+        assert(slot_vals(concat(rows), env, l) =~= Seq::<Value>::empty());
     } else {
         let a = rows.drop_last();
         let b = xs.drop_last();
@@ -268,7 +268,7 @@ pub proof fn lemma_flat(rows: Seq<Seq<Expr>>, xs: Seq<SVal>, st: STy, env: Env, 
         }
         lemma_flat(a, b, st, env, l, enums);
         assert(clean(rows[rows.len() - 1], env, l));
-        lemma_clean_concat(flat(a), rows.last(), env, l);
+        lemma_clean_concat(concat(a), rows.last(), env, l);
     }
 }
 
@@ -290,7 +290,7 @@ pub proof fn lemma_list_join(
         eval_l(len, env, l) == Ok::<Value, ErrKind>(Value::Int(items.len() as i64)),
         rows_at(rows, pad_vals(items, st, max as nat, enums), env, l),
     ensures
-        denotes(seq![len] + flat(rows), env, l, SVal::List(items), XTy::List(Box::new(st), max), enums),
+        denotes(seq![len] + concat(rows), env, l, SVal::List(items), XTy::List(Box::new(st), max), enums),
 {
     let p = pad(items, st, max as nat, enums);
     assert(pad_vals(items, st, max as nat, enums) =~= Seq::new(p.len(), |q: int| enc(p[q], st, enums)));
@@ -298,7 +298,7 @@ pub proof fn lemma_list_join(
     lemma_enc_pad(items, st, max, enums);
     assert(clean(seq![len], env, l));
     assert(slot_vals(seq![len], env, l) =~= seq![Value::Int(items.len() as i64)]);
-    lemma_clean_concat(seq![len], flat(rows), env, l);
+    lemma_clean_concat(seq![len], concat(rows), env, l);
 }
 
 // ---- 行を置き換える ----

@@ -11,7 +11,7 @@ use crate::encoding::{to_xty, width, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, lits, pure_below};
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, lits, pure_below};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
@@ -31,7 +31,7 @@ use crate::preserve_elem::{elem_lowers, elem_rank_lowers};
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::lemma_set_contains;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, head_at, heads_ok, ite_rows_ok, lemma_enc_rows_index, mparts_ok, row_slots};
+use crate::rows::{head_at, heads_ok, ite_rows_ok, lemma_enc_rows_index, mparts_ok, row_slots};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_map_items, eval_src, put_row, Item, SEnv, TExpr};
 use vstd::prelude::*;
@@ -101,7 +101,7 @@ pub proof fn lemma_put(
         mrows.len() <= 0x7fff_ffff,
         alt == seq![bool_lit(true)] + xs,
         ite_rows_ok(out, mrows, r, alt),
-        res == flat(out),
+        res == concat(out),
     ensures
         put_lowers(key, value, cx, sc, b0, b2, kt, vt, ms, res),
 {
@@ -493,7 +493,7 @@ pub proof fn lemma_delete(
         mrows.len() <= 0x7fff_ffff,
         alt == seq![bool_lit(false)] + lits(enc(default_val(vt, cx.enums@), vt, cx.enums@)),
         ite_rows_ok(out, mrows, r, alt),
-        res == flat(out),
+        res == concat(out),
     ensures
         lowers(e, cx, sc, b0, b2, XTy::Map(Box::new(sty(e->Delete_0)), Box::new(vt)), res),
 {

@@ -18,7 +18,7 @@ use crate::eval::{eval_l, Env};
 use crate::expr_build::tree;
 use crate::expr_build::{all_of, and, cb, ci, eq, implies, is_bool_lit, ite, split, sub_exprs, Join};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{bool_lit, int_lit, ite_s, split_ok, tree_s};
+use crate::expr_build::{bool_lit, concat, int_lit, ite_s, split_ok, tree_s};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::*;
@@ -36,7 +36,7 @@ use crate::model::{BinOp, Expr, Type};
 use crate::preserve::*;
 use crate::quant::pick_slot;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{col, flat, head_at, heads_ok, ite_row, ite_rows_ok};
+use crate::rows::{col, head_at, heads_ok, ite_row, ite_rows_ok};
 use crate::typing::ETy;
 #[cfg(verus_keep_ghost)]
 use crate::typing::TyEnv;
@@ -655,20 +655,20 @@ pub fn ite_rows(rows: &Vec<Vec<Expr>>, k: &Expr, alt: &Vec<Expr>) -> (r: Option<
 /// 行をつなげる。
 pub fn join_rows(items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
     ensures
-        r@ == flat(rows_view(items@)),
+        r@ == concat(rows_view(items@)),
 {
     let ghost rv = rows_view(items@);
     let mut out: Vec<Expr> = Vec::new();
     proof {
         assert(rv.take(0) =~= Seq::<Seq<Expr>>::empty());
-        assert(out@ =~= flat(rv.take(0)));
+        assert(out@ =~= concat(rv.take(0)));
     }
     let mut i = 0;
     while i < items.len()
         invariant
             i <= items@.len(),
             rv == rows_view(items@),
-            out@ == flat(rv.take(i as int)),
+            out@ == concat(rv.take(i as int)),
         decreases items.len() - i,
     {
         let ghost o1 = out@;
@@ -703,7 +703,7 @@ pub fn join_rows(items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
 
 pub fn list_join(len: Expr, items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
     ensures
-        r@ == seq![len] + flat(rows_view(items@)),
+        r@ == seq![len] + concat(rows_view(items@)),
 {
     let ghost l0 = len;
     let ghost rv = rows_view(items@);
@@ -711,14 +711,14 @@ pub fn list_join(len: Expr, items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
     out.push(len);
     proof {
         assert(rv.take(0) =~= Seq::<Seq<Expr>>::empty());
-        assert(out@ =~= seq![l0] + flat(rv.take(0)));
+        assert(out@ =~= seq![l0] + concat(rv.take(0)));
     }
     let mut i = 0;
     while i < items.len()
         invariant
             i <= items@.len(),
             rv == rows_view(items@),
-            out@ == seq![l0] + flat(rv.take(i as int)),
+            out@ == seq![l0] + concat(rv.take(i as int)),
         decreases items.len() - i,
     {
         let ghost o1 = out@;
@@ -742,7 +742,7 @@ pub fn list_join(len: Expr, items: &Vec<Vec<Expr>>) -> (r: Vec<Expr>)
             assert(rv.take(i + 1).drop_last() =~= rv.take(i as int));
             assert(rv.take(i + 1).last() == items@[i as int]@);
             assert(items@[i as int]@.take(items@[i as int]@.len() as int) =~= items@[i as int]@);
-            assert(seq![l0] + flat(rv.take(i + 1)) =~= (seq![l0] + flat(rv.take(i as int))) + items@[i as int]@);
+            assert(seq![l0] + concat(rv.take(i + 1)) =~= (seq![l0] + concat(rv.take(i as int))) + items@[i as int]@);
         }
         i += 1;
     }

@@ -887,7 +887,7 @@ pub proof fn lemma_flat_typed(rows: Seq<Seq<Expr>>, rt: Seq<Type>, t: TyEnv, lt:
     requires
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], etys(rt), t, lt),
     ensures
-        typed(crate::rows::flat(rows), etys(crate::lower_types::ty_repeat(rt, rows.len())), t, lt),
+        typed(crate::expr_build::concat(rows), etys(crate::lower_types::ty_repeat(rt, rows.len())), t, lt),
     decreases rows.len(),
 {
     if rows.len() == 0 {
@@ -899,7 +899,7 @@ pub proof fn lemma_flat_typed(rows: Seq<Seq<Expr>>, rt: Seq<Type>, t: TyEnv, lt:
         }
         lemma_flat_typed(a, rt, t, lt);
         assert(typed(rows[rows.len() - 1], etys(rt), t, lt));
-        lemma_typed_concat(crate::rows::flat(a), etys(crate::lower_types::ty_repeat(rt, a.len())), rows.last(), etys(rt), t, lt);
+        lemma_typed_concat(crate::expr_build::concat(a), etys(crate::lower_types::ty_repeat(rt, a.len())), rows.last(), etys(rt), t, lt);
         lemma_etys_concat(crate::lower_types::ty_repeat(rt, a.len()), rt);
     }
 }
@@ -1137,14 +1137,14 @@ pub proof fn lemma_list_join_typed(len: Expr, rows: Seq<Seq<Expr>>, et: Seq<Type
         max <= i64::MAX,
         forall|p: int| 0 <= p < rows.len() ==> #[trigger] typed(rows[p], etys(et), t, lt),
     ensures
-        typed(seq![len] + crate::rows::flat(rows), etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max)), t, lt),
+        typed(seq![len] + crate::expr_build::concat(rows), etys(seq![Type::Int(0, max as i64)] + crate::lower_types::ty_repeat(et, max)), t, lt),
 {
     lemma_flat_typed(rows, et, t, lt);
     assert(typed(seq![len], etys(seq![Type::Int(0, max as i64)]), t, lt)) by {
         assert(etys(seq![Type::Int(0, max as i64)]) =~= seq![ETy::Int]);
         assert(seq![len][0] == len);
     }
-    lemma_typed_concat(seq![len], etys(seq![Type::Int(0, max as i64)]), crate::rows::flat(rows), etys(crate::lower_types::ty_repeat(et, max)), t, lt);
+    lemma_typed_concat(seq![len], etys(seq![Type::Int(0, max as i64)]), crate::expr_build::concat(rows), etys(crate::lower_types::ty_repeat(et, max)), t, lt);
     lemma_etys_concat(seq![Type::Int(0, max as i64)], crate::lower_types::ty_repeat(et, max));
 }
 

@@ -2,7 +2,7 @@
 //!
 //! キーの数が `n` のMapは、キーの番号の順に `n` 個の行を並べて符号化する。
 //! 行は、有無のBoolと値のスロットである（[`row_slots`]）。
-//! 下ろしは、スロットの列を行に区切り（[`mparts_ok`]）、行を置き換え、行をつなぎ直す（[`flat`]）。
+//! 下ろしは、スロットの列を行に区切り（[`mparts_ok`]）、行を置き換え、行をつなぎ直す（[`crate::expr_build::concat`]）。
 
 use crate::encoding::SType;
 #[cfg(verus_keep_ghost)]
@@ -11,6 +11,8 @@ use crate::encoding::XTy;
 use crate::encoding::{enc_rows, keys, keys_or_zero, map_rows_member, member, sty, width, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::Env;
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::concat;
 use crate::expr_build::sub_exprs;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim_s;
@@ -22,7 +24,7 @@ use crate::model::Value;
 #[cfg(verus_keep_ghost)]
 use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, lemma_enc_rows_index, mparts_ok, mrow_at, row_slots};
+use crate::rows::{lemma_enc_rows_index, mparts_ok, mrow_at, row_slots};
 use crate::stype_exec::{keys_or_zero_exec, stype_width};
 use vstd::prelude::*;
 
@@ -74,12 +76,12 @@ pub proof fn lemma_flat_rows(mrows: Seq<Seq<Expr>>, rows: Seq<Option<SVal>>, t: 
     requires
         rows_at(mrows, row_vals(rows, t, enums), env, l),
     ensures
-        clean(flat(mrows), env, l),
-        slot_vals(flat(mrows), env, l) == enc_rows(rows, t, enums),
+        clean(concat(mrows), env, l),
+        slot_vals(concat(mrows), env, l) == enc_rows(rows, t, enums),
     decreases mrows.len(),
 {
     if mrows.len() == 0 {
-        assert(slot_vals(flat(mrows), env, l) =~= Seq::<Value>::empty());
+        assert(slot_vals(concat(mrows), env, l) =~= Seq::<Value>::empty());
     } else {
         let a = mrows.drop_last();
         let b = rows.drop_last();
@@ -90,7 +92,7 @@ pub proof fn lemma_flat_rows(mrows: Seq<Seq<Expr>>, rows: Seq<Option<SVal>>, t: 
         }
         lemma_flat_rows(a, b, t, env, l, enums);
         assert(clean(mrows[mrows.len() - 1], env, l));
-        lemma_clean_concat(flat(a), mrows.last(), env, l);
+        lemma_clean_concat(concat(a), mrows.last(), env, l);
         assert(row_vals(rows, t, enums)[rows.len() - 1] == row_slots(rows.last(), t, enums));
         assert(enc_rows(rows, t, enums) == enc_rows(b, t, enums) + row_slots(rows.last(), t, enums));
     }
@@ -111,7 +113,7 @@ pub proof fn lemma_map_join(
         map_rows_member(rows, vt, enums),
         rows_at(mrows, row_vals(rows, vt, enums), env, l),
     ensures
-        denotes(flat(mrows), env, l, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), enums),
+        denotes(concat(mrows), env, l, SVal::Map(rows), XTy::Map(Box::new(kt), Box::new(vt)), enums),
 {
     lemma_flat_rows(mrows, rows, vt, env, l, enums);
 }

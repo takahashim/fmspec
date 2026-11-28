@@ -13,7 +13,9 @@ use crate::equality::eq_ok;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, ite_s, lits, pure_below, tree_s, Join};
+use crate::expr_build::tree_s;
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, and_s, bool_lit, concat, int_lit, ite_s, lits, pure_below, Join};
 #[cfg(verus_keep_ghost)]
 use crate::lists::{at_rank, lemma_bin_const, lemma_ite_rows, lemma_list_join, lemma_list_parts};
 #[cfg(verus_keep_ghost)]
@@ -27,7 +29,7 @@ use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_elem::elem_lowers;
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, ite_rows_ok, parts_ok};
+use crate::rows::{ite_rows_ok, parts_ok};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_elements, eval_src, SEnv, TExpr, FAIL_EMPTY, FAIL_FULL, FAIL_INDEX};
 use vstd::prelude::*;
@@ -525,7 +527,7 @@ pub proof fn lemma_push(
         new_len == Expr::Local(b3.depth_s() as usize),
         b4.binds@ == b3.binds@.push(Expr::Bin(BinOp::Add, Box::new(len), Box::new(Expr::Const(Value::Int(1))))),
         ite_rows_ok(out, rows, len, xs),
-        r == seq![new_len] + flat(out),
+        r == seq![new_len] + concat(out),
     ensures
         lowers(e, cx, sc, b0, b4, XTy::List(Box::new(st), max), r),
 {
@@ -623,7 +625,7 @@ pub proof fn lemma_pop(
         b3.binds@ == b2.binds@.push(Expr::Bin(BinOp::Sub, Box::new(len), Box::new(Expr::Const(Value::Int(1))))),
         defs == defaults_s(st, cx.enums@),
         ite_rows_ok(out, rows, new_len, defs),
-        r == seq![new_len] + flat(out),
+        r == seq![new_len] + concat(out),
     ensures
         lowers(e, cx, sc, b0, b3, XTy::List(Box::new(st), max), r),
 {
@@ -708,7 +710,7 @@ pub proof fn lemma_shift(
         defs == defaults_s(st, cx.enums@),
         rows.len() > 0 ==> out.len() == rows.len() && out[rows.len() - 1] == defs && forall|q: int|
             0 <= q < rows.len() - 1 ==> #[trigger] out[q] == rows[q + 1],
-        r == seq![new_len] + flat(out),
+        r == seq![new_len] + concat(out),
     ensures
         lowers(e, cx, sc, b0, b3, XTy::List(Box::new(st), max), r),
 {

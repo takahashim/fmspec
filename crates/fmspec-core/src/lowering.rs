@@ -27,7 +27,9 @@ use crate::encoding::{SType, XType};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, int_lit, ite_s, kind_expr, pure_below, tree_s, Join};
+use crate::expr_build::tree_s;
+#[cfg(verus_keep_ghost)]
+use crate::expr_build::{all_pure, bool_lit, concat, int_lit, ite_s, kind_expr, pure_below, Join};
 use crate::expr_build::{ci, eq};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
@@ -61,7 +63,7 @@ use crate::preserve_list::lemma_list_size;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_flags_map, lemma_flags_set, lemma_is_empty, lemma_size};
 #[cfg(verus_keep_ghost)]
-use crate::rows::{flat, ite_row, ite_rows_ok};
+use crate::rows::{ite_row, ite_rows_ok};
 #[cfg(verus_keep_ghost)]
 use crate::slot_store::store_ok;
 use crate::slot_store::{rank_expr, rank_or_neg, store};
@@ -250,30 +252,6 @@ pub(crate) fn atoms(xs: Vec<Expr>, blk: &mut Block, Ghost(cx): Ghost<LowerCtx>, 
         }
     }
     Ok(out)
-}
-
-pub(crate) fn copy_usizes(xs: &Vec<usize>) -> (r: Vec<usize>)
-    ensures
-        r@ == xs@,
-{
-    let mut out: Vec<usize> = Vec::new();
-    let mut i = 0;
-    while i < xs.len()
-        invariant
-            i <= xs@.len(),
-            out@ == xs@.take(i as int),
-        decreases xs.len() - i,
-    {
-        out.push(xs[i]);
-        proof {
-            assert(xs@.take(i + 1) =~= xs@.take(i as int).push(xs@[i as int]));
-        }
-        i += 1;
-    }
-    proof {
-        assert(xs@.take(xs@.len() as int) =~= xs@);
-    }
-    out
 }
 
 /// 式を `blk` の中に下ろす。部分式の束縛は評価の順に `blk` に追加し、失敗しないスロットの式を返す。
@@ -1127,8 +1105,8 @@ pub proof fn lemma_flat_shape(rows: Seq<Seq<Expr>>, w: nat, n: nat)
     requires
         forall|p: int| 0 <= p < rows.len() ==> (#[trigger] rows[p]).len() == w && all_pure(rows[p], n),
     ensures
-        flat(rows).len() == rows.len() * w,
-        all_pure(flat(rows), n),
+        concat(rows).len() == rows.len() * w,
+        all_pure(concat(rows), n),
     decreases rows.len(),
 {
     if rows.len() > 0 {
@@ -1139,13 +1117,13 @@ pub proof fn lemma_flat_shape(rows: Seq<Seq<Expr>>, w: nat, n: nat)
         lemma_flat_shape(pre, w, n);
         let last = rows.last();
         assert(rows[rows.len() - 1] == last);
-        assert(flat(rows) == flat(pre) + last);
+        assert(concat(rows) == concat(pre) + last);
         assert((rows.len() - 1) * w + w == rows.len() * w) by (nonlinear_arith);
-        assert forall|j: int| 0 <= j < flat(rows).len() implies pure_below(#[trigger] flat(rows)[j], n) by {
-            if j < flat(pre).len() {
-                assert(flat(rows)[j] == flat(pre)[j]);
+        assert forall|j: int| 0 <= j < concat(rows).len() implies pure_below(#[trigger] concat(rows)[j], n) by {
+            if j < concat(pre).len() {
+                assert(concat(rows)[j] == concat(pre)[j]);
             } else {
-                assert(flat(rows)[j] == last[j - flat(pre).len()]);
+                assert(concat(rows)[j] == last[j - concat(pre).len()]);
             }
         }
     }

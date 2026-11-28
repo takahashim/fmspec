@@ -41,20 +41,6 @@ verus! {
 
 // ---- Listの長さの上限 ----
 
-proof fn lemma_smalls_at(ts: Seq<STy>, i: int)
-    requires
-        smalls(ts),
-        0 <= i < ts.len(),
-    ensures
-        small(ts[i]),
-    decreases ts.len(),
-{
-    if i < ts.len() - 1 {
-        assert(ts.drop_last()[i] == ts[i]);
-        lemma_smalls_at(ts.drop_last(), i);
-    }
-}
-
 proof fn lemma_smalls(ts: Seq<STy>)
     requires
         forall|i: int| 0 <= i < ts.len() ==> small(#[trigger] ts[i]),
