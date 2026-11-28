@@ -25,6 +25,7 @@ use fmspec_core::kernel::model::Type;
 use fmspec_core::value::encoding::SType as CoreSType;
 use fmspec_core::value::rank_code::{rank_codes, unrank_codes};
 use fmspec_core::value::stype_exec::{keys_exec, stype_width};
+use fmspec_core::value::val_codec::{decode_val, encode_val, Val};
 
 /// Setの要素の型と、Mapのキーの型が取れる値の数の上限。
 pub const MAX_KEYS: u64 = fmspec_core::value::encoding::MAX_KEYS;
@@ -148,6 +149,18 @@ impl SType {
     /// 中核の [`rank_codes`] で求める（値の符号化なら、値の番号であることが証明されている）。
     pub fn rank(&self, enums: &[EnumNames], codes: &[i64]) -> Option<u64> {
         rank_codes(&self.core_stype(), &label_counts(enums), &codes.to_vec())
+    }
+
+    /// 値の木の符号の列。木の形が型に合わないか、Setの要素やMapのキーが型に属さないか重複していれば `None`。
+    /// 中核の [`encode_val`] で求める（結果が値の符号化であることが証明されている）。
+    pub fn encode(&self, enums: &[EnumNames], v: &Val) -> Option<Vec<i64>> {
+        encode_val(&self.core_stype(), &label_counts(enums), v)
+    }
+
+    /// 符号の列の値の木。正規形の符号化でなければ `None`。
+    /// 中核の [`decode_val`] で求める（元の列が、結果の値の符号化であることが証明されている）。
+    pub fn decode(&self, enums: &[EnumNames], codes: &[i64]) -> Option<Val> {
+        decode_val(&self.core_stype(), &label_counts(enums), &codes.to_vec())
     }
 
     /// 値の数、幅、番号の計算に使う中核の型。Recordのフィールドの名前はこれらに関わらないので、位置の番号を付ける。
