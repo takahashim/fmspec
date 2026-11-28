@@ -146,6 +146,10 @@ pub open spec fn c_write(u: Update, env: Env, enums: Seq<i64>, acc: Seq<i64>) ->
 }
 
 /// 中核の更新の列を、記述の順に適用する。
+///
+/// [`crate::step::apply_updates`]（操作の更新を添字で数える）を、更新の列だけで書き直したもの。
+/// 代入の下ろしは代入ごとに更新の列を作ってつなぐので、列の連結（[`lemma_c_apply_concat`]）を示しやすい
+/// この形で証明し、`lemma_apply_c`（`crate::action_lower`）で `apply_updates` に結びつける。
 pub open spec fn c_apply(ups: Seq<Update>, env: Env, enums: Seq<i64>, acc: Seq<i64>) -> Option<Seq<i64>>
     decreases ups.len(),
 {

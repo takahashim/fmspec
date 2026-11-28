@@ -6,6 +6,7 @@
 use crate::evidence::{Certificate, Claim, Evidence, TraceStep};
 use crate::gate::Verdict;
 use crate::model::{Action, Contract, Expr, Output, RawModel, Update};
+use crate::refine::{RefClaim, RefEvidence, RefVerdict};
 use crate::semantics::Conditions;
 use crate::step::{Enumerated, Transition};
 use core::fmt;
@@ -302,6 +303,72 @@ impl fmt::Debug for Verdict {
             .field("kind", &self.kind())
             .field("reject", &self.reject())
             .field("invalid", &self.invalid())
+            .field("limit", &self.limit())
+            .finish()
+    }
+}
+
+impl Clone for RefClaim {
+    fn clone(&self) -> Self {
+        match self {
+            RefClaim::Init => RefClaim::Init,
+            RefClaim::Step => RefClaim::Step,
+            RefClaim::Map(slot, e) => RefClaim::Map(*slot, *e),
+            RefClaim::Model(c) => RefClaim::Model(c.clone()),
+        }
+    }
+}
+
+impl PartialEq for RefClaim {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (RefClaim::Init, RefClaim::Init) => true,
+            (RefClaim::Step, RefClaim::Step) => true,
+            (RefClaim::Map(a, e), RefClaim::Map(b, f)) => a == b && e == f,
+            (RefClaim::Model(a), RefClaim::Model(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for RefClaim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RefClaim::Init => f.write_str("Init"),
+            RefClaim::Step => f.write_str("Step"),
+            RefClaim::Map(slot, e) => f.debug_tuple("Map").field(slot).field(e).finish(),
+            RefClaim::Model(c) => f.debug_tuple("Model").field(c).finish(),
+        }
+    }
+}
+
+impl Clone for RefEvidence {
+    fn clone(&self) -> Self {
+        match self {
+            RefEvidence::Certificate(c) => RefEvidence::Certificate(c.clone()),
+            RefEvidence::Trace(start, steps, claim) => RefEvidence::Trace(start.clone(), steps.clone(), claim.clone()),
+            RefEvidence::Unavailable(limit) => RefEvidence::Unavailable(*limit),
+        }
+    }
+}
+
+impl fmt::Debug for RefEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RefEvidence::Certificate(c) => f.debug_tuple("Certificate").field(c).finish(),
+            RefEvidence::Trace(start, steps, claim) => {
+                f.debug_tuple("Trace").field(start).field(steps).field(claim).finish()
+            }
+            RefEvidence::Unavailable(limit) => f.debug_tuple("Unavailable").field(limit).finish(),
+        }
+    }
+}
+
+impl fmt::Debug for RefVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefVerdict")
+            .field("kind", &self.kind())
+            .field("reject", &self.reject())
             .field("limit", &self.limit())
             .finish()
     }

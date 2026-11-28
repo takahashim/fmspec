@@ -92,7 +92,7 @@ pub fn map_slot_indices(rows: usize, payload_width: usize, column: usize, len: u
 
 /// 平衡した二分木の `ite` を作る。葉は右から順に取り出す。
 #[verifier::spinoff_prover]
-fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (out: Expr)
+fn select_by_rank(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (out: Expr)
     requires
         lo < hi == old(column)@.len(),
         hi <= i64::MAX,
@@ -122,8 +122,8 @@ fn select(column: &mut Vec<Expr>, lo: usize, hi: usize, rank_local: usize) -> (o
         out
     } else {
         let mid = lo + (hi - lo) / 2;
-        let right = select(column, mid, hi, rank_local);
-        let left = select(column, lo, mid, rank_local);
+        let right = select_by_rank(column, mid, hi, rank_local);
+        let left = select_by_rank(column, lo, mid, rank_local);
         let cond = Expr::Bin(
             BinOp::Lt,
             Box::new(Expr::Local(rank_local)),
@@ -197,7 +197,7 @@ pub fn select_map_slot(column: Vec<Expr>, rank_local: usize, fallback: Expr) -> 
     if len == 0 || len as u128 > i64::MAX as u128 {
         fallback
     } else {
-        select(&mut column, 0, len, rank_local)
+        select_by_rank(&mut column, 0, len, rank_local)
     }
 }
 
