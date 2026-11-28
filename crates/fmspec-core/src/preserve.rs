@@ -855,8 +855,6 @@ pub open spec fn ranks_pure(parts: Seq<(Expr, i64)>, n: nat) -> bool {
     forall|k: int| 0 <= k < parts.len() ==> pure_below(#[trigger] parts[k].0, n)
 }
 
-// ---- 型の適合 ----
-
 // ---- 環境の対応 ----
 
 /// 位置 `l` の符号化列 `xs` が、値 `v` の正規形の符号化である。
@@ -1344,8 +1342,6 @@ pub fn pure_exec(e: &Expr, n: usize) -> (r: bool)
     }
 }
 
-
-// ---- 値の表現の混合 ----
 
 // ---- 単独に評価するスロット ----
 

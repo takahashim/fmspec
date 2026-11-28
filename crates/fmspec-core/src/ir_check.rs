@@ -1,4 +1,4 @@
-//! IRのJSONと、名前を解決したモデルの対応の検査。
+//! IRのJSONと、名前を解決したモデルの対応の検査。IR検証（[`crate::checked::validate`]）とは別である。
 //!
 //! [`check_ir`] が真を返すなら、[`crate::ir::ir_rel`] が成り立つ。
 //! [`lower_checked`] は、対応を確かめてからモデルを下ろす。

@@ -1,6 +1,6 @@
 //! 下ろしの全域性の前提を、実行時に確かめる検査（計画書 docs/plans/lowering_totality.md の手順7）。
 //!
-//! 式の型の整形式性（[`wf_xtype_exec`]）、型の大きさの条件（[`lim_s_exec`]、[`lim_x_exec`]）、
+//! 型の大きさの条件（[`lim_s_exec`]、[`lim_x_exec`]）、
 //! 式とその部分式の条件（[`check_lim`]）を、仕様と一致する実行関数として持つ。
 
 #[cfg(verus_keep_ghost)]

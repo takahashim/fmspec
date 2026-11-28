@@ -29,20 +29,20 @@ use crate::lower_types::{lemma_slot_tys_len, slot_tys, slot_tys_seq};
 use crate::lowering::{lower_prop, lower_stored};
 use crate::model::{Action, Contract, Expr, RawModel, Type, Value};
 #[cfg(verus_keep_ghost)]
-use crate::model_safe::*;
+use crate::model_safe::{action_low, contract_low, ctx_is, init_ok, init_src, lemma_prop};
+#[cfg(verus_keep_ghost)]
+use crate::model_safe::{lemma_safe, model_ok, prop_low};
 use crate::model_total::check_model;
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, const_ctx, consts_match, lemma_const_ctx, lemma_sa_typed};
 #[cfg(verus_keep_ghost)]
-use crate::model_total::{lemma_state_ctx, model_typed, out_sty, st_ctx, tys_ok};
+use crate::model_total::{lemma_state_ctx, model_typed, out_sty, st_ctx, styped, tys_ok};
 #[cfg(verus_keep_ghost)]
 use crate::model_wf::{action_at, contract_at, lemma_model_frame, sm_wf, wf_frame};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{layouts_ok, lemma_members, stored_result, top_ok};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::{inv_env, safe, Conditions};
-#[cfg(verus_keep_ghost)]
-use crate::smodel::styped;
 use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::{consts_ok, s_cand, s_env, s_init, s_init_var, s_prop, s_safe, s_state_tys};

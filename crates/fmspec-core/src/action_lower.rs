@@ -26,14 +26,14 @@ use crate::model::{Action, Expr, Output, Type, Update};
 #[cfg(verus_keep_ghost)]
 use crate::model::{RawModel, Value};
 #[cfg(verus_keep_ghost)]
-use crate::model_total::sa_typed;
+use crate::model_total::{sa_typed, styped};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{env_rel, layout_ok, prop_result, stored_result, top_ok};
 use crate::smodel::SAction;
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{s_apply, s_env, s_output, s_state_tys, s_step, s_write, SModel, SOutput, SStep};
+use crate::smodel::SUpdate;
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{styped, SUpdate};
+use crate::smodel::{s_apply, s_env, s_output, s_state_tys, s_step, s_write, SModel, SOutput, SStep};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, src_bool, SEnv};
 #[cfg(verus_keep_ghost)]
@@ -337,7 +337,7 @@ pub(crate) fn guard_fold(Ghost(ts): Ghost<Seq<STy>>, la: &Vec<Layout>, body: Exp
         k -= 1;
         proof {
             if lims {
-                crate::smodel::lemma_layout_end(la@, ts, enums@, k as int);
+                crate::lower_ctx::lemma_layout_end(la@, ts, enums@, k as int);
                 assert(layout_at(la@[k as int], ts, k as int, enums@));
                 assert(lim_s(ts[k as int], enums@));
             }

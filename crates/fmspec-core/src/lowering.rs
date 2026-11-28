@@ -57,9 +57,9 @@ use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_elem::{elem_lowers, elem_rank_lowers, lemma_elem_rank, lemma_element};
 #[cfg(verus_keep_ghost)]
-use crate::preserve_list::*;
+use crate::preserve_list::lemma_list_size;
 #[cfg(verus_keep_ghost)]
-use crate::preserve_set::*;
+use crate::preserve_set::{lemma_flags_map, lemma_flags_set, lemma_is_empty, lemma_size};
 #[cfg(verus_keep_ghost)]
 use crate::rows::{flat, ite_row, ite_rows_ok};
 #[cfg(verus_keep_ghost)]

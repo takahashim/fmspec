@@ -227,7 +227,7 @@ pub proof fn lemma_action_frame(sm: SModel, m: RawModel, a: int, cx: LowerCtx)
         assert(block_ok(sa.updates@[u], cx, bs[u]));
         let v = sa.updates@[u].var as int;
         assert(layout_at(st[v], ts, v, enums));
-        crate::smodel::lemma_layout_end(st, ts, enums, v);
+        crate::lower_ctx::lemma_layout_end(st, ts, enums, v);
     }
     assert forall|k: int| 0 <= k < act.updates@.len() implies #[trigger] update_fresh(m, a, k) by {
         assert forall|w: int| 0 <= w < k implies (#[trigger] m.actions@[a].updates@[w]).target

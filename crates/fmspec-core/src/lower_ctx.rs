@@ -1,8 +1,10 @@
 //! 下ろしの文脈（`LowerCtx`）と、束縛の列（`Block`）。下ろしの各モジュールと、その証明が共有する型。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{sty, width_sum, STy};
+use crate::encoding::{sty, width, width_sum, STy};
 use crate::encoding::{SType, XType};
+#[cfg(verus_keep_ghost)]
+use crate::limits::lemma_width_sum_prefix;
 use crate::model::{Expr, Value};
 use crate::typing::ETy;
 use vstd::prelude::*;
@@ -127,6 +129,20 @@ pub open spec fn layouts_at(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>) -> b
     &&& ls.len() == ts.len()
     &&& width_sum(ts, enums) <= usize::MAX
     &&& forall|i: int| 0 <= i < ls.len() ==> #[trigger] layout_at(ls[i], ts, i, enums)
+}
+
+/// 型の列の位置の終わりは、幅の和以下である。
+pub proof fn lemma_layout_end(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>, i: int)
+    requires
+        layouts_at(ls, ts, enums),
+        0 <= i < ls.len(),
+    ensures
+        ls[i].offset + width(ts[i], enums) <= width_sum(ts, enums),
+{
+    assert(layout_at(ls[i], ts, i, enums));
+    assert(ts.take(i + 1).drop_last() =~= ts.take(i));
+    assert(ts.take(i + 1).last() == ts[i]);
+    lemma_width_sum_prefix(ts, enums, i + 1);
 }
 
 } // verus!

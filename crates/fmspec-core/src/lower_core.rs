@@ -187,11 +187,29 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
         tpre(*e, *cx, sc@, _blk.depth_s()) && tok(*cx, sc@, *_blk) ==> ty_post(*cx, *_blk, r),
         r matches Ok((t, slots)) ==> lowers(*e, *cx, sc@, *_blk, *_blk, xty(t), slots@),
 {
+    match e {
+        TExpr::Lit(_) => low_lit(e, cx, sc, _blk),
+        TExpr::Var(_) | TExpr::Next(_) => low_state(e, cx, sc, _blk),
+        TExpr::Arg(_) | TExpr::Out => low_arg(e, cx, sc, _blk),
+        TExpr::Local(_) | TExpr::Const(_) => low_named(e, cx, sc, _blk),
+        _ => Err(Fail::Type),
+    }
+}
+
+/// リテラルの下ろし（[`low_leaf`] の枝）。束縛を加えない。
+#[verifier::spinoff_prover]
+#[verifier::rlimit(40)]
+fn low_lit(e: &TExpr, cx: &LowerCtx, _sc: &Vec<Bound>, _blk: &Block) -> (r: Result<(XType, Vec<Expr>), Fail>)
+    requires
+        _blk.wf(),
+        e is Lit,
+    ensures
+        tpre(*e, *cx, _sc@, _blk.depth_s()) ==> low_post(*e, *cx, _sc@, _blk.depth_s(), r),
+        tpre(*e, *cx, _sc@, _blk.depth_s()) && tok(*cx, _sc@, *_blk) ==> ty_post(*cx, *_blk, r),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, _sc@, *_blk, *_blk, xty(t), slots@),
+{
     let enums = &cx.enums;
-    let ghost pre = tpre(*e, *cx, sc@, _blk.depth_s());
-    let ghost c = sctx(*cx);
-    let ghost bt = bound_tys(sc@);
-    let ghost tp = tpre(*e, *cx, sc@, _blk.depth_s()) && tok(*cx, sc@, *_blk);
+    let ghost tp = tpre(*e, *cx, _sc@, _blk.depth_s()) && tok(*cx, _sc@, *_blk);
     let ghost tv = lenv(*cx);
     let ghost lt = blt(*_blk, *cx);
     match e {
@@ -213,7 +231,7 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
                     assert(has_ty(out@[0], tv, lt, xetys(xty(t), enums@)[0]));
                 }
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-                    #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
+                    #[trigger] ctx_ok(*cx, _sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
                     eval_src(*e, se, sls),
                     run(fresh(*_blk, *_blk), env, ls),
                     out@,
@@ -227,6 +245,28 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
             }
             Ok((t, out))
         },
+        _ => Err(Fail::Type),
+    }
+}
+
+/// 状態変数の参照（遷移前と遷移後）の下ろし（[`low_leaf`] の枝）。束縛を加えない。
+#[verifier::spinoff_prover]
+#[verifier::rlimit(40)]
+fn low_state(e: &TExpr, cx: &LowerCtx, _sc: &Vec<Bound>, _blk: &Block) -> (r: Result<(XType, Vec<Expr>), Fail>)
+    requires
+        _blk.wf(),
+        e is Var || e is Next,
+    ensures
+        tpre(*e, *cx, _sc@, _blk.depth_s()) ==> low_post(*e, *cx, _sc@, _blk.depth_s(), r),
+        tpre(*e, *cx, _sc@, _blk.depth_s()) && tok(*cx, _sc@, *_blk) ==> ty_post(*cx, *_blk, r),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, _sc@, *_blk, *_blk, xty(t), slots@),
+{
+    let enums = &cx.enums;
+    let ghost pre = tpre(*e, *cx, _sc@, _blk.depth_s());
+    let ghost tp = tpre(*e, *cx, _sc@, _blk.depth_s()) && tok(*cx, _sc@, *_blk);
+    let ghost tv = lenv(*cx);
+    let ghost lt = blt(*_blk, *cx);
+    match e {
         TExpr::Var(i) | TExpr::Next(i) => {
             let states = match &cx.states {
                 Some(s) => s,
@@ -262,7 +302,7 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
             }
             proof {
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-                    #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
+                    #[trigger] ctx_ok(*cx, _sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
                     eval_src(*e, se, sls),
                     run(fresh(*_blk, *_blk), env, ls),
                     out@,
@@ -302,6 +342,28 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
             }
             Ok((t, out))
         },
+        _ => Err(Fail::Type),
+    }
+}
+
+/// 引数と出力の参照の下ろし（[`low_leaf`] の枝）。束縛を加えない。
+#[verifier::spinoff_prover]
+#[verifier::rlimit(40)]
+fn low_arg(e: &TExpr, cx: &LowerCtx, _sc: &Vec<Bound>, _blk: &Block) -> (r: Result<(XType, Vec<Expr>), Fail>)
+    requires
+        _blk.wf(),
+        e is Arg || e is Out,
+    ensures
+        tpre(*e, *cx, _sc@, _blk.depth_s()) ==> low_post(*e, *cx, _sc@, _blk.depth_s(), r),
+        tpre(*e, *cx, _sc@, _blk.depth_s()) && tok(*cx, _sc@, *_blk) ==> ty_post(*cx, *_blk, r),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, _sc@, *_blk, *_blk, xty(t), slots@),
+{
+    let enums = &cx.enums;
+    let ghost pre = tpre(*e, *cx, _sc@, _blk.depth_s());
+    let ghost tp = tpre(*e, *cx, _sc@, _blk.depth_s()) && tok(*cx, _sc@, *_blk);
+    let ghost tv = lenv(*cx);
+    let ghost lt = blt(*_blk, *cx);
+    match e {
         TExpr::Arg(i) => {
             if *i >= cx.args.len() {
                 return Err(Fail::Type);
@@ -321,7 +383,7 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
             }
             proof {
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-                    #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
+                    #[trigger] ctx_ok(*cx, _sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
                     eval_src(*e, se, sls),
                     run(fresh(*_blk, *_blk), env, ls),
                     out@,
@@ -368,7 +430,7 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
                     assert(has_ty(out@[0], tv, lt, xetys(xty(t), enums@)[0]));
                 }
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
-                    #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
+                    #[trigger] ctx_ok(*cx, _sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
                     eval_src(*e, se, sls),
                     run(fresh(*_blk, *_blk), env, ls),
                     out@,
@@ -385,6 +447,30 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
             }
             Ok((t, out))
         },
+        _ => Err(Fail::Type),
+    }
+}
+
+/// 局所変数と名前付きの定数の参照の下ろし（[`low_leaf`] の枝）。束縛を加えない。
+#[verifier::spinoff_prover]
+#[verifier::rlimit(40)]
+fn low_named(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) -> (r: Result<(XType, Vec<Expr>), Fail>)
+    requires
+        _blk.wf(),
+        e is Local || e is Const,
+    ensures
+        tpre(*e, *cx, sc@, _blk.depth_s()) ==> low_post(*e, *cx, sc@, _blk.depth_s(), r),
+        tpre(*e, *cx, sc@, _blk.depth_s()) && tok(*cx, sc@, *_blk) ==> ty_post(*cx, *_blk, r),
+        r matches Ok((t, slots)) ==> lowers(*e, *cx, sc@, *_blk, *_blk, xty(t), slots@),
+{
+    let ghost enums = cx.enums@;
+    let ghost pre = tpre(*e, *cx, sc@, _blk.depth_s());
+    let ghost c = sctx(*cx);
+    let ghost bt = bound_tys(sc@);
+    let ghost tp = tpre(*e, *cx, sc@, _blk.depth_s()) && tok(*cx, sc@, *_blk);
+    let ghost tv = lenv(*cx);
+    let ghost lt = blt(*_blk, *cx);
+    match e {
         TExpr::Local(i) => {
             if *i >= sc.len() {
                 return Err(Fail::Type);
@@ -392,14 +478,14 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
             let t = copy_xtype(&sc[*i].ty);
             proof {
                 if pre {
-                    assert(ok_x(xty(sc@[*i as int].ty), enums@));
+                    assert(ok_x(xty(sc@[*i as int].ty), enums));
                     assert(bt[*i as int] == xty(sc@[*i as int].ty));
                 }
             }
             let out = copy_exprs(&sc[*i].slots);
             proof {
                 if tp {
-                    assert(typed(sc@[*i as int].slots@, xetys(xty(sc@[*i as int].ty), enums@), tv, lt));
+                    assert(typed(sc@[*i as int].slots@, xetys(xty(sc@[*i as int].ty), enums), tv, lt));
                 }
                 assert forall|env: Env, se: SEnv, ls: Seq<Value>, sls: Seq<SVal>|
                     #[trigger] ctx_ok(*cx, sc@, env, se, ls, sls) && ls.len() == _blk.depth_s() implies result_ok(
@@ -440,14 +526,14 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
                 lemma_lits(c.slots@, arbitrary(), Seq::empty());
                 assert(c.slots@.take(c.slots@.len() as int) =~= c.slots@);
                 assert(all_pure(out@, _blk.depth_s()));
-                lemma_xwidth_of(sty(c.ty), enums@);
+                lemma_xwidth_of(sty(c.ty), enums);
                 if pre {
-                    assert(ok_s(sty(cx.consts@[*i as int].ty), enums@));
+                    assert(ok_s(sty(cx.consts@[*i as int].ty), enums));
                 }
                 if tp {
-                    assert(crate::lower_types::in_slots(c.slots@, slot_tys(sty(c.ty), enums@), enums@));
-                    lemma_lits_typed(c.slots@, slot_tys(sty(c.ty), enums@), tv, lt);
-                    lemma_xetys_of(sty(c.ty), enums@);
+                    assert(crate::lower_types::in_slots(c.slots@, slot_tys(sty(c.ty), enums), enums));
+                    lemma_lits_typed(c.slots@, slot_tys(sty(c.ty), enums), tv, lt);
+                    lemma_xetys_of(sty(c.ty), enums);
                 }
             }
             proof {
@@ -463,9 +549,9 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
                 ) by {
                     lemma_fresh_refl(*_blk);
                     let v = se.consts[*i as int];
-                    assert(member(v, sty(c.ty), enums@) && c.slots@ == enc(v, sty(c.ty), enums@));
+                    assert(member(v, sty(c.ty), enums) && c.slots@ == enc(v, sty(c.ty), enums));
                     lemma_lits(c.slots@, env, ls);
-                    lemma_models_enc(v, sty(c.ty), enums@);
+                    lemma_models_enc(v, sty(c.ty), enums);
                 }
             }
             Ok((t, out))
@@ -473,6 +559,7 @@ pub(crate) fn low_leaf(e: &TExpr, cx: &LowerCtx, sc: &Vec<Bound>, _blk: &Block) 
         _ => Err(Fail::Type),
     }
 }
+
 
 /// リテラル、参照、スカラーの演算、短絡する演算、`let`。
 #[verifier::spinoff_prover]

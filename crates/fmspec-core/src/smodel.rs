@@ -5,26 +5,18 @@
 //! 中核のモデルの定義（[`crate::semantics`]）と同じ形で値の上に定める。
 //!
 //! 中核の状態は、状態変数ごとの値の正規形の符号化をつなげた符号の列である。
-//! 中核の符号の列と値の列の対応は [`rel`] で、各状態変数のスロットが値の符号化になっていることである。
+//! 中核の符号の列と値の列の対応は [`crate::srel::rel`] で、各状態変数のスロットが値の符号化になっていることである。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{member, members, sty, stys, width, width_sum, STy, XTy};
+use crate::encoding::{member, members, sty, stys, STy};
 use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::ErrKind;
-#[cfg(verus_keep_ghost)]
-use crate::infer::{ir_type_of, SCtx};
-#[cfg(verus_keep_ghost)]
-use crate::limits::lemma_width_sum_prefix;
-#[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{layout_at, layouts_at, Layout};
 #[cfg(verus_keep_ghost)]
 use crate::semantics::Conditions;
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, src_bool, SEnv};
-#[cfg(verus_keep_ghost)]
-use crate::total::lim_ok;
 use vstd::prelude::*;
 
 verus! {
@@ -353,39 +345,6 @@ pub open spec fn s_state_safe(sm: SModel, cv: Seq<SVal>, c: Conditions, s: Seq<S
 /// 値の上の安全性。到達できるすべての状態と有効な遷移が性質を満たし、評価エラーがない。
 pub open spec fn s_safe(sm: SModel, cv: Seq<SVal>, c: Conditions) -> bool {
     forall|s: Seq<SVal>, n: nat| #[trigger] s_reach(sm, cv, c, s, n) ==> s_state_safe(sm, cv, c, s)
-}
-
-// ---- 符号の列と値の列の対応 ----
-
-// ---- 中核の更新の列 ----
-
-// ---- 引数の正規形 ----
-
-// ---- 代入の下ろし ----
-
-// ---- 出力の下ろし ----
-
-// ---- 操作の下ろし ----
-
-// ---- 遷移の対応 ----
-
-/// 局所変数のない文脈で、式が型 `x` を持ち、大きさの条件を満たす。
-pub open spec fn styped(e: TExpr, c: SCtx, x: XTy) -> bool {
-    ir_type_of(e, c, Seq::empty()) == Some(x) && lim_ok(e, c, Seq::empty())
-}
-
-/// 型の列の位置の終わりは、幅の和以下である。
-pub proof fn lemma_layout_end(ls: Seq<Layout>, ts: Seq<STy>, enums: Seq<i64>, i: int)
-    requires
-        layouts_at(ls, ts, enums),
-        0 <= i < ls.len(),
-    ensures
-        ls[i].offset + width(ts[i], enums) <= width_sum(ts, enums),
-{
-    assert(layout_at(ls[i], ts, i, enums));
-    assert(ts.take(i + 1).drop_last() =~= ts.take(i));
-    assert(ts.take(i + 1).last() == ts[i]);
-    lemma_width_sum_prefix(ts, enums, i + 1);
 }
 
 } // verus!

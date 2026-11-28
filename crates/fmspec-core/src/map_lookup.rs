@@ -7,7 +7,7 @@ use crate::expr_build::{all_pure, pure_below};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::{all_ty, col_ty, has_ty, typed};
-use crate::model::*;
+use crate::model::{BinOp, Expr, Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{eval_bindings, eval_bound_body};
 #[cfg(verus_keep_ghost)]

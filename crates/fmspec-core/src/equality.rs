@@ -551,17 +551,6 @@ pub open spec fn eq_ok(t: XTy, x: Seq<Expr>, y: Seq<Expr>, c: Expr, enums: Seq<i
             == Ok::<Value, ErrKind>(Value::Bool(vx == vy))
 }
 
-/// 等しさの式は、両辺に型が付けば Bool の型を持つ。
-pub proof fn lemma_eq_ok_typed(t: XTy, x: Seq<Expr>, y: Seq<Expr>, c: Expr, enums: Seq<i64>, tv: TyEnv, lt: Seq<ETy>)
-    requires
-        eq_ok(t, x, y, c, enums),
-        typed(x, xetys(t, enums), tv, lt),
-        typed(y, xetys(t, enums), tv, lt),
-    ensures
-        has_ty(c, tv, lt, ETy::Bool),
-{
-}
-
 /// 組の各部分の等しさの式をすべて満たすことは、組の等しさである。
 pub open spec fn eq_seq_ok(ts: Seq<XTy>, x: Seq<Expr>, y: Seq<Expr>, c: Expr, enums: Seq<i64>) -> bool {
     &&& forall|n: nat| all_pure(x, n) && all_pure(y, n) ==> #[trigger] pure_below(c, n)

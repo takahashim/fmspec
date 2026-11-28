@@ -10,23 +10,23 @@ use crate::encoding::{width_sum, xty, xtys, XTy};
 use crate::encoding::{SType, XType};
 use crate::infer::{check, Scope};
 #[cfg(verus_keep_ghost)]
-use crate::infer::{scope_view, SCtx};
+use crate::infer::{ir_type_of, scope_view, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lim;
 #[cfg(verus_keep_ghost)]
-use crate::lower_ctx::{layout_at, layouts_at, Constant, Layout, LowerCtx};
+use crate::lower_ctx::{layout_at, layouts_at, lemma_layout_end, Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::layout_tys;
-use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{lemma_layout_end, styped, SAction};
+use crate::smodel::SAction;
+use crate::smodel::SModel;
 use crate::source::TExpr;
 #[cfg(verus_keep_ghost)]
 use crate::srel::consts_rel;
 use crate::state_enc::copy_vec;
 use crate::stype_exec::{copy_stype, wf_stype_exec, xtype_eq};
 #[cfg(verus_keep_ghost)]
-use crate::total::{const_tys, cx_wf, layout_wf, ok_s, sctx};
+use crate::total::{const_tys, cx_wf, layout_wf, lim_ok, ok_s, sctx};
 use crate::total_check::{cap_s, check_lim, lim_s_exec};
 #[cfg(verus_keep_ghost)]
 use crate::total_check::{capped, lemma_capped_add};
@@ -668,6 +668,11 @@ pub proof fn lemma_state_ctx(sm: SModel, cv: Seq<SVal>, cx: LowerCtx, ats: Seq<S
     lemma_consts_wf(sm, cv, cx.consts@);
     lemma_layouts_wf(cx.states->Some_0@, stys(sm.states@), sm.enums@);
     lemma_layouts_wf(cx.args@, ats, sm.enums@);
+}
+
+/// 局所変数のない文脈で、式が型 `x` を持ち、大きさの条件を満たす。
+pub open spec fn styped(e: TExpr, c: SCtx, x: XTy) -> bool {
+    ir_type_of(e, c, Seq::empty()) == Some(x) && lim_ok(e, c, Seq::empty())
 }
 
 } // verus!

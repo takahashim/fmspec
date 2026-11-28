@@ -1,4 +1,4 @@
-//! 要素とキーの下ろしと、Mapの演算の下ろしが意味を保存することの補題。
+//! Mapの演算の下ろしが意味を保存することの補題。要素とキーの下ろしの補題は [`crate::preserve_elem`] にある。
 //!
 //! 下ろしの実装は [`crate::lowering`] にある。
 
@@ -29,7 +29,7 @@ use crate::preserve::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_elem::{elem_lowers, elem_rank_lowers};
 #[cfg(verus_keep_ghost)]
-use crate::preserve_set::*;
+use crate::preserve_set::lemma_set_contains;
 #[cfg(verus_keep_ghost)]
 use crate::rows::{flat, head_at, heads_ok, ite_rows_ok, lemma_enc_rows_index, mparts_ok, row_slots};
 #[cfg(verus_keep_ghost)]

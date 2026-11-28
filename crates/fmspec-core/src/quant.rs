@@ -729,6 +729,4 @@ pub proof fn lemma_select_prefix(dom: Seq<SVal>, m: nat, len: nat)
     }
 }
 
-// ---- 番号を順にたどる量化と、値を順にたどる量化 ----
-
 } // verus!
