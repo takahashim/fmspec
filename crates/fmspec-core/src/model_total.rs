@@ -17,13 +17,13 @@ use crate::limits::lim;
 use crate::lower_ctx::{layout_at, layouts_at, Constant, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::lower_types::layout_tys;
-#[cfg(verus_keep_ghost)]
-use crate::model_safe::consts_rel;
 use crate::smodel::SModel;
 #[cfg(verus_keep_ghost)]
 use crate::smodel::{lemma_layout_end, styped, SAction};
 use crate::source::TExpr;
-use crate::step::copy_vec;
+#[cfg(verus_keep_ghost)]
+use crate::srel::consts_rel;
+use crate::state_enc::copy_vec;
 use crate::stype_exec::{copy_stype, wf_stype_exec, xtype_eq};
 #[cfg(verus_keep_ghost)]
 use crate::total::{const_tys, cx_wf, layout_wf, ok_s, sctx};

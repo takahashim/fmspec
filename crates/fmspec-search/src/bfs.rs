@@ -12,8 +12,8 @@
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, TraceStep};
-use fmspec_core::gate::CheckedModel;
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Enumerated;
 use hashbrown::HashTable;

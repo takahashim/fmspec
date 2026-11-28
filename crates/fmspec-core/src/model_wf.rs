@@ -5,6 +5,8 @@
 //! 公開引数のスロットの数が引数のスロットの数以下）を満たすことを前提にする。
 
 #[cfg(verus_keep_ghost)]
+use crate::action_lower::{act_ok, block_ok, flat_ups, upds_ok};
+#[cfg(verus_keep_ghost)]
 use crate::encoding::{sty, stys, wf_stype, wf_stypes, width, width_sum, STy, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{small, smalls};
@@ -19,9 +21,9 @@ use crate::model_safe::{ctx_is, init_ok, init_src, prop_low};
 #[cfg(verus_keep_ghost)]
 use crate::model_total::{action_typed, model_typed};
 #[cfg(verus_keep_ghost)]
-use crate::smodel::{act_ok, block_ok, flat_ups, s_arg_tys, upds_ok, SModel};
+use crate::smodel::{s_arg_tys, SModel};
 #[cfg(verus_keep_ghost)]
-use crate::step::state_ok;
+use crate::state_enc::state_ok;
 #[cfg(verus_keep_ghost)]
 use crate::typing::{type_ok, types_ok, update_fresh};
 use vstd::prelude::*;
@@ -348,7 +350,7 @@ pub proof fn lemma_cx_tok(cx: LowerCtx, cv: Seq<SVal>, ts: Seq<STy>, ats: Seq<ST
         cx.states is Some,
         layouts_at(cx.states->Some_0@, ts, cx.enums@),
         layouts_at(cx.args@, ats, cx.enums@),
-        crate::model_safe::consts_rel(cx.consts@, cv, cx.enums@),
+        crate::srel::consts_rel(cx.consts@, cv, cx.enums@),
     ensures
         crate::lower_types::cx_tok(cx),
 {
@@ -389,7 +391,7 @@ pub proof fn lemma_model_wf(m: RawModel)
     requires
         wf_frame(m),
         forall|a: int|
-            0 <= a < m.actions@.len() ==> #[trigger] crate::smodel::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)),
+            0 <= a < m.actions@.len() ==> #[trigger] crate::action_lower::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)),
         forall|i: int|
             0 <= i < m.invariants@.len() ==> #[trigger] crate::lower_types::has_ty(
                 m.invariants@[i],
@@ -415,7 +417,7 @@ pub proof fn lemma_model_wf(m: RawModel)
 {
     assert forall|a: int| 0 <= a < m.actions@.len() implies #[trigger] crate::typing::action_wf(m, a) by {
         assert(action_frame(m, a));
-        assert(crate::smodel::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)));
+        assert(crate::action_lower::act_typed(m.actions@[a], crate::typing::act_tyenv(m, a)));
         assert forall|u: int| 0 <= u < m.actions@[a].updates@.len() implies #[trigger] crate::typing::update_wf(m, a, u) by {
             assert(m.actions@[a].updates@[u].target < m.state_types@.len());
         }
@@ -492,7 +494,7 @@ pub proof fn lemma_con_env(
     let a = sm.contracts@[k].action as int;
     lemma_layout_tys_eq(stg, stys(sm.states@), sm.enums@);
     lemma_layout_tys_eq(kx.args@, crate::smodel::s_arg_tys(sm, a), sm.enums@);
-    assert(crate::smodel::out_ok(sm.actions@[a].output, cx, m.actions@[a].output));
+    assert(crate::action_lower::out_ok(sm.actions@[a].output, cx, m.actions@[a].output));
     lemma_same_env(crate::lower_types::lenv(kx), crate::typing::con_tyenv(m, a));
 }
 

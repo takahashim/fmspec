@@ -58,6 +58,9 @@ use crate::preserve_elem::{elem_lowers, elem_rank_lowers, lemma_elem_rank, lemma
 use crate::preserve_list::*;
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::*;
+#[cfg(verus_keep_ghost)]
+use crate::slot_store::store_ok;
+use crate::slot_store::{rank_expr, rank_or_neg, store};
 use crate::slots::*;
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv};

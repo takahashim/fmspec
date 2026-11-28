@@ -6,9 +6,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use fmspec_core::checked::{validate, CheckedModel};
 use fmspec_core::eval::ErrKind;
 use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
-use fmspec_core::gate::{decide, validate, CheckedModel, VerdictKind};
+use fmspec_core::gate::{decide, VerdictKind};
 use fmspec_core::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
 use fmspec_core::semantics::Conditions;
 use fmspec_core::step::Site;

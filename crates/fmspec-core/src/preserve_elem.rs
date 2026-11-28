@@ -23,7 +23,9 @@ use crate::preserve::{lemma_extends_trans, lemma_fresh_refl, lemma_one, lemma_pr
 #[cfg(verus_keep_ghost)]
 use crate::preserve::{lemma_run_fresh, lemma_run_fresh_ok, lemma_run_len, lemma_run_one, lowers};
 #[cfg(verus_keep_ghost)]
-use crate::preserve::{prefix, rank_spec, run, slot_vals, store_ok, store_spec};
+use crate::preserve::{prefix, run, slot_vals};
+#[cfg(verus_keep_ghost)]
+use crate::slot_store::{rank_spec, store_ok, store_spec};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_src, SEnv, TExpr, FAIL_NOT_IN_DOMAIN};
 use vstd::prelude::*;

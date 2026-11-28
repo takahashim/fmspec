@@ -8,8 +8,8 @@ use crate::bfs::{BfsOptions, Stats};
 use crate::check::Internal;
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::evidence::{Certificate, Claim, Limit, TraceStep};
-use fmspec_core::gate::CheckedModel;
 use fmspec_core::model::Expr;
 use fmspec_core::refine::{
     decide_refinement, find_move, map_state, Mapped, Move, RefClaim, RefEvidence, RefVerdict, RefVerdictOutcome,

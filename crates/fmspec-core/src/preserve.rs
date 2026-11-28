@@ -12,13 +12,11 @@
 //! そのため、後に束縛を加えても値は変わらない（[`lemma_weaken`]）。
 
 #[cfg(verus_keep_ghost)]
-use crate::encoding::xwidth_sum;
+use crate::encoding::{default_val, enc, enc_rows, enc_seq, lemma_default_len, lemma_enc_len};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{default_val, enc, enc_rows, enc_seq, keys, keys_product, lemma_default_len};
+use crate::encoding::{lemma_enc_rows_len, map_rows_member, member, members, models, models_seq};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_enc_len, lemma_enc_rows_len, map_rows_member, member, members, models};
-#[cfg(verus_keep_ghost)]
-use crate::encoding::{models_seq, sty, wf_stype, wf_stypes, width, xty, xwidth, STy, SVal, XTy};
+use crate::encoding::{sty, width, xty, xwidth, xwidth_sum, STy, SVal, XTy};
 #[cfg(verus_keep_ghost)]
 use crate::eval::{as_bool, eval_l, int_result, lookup, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
@@ -26,20 +24,18 @@ use crate::expr_build::{all_pure, and_s, bool_lit, concat, ite_s, join_s, lits, 
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::{pure_below, tree_s, xoff};
 #[cfg(verus_keep_ghost)]
-use crate::keys::{lemma_rank_in_domain, radix, rank, rank_seq};
+use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
-use crate::limits::{fits_all_s, fits_s, small, smalls};
+use crate::limits::{fits_all_s, fits_s};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::{added, extends, Block, Bound, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
-use crate::lower_types::{has_ty, in_slots, slot_tys, typed, xetys, xetys_seq};
+use crate::lower_types::{in_slots, slot_tys};
 use crate::model::Expr;
 #[cfg(verus_keep_ghost)]
 use crate::model::{Type, Value};
 #[cfg(verus_keep_ghost)]
 use crate::source::{eval_fold, eval_src, of_value, src_bool, to_value, Item, Over, SEnv, TExpr};
-#[cfg(verus_keep_ghost)]
-use crate::typing::{ETy, TyEnv};
 use vstd::prelude::*;
 
 verus! {
@@ -859,229 +855,8 @@ pub proof fn lemma_option_out_pure(tag: Expr, payload: Seq<Expr>, defs: Seq<Expr
     }
 }
 
-/// Optionの正規形のスロットの値。`tag` が `on` のとき、真なら値のスロット、偽なら既定値のスロットを選ぶ。
-pub proof fn lemma_option_out(tag: Expr, payload: Seq<Expr>, defs: Seq<Expr>, out: Seq<Expr>, env: Env, ls: Seq<Value>, on: bool)
-    requires
-        eval_l(tag, env, ls) == Ok::<Value, ErrKind>(Value::Bool(on)),
-        pure_below(tag, ls.len()),
-        on ==> clean(payload, env, ls),
-        all_pure(payload, ls.len()),
-        clean(defs, env, ls),
-        payload.len() == defs.len(),
-        out.len() == 1 + defs.len(),
-        out[0] == tag,
-        forall|j: int| 0 <= j < defs.len() ==> #[trigger] out[1 + j] == ite_s(tag, payload[j], defs[j]),
-    ensures
-        clean(out, env, ls),
-        slot_vals(out, env, ls) == seq![Value::Bool(on)] + if on {
-            slot_vals(payload, env, ls)
-        } else {
-            slot_vals(defs, env, ls)
-        },
-{
-    assert forall|j: int| 0 <= j < out.len() implies pure_below(#[trigger] out[j], ls.len()) && eval_l(out[j], env, ls)
-        == Ok::<Value, ErrKind>((seq![Value::Bool(on)] + if on {
-        slot_vals(payload, env, ls)
-    } else {
-        slot_vals(defs, env, ls)
-    })[j]) by {
-        if j > 0 {
-            assert(out[1 + (j - 1)] == ite_s(tag, payload[j - 1], defs[j - 1]));
-            assert(pure_below(payload[j - 1], ls.len()));
-            assert(pure_below(defs[j - 1], ls.len()));
-            assert(eval_l(defs[j - 1], env, ls) is Ok);
-            if on {
-                assert(eval_l(payload[j - 1], env, ls) is Ok);
-            }
-        }
-    }
-    assert(slot_vals(out, env, ls) =~= seq![Value::Bool(on)] + if on {
-        slot_vals(payload, env, ls)
-    } else {
-        slot_vals(defs, env, ls)
-    });
-}
-
-/// 値を格納の型の場所に置く条件とスロットの意味。
-pub open spec fn store_ok(c: Expr, out: Seq<Expr>, env: Env, ls: Seq<Value>, v: SVal, st: STy, enums: Seq<i64>) -> bool {
-    &&& eval_l(c, env, ls) == Ok::<Value, ErrKind>(Value::Bool(member(v, st, enums)))
-    &&& clean(out, env, ls)
-    &&& slot_vals(out, env, ls) == enc(v, st, enums)
-}
-
-/// [`crate::slots::store`] の結果 `(c, out)` の性質。
-pub open spec fn store_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, c: Expr, out: Seq<Expr>) -> bool {
-    &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(c, n) && all_pure(out, n)
-    &&& forall|tv: TyEnv, lt: Seq<ETy>|
-        fits_s(t, st) && wf_stype(st, enums) && small(st) && tv.enums == enums && #[trigger] typed(
-            slots,
-            xetys(t, enums),
-            tv,
-            lt,
-        ) ==> has_ty(c, tv, lt, ETy::Bool) && typed(out, xetys(t, enums), tv, lt)
-    &&& forall|env: Env, ls: Seq<Value>, v: SVal|
-        fits_s(t, st) && #[trigger] denotes(slots, env, ls, v, t, enums) ==> store_ok(c, out, env, ls, v, st, enums)
-}
-
-/// [`crate::slots::store`] の、TupleとRecordの要素の列についての性質。
-pub open spec fn store_parts_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, enums: Seq<i64>, c: Expr, out: Seq<Expr>) -> bool {
-    &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(c, n) && all_pure(out, n)
-    &&& forall|tv: TyEnv, lt: Seq<ETy>|
-        fits_all_s(xs, ts) && wf_stypes(ts, enums) && smalls(ts) && tv.enums == enums && #[trigger] typed(
-            slots,
-            xetys_seq(xs, enums),
-            tv,
-            lt,
-        ) ==> has_ty(c, tv, lt, ETy::Bool) && typed(out, xetys_seq(xs, enums), tv, lt)
-    &&& forall|env: Env, ls: Seq<Value>, vs: Seq<SVal>|
-        fits_all_s(xs, ts) && clean(slots, env, ls) && #[trigger] models_seq(slot_vals(slots, env, ls), vs, xs, enums)
-            ==> {
-            &&& eval_l(c, env, ls) == Ok::<Value, ErrKind>(Value::Bool(members(vs, ts, enums)))
-            &&& clean(out, env, ls)
-            &&& slot_vals(out, env, ls) == enc_seq(vs, ts, enums)
-        }
-}
-
-/// [`crate::slots::rank_expr`] の結果 `r` の性質。値が型に属し、型がキーの型なら、番号を表す。
-pub open spec fn rank_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, r: Expr) -> bool {
-    &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(r, n)
-    &&& forall|tv: TyEnv, lt: Seq<ETy>|
-        tv.enums == enums && #[trigger] typed(slots, xetys(t, enums), tv, lt) ==> has_ty(r, tv, lt, ETy::Int)
-    &&& forall|env: Env, ls: Seq<Value>, v: SVal|
-        fits_s(t, st) && #[trigger] denotes(slots, env, ls, v, t, enums) && member(v, st, enums) && keys(st, enums) is Some
-            ==> eval_l(r, env, ls) == Ok::<Value, ErrKind>(Value::Int(rank(v, st, enums) as i64))
-}
-
-/// TupleとRecordの要素の列についての、番号の性質。
-pub open spec fn mixed_spec(xs: Seq<XTy>, slots: Seq<Expr>, ts: Seq<STy>, enums: Seq<i64>, r: Expr) -> bool {
-    &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(r, n)
-    &&& forall|tv: TyEnv, lt: Seq<ETy>|
-        tv.enums == enums && #[trigger] typed(slots, xetys_seq(xs, enums), tv, lt) ==> has_ty(r, tv, lt, ETy::Int)
-    &&& forall|env: Env, ls: Seq<Value>, vs: Seq<SVal>|
-        fits_all_s(xs, ts) && clean(slots, env, ls) && #[trigger] models_seq(slot_vals(slots, env, ls), vs, xs, enums)
-            && members(vs, ts, enums) && keys_product(ts, enums) is Some ==> eval_l(r, env, ls) == Ok::<Value, ErrKind>(
-            Value::Int(rank_seq(vs, ts, enums) as i64),
-        )
-}
-
-/// [`crate::slots::rank_or_neg`] の結果 `r` の性質。型に属さなければ -1。
-pub open spec fn rank_neg_spec(t: XTy, slots: Seq<Expr>, st: STy, enums: Seq<i64>, r: Expr) -> bool {
-    &&& forall|n: nat| #[trigger] all_pure(slots, n) ==> pure_below(r, n)
-    &&& forall|tv: TyEnv, lt: Seq<ETy>|
-        fits_s(t, st) && wf_stype(st, enums) && small(st) && tv.enums == enums && #[trigger] typed(
-            slots,
-            xetys(t, enums),
-            tv,
-            lt,
-        ) ==> has_ty(r, tv, lt, ETy::Int)
-    &&& forall|env: Env, ls: Seq<Value>, v: SVal|
-        fits_s(t, st) && #[trigger] denotes(slots, env, ls, v, t, enums) && keys(st, enums) is Some ==> eval_l(r, env, ls)
-            == Ok::<Value, ErrKind>(Value::Int(if member(v, st, enums) {
-            rank(v, st, enums) as i64
-        } else {
-            -1i64
-        }))
-}
-
-/// 値の数の積が `MAX_KEYS` に収まれば、先頭部分の積も収まる。
-pub proof fn lemma_keys_product_prefix(ts: Seq<STy>, i: int, enums: Seq<i64>)
-    requires
-        keys_product(ts, enums) is Some,
-        0 <= i <= ts.len(),
-    ensures
-        keys_product(ts.take(i), enums) is Some,
-        i < ts.len() ==> keys(ts[i], enums) is Some,
-    decreases ts.len(),
-{
-    if i == ts.len() {
-        assert(ts.take(i) =~= ts);
-    } else {
-        lemma_keys_product_prefix(ts.drop_last(), i, enums);
-        assert(ts.drop_last().take(i) =~= ts.take(i));
-        if i < ts.len() - 1 {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-    }
-}
-
 pub open spec fn ranks_pure(parts: Seq<(Expr, i64)>, n: nat) -> bool {
     forall|k: int| 0 <= k < parts.len() ==> pure_below(#[trigger] parts[k].0, n)
-}
-
-/// 要素の番号の式を混合基数の桁として左から順にたたむと、組の番号になる。
-pub proof fn lemma_mixed_eval(
-    parts: Seq<(Expr, i64)>,
-    vs: Seq<SVal>,
-    ts: Seq<STy>,
-    env: Env,
-    ls: Seq<Value>,
-    i: nat,
-    enums: Seq<i64>,
-)
-    requires
-        parts.len() == vs.len(),
-        vs.len() == ts.len(),
-        i <= ts.len(),
-        keys_product(ts, enums) is Some,
-        forall|k: int| 0 <= k < ts.len() ==> #[trigger] member(vs[k], ts[k], enums),
-        forall|k: int|
-            0 <= k < ts.len() ==> #[trigger] eval_l(parts[k].0, env, ls) == Ok::<Value, ErrKind>(
-                Value::Int(rank(vs[k], ts[k], enums) as i64),
-            ) && parts[k].1 as int == radix(ts[k], enums),
-    ensures
-        0 <= rank_seq(vs.take(i as int), ts.take(i as int), enums) < keys_product(ts.take(i as int), enums)->0,
-        mixed_rank_eval(parts, i, env, ls) == Ok::<Value, ErrKind>(
-            Value::Int(rank_seq(vs.take(i as int), ts.take(i as int), enums) as i64),
-        ),
-    decreases i,
-{
-    lemma_keys_product_prefix(ts, i as int, enums);
-    if i == 0 {
-        assert(ts.take(0) =~= Seq::<STy>::empty());
-    } else {
-        let j = i - 1;
-        lemma_mixed_eval(parts, vs, ts, env, ls, j as nat, enums);
-        lemma_keys_product_prefix(ts, j, enums);
-        let v0 = vs.take(j);
-        let t0 = ts.take(j);
-        let v1 = vs.take(i as int);
-        let t1 = ts.take(i as int);
-        assert(v1.drop_last() =~= v0);
-        assert(t1.drop_last() =~= t0);
-        assert(v1.last() == vs[j]);
-        assert(t1.last() == ts[j]);
-        assert(member(vs[j], ts[j], enums));
-        lemma_rank_in_domain(vs[j], ts[j], enums);
-        let rs0 = rank_seq(v0, t0, enums);
-        let kp0 = keys_product(t0, enums)->0 as int;
-        let k = keys(ts[j], enums)->0 as int;
-        let r = rank(vs[j], ts[j], enums);
-        assert(rank_seq(v1, t1, enums) == rs0 * radix(ts[j], enums) + r);
-        assert(radix(ts[j], enums) == k);
-        assert(keys_product(t1, enums) == Some((kp0 * k) as nat));
-        assert(kp0 * k <= 4096);
-        assert(0 <= rs0 * k) by (nonlinear_arith)
-            requires
-                0 <= rs0,
-                0 <= k,
-        ;
-        assert(rs0 * k + r < kp0 * k) by (nonlinear_arith)
-            requires
-                0 <= rs0 < kp0,
-                0 <= r < k,
-        ;
-        if i == 1 {
-            assert(v0 =~= Seq::<SVal>::empty());
-            assert(rs0 == 0);
-            assert(0 * k == 0);
-        } else {
-            assert(rs0 * k <= kp0 * k) by (nonlinear_arith)
-                requires
-                    0 <= rs0 < kp0,
-                    0 <= k,
-            ;
-        }
-    }
 }
 
 /// Mapの行の符号化。有無のBoolと、値（ない行は既定値）の符号化。

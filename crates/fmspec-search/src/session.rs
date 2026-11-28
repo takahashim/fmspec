@@ -19,8 +19,8 @@
 
 use crate::graph;
 use crate::simulate::SplitMix64;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::eval::ErrKind;
-use fmspec_core::gate::CheckedModel;
 use fmspec_core::mbt::{self, Begun, Update};
 pub use fmspec_core::mbt::{Seen, SeenOutput};
 use fmspec_core::semantics::Conditions;

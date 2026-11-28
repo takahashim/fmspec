@@ -13,10 +13,14 @@
 use crate::eval::*;
 use crate::model::*;
 use crate::semantics::*;
+use crate::state_enc::copy_vec;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::{args_ok, encode_spec};
 use crate::state_set::cmp_state;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;
-use crate::step::*;
+#[cfg(verus_keep_ghost)]
+use crate::step::{act_env, all_disabled, apply_updates, step_spec, Step};
 use vstd::prelude::*;
 
 verus! {

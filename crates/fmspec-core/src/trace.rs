@@ -8,6 +8,9 @@ use crate::eval::*;
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::args_ok;
+use crate::state_enc::{vals_ok_exec, vec_eq};
 use crate::step::*;
 use vstd::prelude::*;
 
@@ -365,6 +368,18 @@ pub fn check_trace(m: &RawModel, c: &Conditions, start: &Vec<i64>, steps: &Vec<T
         None
     } else {
         Some(Reject::ClaimNotReproduced)
+    }
+}
+
+pub(crate) fn is_violation_exec(claim: &Claim) -> (r: bool)
+    ensures
+        r == is_violation(*claim),
+{
+    match claim {
+        Claim::Invariant(_) => true,
+        Claim::Contract(_) => true,
+        Claim::Deadlock => true,
+        _ => false,
     }
 }
 

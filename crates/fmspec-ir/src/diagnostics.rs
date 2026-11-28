@@ -2,9 +2,9 @@
 
 use crate::model::{invalid, LoadError, Names};
 use crate::resolve::Constant;
+use fmspec_core::action_lower::{Fault, LowerError};
 use fmspec_core::eval::ErrKind;
 use fmspec_core::model_lower::MAX_INITIAL_CANDIDATES;
-use fmspec_core::smodel::{Fault, LowerError};
 use fmspec_core::typing::InvalidModel;
 
 /// 中核の下ろしの失敗を、読み込みの誤りにする。

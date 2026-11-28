@@ -8,6 +8,9 @@
 use crate::evidence::*;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::args_ok;
+use crate::state_enc::vals_ok_exec;
 use crate::state_set::find;
 #[cfg(verus_keep_ghost)]
 use crate::state_set::in_cert;

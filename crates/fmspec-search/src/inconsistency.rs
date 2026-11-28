@@ -5,7 +5,7 @@
 //! 探索器は不整合を見つけたら探索をやめ、証拠の代わりに不整合を返す。
 //! 検査の経路（`check`、`sample`）は、それを中断や資源上限と区別して `Status::InternalError` にする。
 
-use fmspec_core::gate::CheckedModel;
+use fmspec_core::checked::CheckedModel;
 use fmspec_core::step::Enumerated;
 
 /// 探索器の内部の不整合。

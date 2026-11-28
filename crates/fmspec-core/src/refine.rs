@@ -10,11 +10,14 @@
 //! 写した状態からの `a` の後続も遷移列挙で計算し直す。探索器の記録した対応は使わない。
 
 use crate::cert::*;
+use crate::checked::CheckedModel;
 use crate::eval::*;
 use crate::evidence::*;
-use crate::gate::*;
 use crate::model::*;
 use crate::semantics::*;
+#[cfg(verus_keep_ghost)]
+use crate::state_enc::{args_ok, encode_spec};
+use crate::state_enc::{encode, vec_eq};
 use crate::step::*;
 use crate::trace::*;
 #[cfg(verus_keep_ghost)]
