@@ -6,9 +6,7 @@
 #[cfg(verus_keep_ghost)]
 use crate::kernel::model::Value;
 #[cfg(verus_keep_ghost)]
-use crate::value::encoding::{codes, default_val, enc, enc_rows, lemma_codes_concat, lemma_default_len};
-#[cfg(verus_keep_ghost)]
-use crate::value::encoding::{lemma_enc_len, lemma_map_rows_member_index, map_rows_member, STy, SVal};
+use crate::value::encoding::{codes, default_val, enc, enc_rows, lemma_codes_concat, STy, SVal};
 use vstd::prelude::*;
 
 verus! {
@@ -157,7 +155,7 @@ pub open spec fn rows_encode(rows: Seq<Option<Vec<i64>>>, vals: Seq<Option<SVal>
     }
 }
 
-/// 各行の値の符号が値の符号化で、ない行の値が既定値の符号化なら、行の列の符号はMapの符号化の符号である。
+/// 各行の値の符号が値の符号化で、`default` が既定値の符号化なら、行の列の符号はMapの符号化の符号である。
 pub proof fn lemma_encodes_enc_rows(
     rows: Seq<Option<Vec<i64>>>,
     vals: Seq<Option<SVal>>,
@@ -167,7 +165,7 @@ pub proof fn lemma_encodes_enc_rows(
     flat: Seq<i64>,
 )
     requires
-        map_rows_member(vals, t, enums),
+        prefix_fits(rows, default.len(), rows.len() as int),
         rows_encode(rows, vals, t, enums),
         default == codes(enc(default_val(t, enums), t, enums)),
         encodes_rows(rows, default, flat, rows.len() as int),
@@ -191,7 +189,7 @@ proof fn lemma_encodes_prefix(
 )
     requires
         0 <= n <= rows.len(),
-        map_rows_member(vals, t, enums),
+        prefix_fits(rows, default.len(), rows.len() as int),
         rows_encode(rows, vals, t, enums),
         default == codes(enc(default_val(t, enums), t, enums)),
         encodes_rows(rows, default, flat, rows.len() as int),
@@ -201,6 +199,10 @@ proof fn lemma_encodes_prefix(
 {
     let stride = 1 + default.len() as int;
     if n == 0 {
+        assert(n * stride == 0) by (nonlinear_arith)
+            requires
+                n == 0,
+        ;
         assert(flat.take(0) =~= codes(enc_rows(vals.take(0), t, enums)));
     } else {
         let m = n - 1;
@@ -208,8 +210,6 @@ proof fn lemma_encodes_prefix(
         let vs = vals.take(n);
         assert(vs.drop_last() =~= vals.take(m));
         assert(vs.last() == vals[m]);
-        lemma_map_rows_member_index(vals, t, enums, m);
-        lemma_default_len(t, enums);
         let row = match vals[m] {
             Some(x) => seq![Value::Bool(true)] + enc(x, t, enums),
             None => seq![Value::Bool(false)] + enc(default_val(t, enums), t, enums),
@@ -219,7 +219,6 @@ proof fn lemma_encodes_prefix(
         let rc = row_codes(rows[m], default);
         match vals[m] {
             Some(x) => {
-                lemma_enc_len(x, t, enums);
                 lemma_codes_concat(seq![Value::Bool(true)], enc(x, t, enums));
                 assert(codes(seq![Value::Bool(true)]) =~= seq![1i64]);
                 assert(codes(row) =~= rc);
@@ -241,6 +240,8 @@ proof fn lemma_encodes_prefix(
         }
         assert(b =~= rc);
         assert(flat.take(n * stride) =~= a + b);
+        assert(enc_rows(vs, t, enums) == enc_rows(vals.take(m), t, enums) + row);
+        assert(flat.take(n * stride) =~= codes(enc_rows(vs, t, enums)));
     }
 }
 

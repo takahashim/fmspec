@@ -6,11 +6,14 @@
 //! - [`keys`]：キーの型の値の正規順と番号（仕様）
 //! - [`rank_code`]：`fmspec-ir` が値に付ける番号（u64）の計算
 //! - [`map_encoding`]：キーに番号を付けたあとの、Mapの符号化
+//! - [`default_codes`]：型の既定値の符号の列
+//! - [`val_codec`]：値の木（`Val`）と符号の列の、検証済みの相互の変換
 //! - [`source`]：IRの式の型付き構文木と、値の上の意味論（仕様）
 //! - [`infer`]：IRの式の型付け規則（仕様）と型検査器
 //! - [`limits`]：下ろしが大きさの理由で失敗しないための条件（仕様）
 //! - [`smodel`]：名前を解決したIRのモデルと、値の上の意味論
 
+pub mod default_codes;
 pub mod encoding;
 pub mod fits;
 pub mod infer;
@@ -21,3 +24,4 @@ pub mod rank_code;
 pub mod smodel;
 pub mod source;
 pub mod stype_exec;
+pub mod val_codec;

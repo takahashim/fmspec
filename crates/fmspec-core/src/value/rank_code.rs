@@ -7,10 +7,11 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::kernel::model::Value;
+use crate::value::default_codes::{append, default_codes};
 #[cfg(verus_keep_ghost)]
 use crate::value::encoding::{codes, enc, enc_seq, keys, keys_product, lemma_codes_concat};
 #[cfg(verus_keep_ghost)]
-use crate::value::encoding::{default_val, default_vals, lemma_default_vals_len, sty, width, width_sum, STy};
+use crate::value::encoding::{default_val, sty, width, width_sum, STy};
 #[cfg(verus_keep_ghost)]
 use crate::value::encoding::{lemma_enc_len, lemma_enc_seq_len, lemma_stys, member, members, stys};
 use crate::value::encoding::{SType, SVal};
@@ -466,117 +467,6 @@ pub proof fn lemma_code_rank_seq(vs: Seq<SVal>, ts: Seq<STy>, enums: Seq<i64>)
 
 // ---- 番号から符号の列へ ----
 
-/// キーの型 `t` の既定値の符号を `out` に加える。
-fn push_default_codes(t: &SType, enums: &Vec<i64>, out: &mut Vec<i64>)
-    requires
-        keys(sty(*t), enums@) is Some,
-    ensures
-        final(out)@ == old(out)@ + codes(enc(default_val(sty(*t), enums@), sty(*t), enums@)),
-    decreases t, 1nat,
-{
-    let ghost before = out@;
-    match t {
-        SType::Bool => {
-            out.push(0);
-            proof {
-                assert(out@ =~= before + codes(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
-            }
-        },
-        SType::Int(lo, _) => {
-            out.push(*lo);
-            proof {
-                assert(out@ =~= before + codes(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
-            }
-        },
-        SType::Enum(_) => {
-            out.push(0);
-            proof {
-                assert(out@ =~= before + codes(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
-            }
-        },
-        SType::Tuple(ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            push_default_seq(t, ts, enums, out);
-        },
-        SType::Record(_, ts) => {
-            proof {
-                assert(decreases_to!(*t => *ts));
-            }
-            push_default_seq(t, ts, enums, out);
-        },
-        SType::Option(x) => {
-            out.push(0);
-            let ghost mid = out@;
-            push_default_codes(x, enums, out);
-            proof {
-                let d = enc(default_val(sty(**x), enums@), sty(**x), enums@);
-                lemma_codes_concat(seq![Value::Bool(false)], d);
-                assert(codes(seq![Value::Bool(false)]) =~= seq![0i64]);
-                assert(out@ =~= before + codes(enc(default_val(sty(*t), enums@), sty(*t), enums@)));
-            }
-        },
-        _ => {},
-    }
-}
-
-fn push_default_seq(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>, out: &mut Vec<i64>)
-    requires
-        decreases_to!(*_parent => *ts),
-        keys_product(stys(ts@), enums@) is Some,
-    ensures
-        final(out)@ == old(out)@ + codes(enc_seq(default_vals(stys(ts@), enums@), stys(ts@), enums@)),
-    decreases _parent, 0nat,
-{
-    let ghost all = stys(ts@);
-    let ghost before = out@;
-    proof {
-        lemma_stys(ts@);
-        assert(all.take(0) =~= Seq::<STy>::empty());
-        assert(codes(enc_seq(default_vals(all.take(0), enums@), all.take(0), enums@)) =~= Seq::<i64>::empty());
-        assert(out@ =~= before + Seq::<i64>::empty());
-    }
-    let mut i = 0;
-    while i < ts.len()
-        invariant
-            decreases_to!(*_parent => *ts),
-            i <= ts.len(),
-            all == stys(ts@),
-            all.len() == ts@.len(),
-            forall|j: int| 0 <= j < ts@.len() ==> #[trigger] all[j] == sty(ts@[j]),
-            keys_product(all, enums@) is Some,
-            out@ == before + codes(enc_seq(default_vals(all.take(i as int), enums@), all.take(i as int), enums@)),
-        decreases ts.len() - i,
-    {
-        let ghost mid = out@;
-        proof {
-            vstd::std_specs::vec::axiom_vec_index_decreases(*ts, i as int);
-            lemma_keys_product_prefix(all, i as int, enums@);
-        }
-        push_default_codes(&ts[i], enums, out);
-        proof {
-            let pre = all.take(i as int);
-            let nx = all.take(i + 1);
-            assert(nx.drop_last() =~= pre);
-            assert(nx.last() == all[i as int]);
-            lemma_default_vals_len(nx, enums@);
-            let dv = default_vals(nx, enums@);
-            assert(dv.drop_last() == default_vals(pre, enums@));
-            assert(dv.last() == default_val(all[i as int], enums@));
-            let a = enc_seq(default_vals(pre, enums@), pre, enums@);
-            let b = enc(default_val(all[i as int], enums@), all[i as int], enums@);
-            assert(enc_seq(dv, nx, enums@) == a + b);
-            lemma_codes_concat(a, b);
-            assert(out@ =~= before + codes(enc_seq(dv, nx, enums@)));
-        }
-        i = i + 1;
-    }
-    proof {
-        assert(all.take(i as int) =~= all);
-    }
-}
-
 /// キーの型の、正規順で `r` 番目の値の符号の列。`r` が値の数以上なら `None`。
 /// `enums` は各列挙型のラベルの数。
 pub fn unrank_codes(t: &SType, enums: &Vec<i64>, r: u64) -> (out: Option<Vec<i64>>)
@@ -657,7 +547,8 @@ fn unrank_at(t: &SType, enums: &Vec<i64>, r: u64, out: &mut Vec<i64>) -> (v: Gho
         SType::Option(x) => {
             if r == 0 {
                 out.push(0);
-                push_default_codes(x, enums, out);
+                let d = default_codes(x, enums);
+                append(out, &d);
                 let ghost v = SVal::None;
                 proof {
                     let d = enc(default_val(sty(**x), enums@), sty(**x), enums@);

@@ -180,3 +180,25 @@ fn sets_and_maps_of_non_key_types_are_errors_not_panics() {
     let nested = SType::Set(Box::new(SType::Set(Box::new(SType::Bool))));
     assert!(value_from_json(&[], &nested, &json!([[true]])).is_err());
 }
+
+/// 正規形でない符号の列は値を表さないので、`invalid_slots` として書く。
+#[test]
+fn slots_that_are_not_a_canonical_encoding_are_written_as_invalid() {
+    let m = color_set();
+    // Setの含むかどうかは0か1である。
+    assert_eq!(
+        value_to_json(&m.names, ty(&m), &[0, 2, 0]),
+        json!({"invalid_slots": [0, 2, 0]})
+    );
+    // Mapにないキーの値のスロットは既定値である。
+    let m = color_map();
+    assert_eq!(
+        value_to_json(&m.names, ty(&m), &[0, 1, 0, 0, 0, 0]),
+        json!({"invalid_slots": [0, 1, 0, 0, 0, 0]})
+    );
+    // 幅が型と違う。
+    assert_eq!(
+        value_to_json(&m.names, ty(&m), &[0, 0]),
+        json!({"invalid_slots": [0, 0]})
+    );
+}

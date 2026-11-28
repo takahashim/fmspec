@@ -12,6 +12,9 @@
 //! | Map | `[キー, 値]` の配列。キーの正規順に並べる |
 //! | List | 要素の配列 |
 //!
+//! JSONと符号の列の間は、値の木（中核の `Val`）を通す。ここではJSONと値の木の形の対応だけを扱い、
+//! 値の木と符号の列の変換は、中核の検証済みの関数（`SType::encode`、`SType::decode`）で行う。
+//!
 //! 読み込みは宣言した型に従って行う。整数の範囲は検査しない（判定ゲートが状態の型を検査する）。
 //! ただし、Setの要素とMapのキーは番号に変換するので、型に属さなければ誤りとする。
 //! 読み込みでは順序を問わないが、番号に変換して同じになるSetの要素やMapのキーが重複していれば誤りとする。
@@ -19,7 +22,7 @@
 use crate::model::{EnumNames, Model, Names};
 use crate::types::SType;
 use fmspec_core::kernel::model::Type;
-use fmspec_core::value::map_encoding::encode_map_rows;
+use fmspec_core::value::val_codec::Val;
 use serde_json::{json, Map, Value};
 
 fn enum_name(names: &Names, id: usize) -> &str {
@@ -52,122 +55,73 @@ pub fn type_to_json(names: &Names, ty: &SType) -> Value {
     }
 }
 
-/// 要素の型ごとに、スロットの列を分ける。足りなければ空の列にする。
-fn parts<'s, 'v>(
-    enums: &[EnumNames],
-    tys: impl Iterator<Item = &'s SType>,
-    slots: &'v [i64],
-) -> Vec<(&'s SType, &'v [i64])> {
-    let mut at = 0;
-    tys.map(|t| {
-        let w = t.width(enums);
-        let part = slots.get(at..at + w).unwrap_or(&[]);
-        at += w;
-        (t, part)
-    })
-    .collect()
+/// スロットの列を、型に応じたJSONにする。正規形の符号化でなければ `{"invalid_slots": [...]}`。
+pub fn value_to_json(names: &Names, ty: &SType, slots: &[i64]) -> Value {
+    match ty.decode(&names.enums, slots) {
+        Some(v) => val_to_json(names, ty, &v),
+        None => json!({ "invalid_slots": slots }),
+    }
 }
 
-/// スロットの列を、型に応じたJSONにする。
-pub fn value_to_json(names: &Names, ty: &SType, slots: &[i64]) -> Value {
-    let enums = &names.enums;
-    let x = slots.first().copied().unwrap_or(0);
-    match ty {
-        SType::Bool => Value::Bool(x != 0),
-        SType::Int(_, _) => json!(x),
-        SType::Enum(id) => {
-            let label = usize::try_from(x)
+/// 値の木のJSON。
+fn val_to_json(names: &Names, ty: &SType, v: &Val) -> Value {
+    match (ty, v) {
+        (SType::Bool, Val::Bool(b)) => Value::Bool(*b),
+        (SType::Int(_, _), Val::Int(x)) => json!(x),
+        (SType::Enum(id), Val::Enum(k)) => {
+            let label = usize::try_from(*k)
                 .ok()
                 .and_then(|k| names.enums.get(*id)?.variants.get(k));
             match label {
                 Some(label) => json!(label),
-                None => json!(x),
+                None => json!(k),
             }
         }
-        SType::Tuple(ts) => Value::Array(
-            parts(enums, ts.iter(), slots)
-                .iter()
-                .map(|(t, s)| value_to_json(names, t, s))
-                .collect(),
-        ),
-        SType::Record(fs) => {
-            let values = parts(enums, fs.iter().map(|(_, t)| t), slots);
+        (SType::Tuple(ts), Val::Tuple(vs)) => {
+            Value::Array(ts.iter().zip(vs).map(|(t, v)| val_to_json(names, t, v)).collect())
+        }
+        (SType::Record(fs), Val::Tuple(vs)) => {
             let mut map = Map::new();
-            for ((name, _), (t, s)) in fs.iter().zip(values) {
-                map.insert(name.clone(), value_to_json(names, t, s));
+            for ((name, t), v) in fs.iter().zip(vs) {
+                map.insert(name.clone(), val_to_json(names, t, v));
             }
             Value::Object(map)
         }
-        SType::Option(t) => {
-            if x == 0 {
-                Value::Null
-            } else {
-                json!({"some": value_to_json(names, t, slots.get(1..).unwrap_or(&[]))})
-            }
-        }
-        SType::Set(t) => {
-            let mut out = Vec::new();
-            for (r, bit) in slots.iter().enumerate() {
-                if *bit != 0 {
-                    let codes = t.unrank(enums, r as u64).unwrap_or_default();
-                    out.push(value_to_json(names, t, &codes));
-                }
-            }
-            Value::Array(out)
-        }
-        SType::Map(k, v) => {
-            let w = 1 + v.width(enums);
-            let mut out = Vec::new();
-            for (r, entry) in slots.chunks(w).enumerate() {
-                if entry.first().copied().unwrap_or(0) != 0 {
-                    let codes = k.unrank(enums, r as u64).unwrap_or_default();
-                    out.push(json!([
-                        value_to_json(names, k, &codes),
-                        value_to_json(names, v, &entry[1..])
-                    ]));
-                }
-            }
-            Value::Array(out)
-        }
-        SType::List(t, _) => {
-            let w = t.width(enums);
-            let len = usize::try_from(x).unwrap_or(0);
-            Value::Array(
-                slots
-                    .get(1..)
-                    .unwrap_or(&[])
-                    .chunks(w.max(1))
-                    .take(len)
-                    .map(|s| value_to_json(names, t, s))
-                    .collect(),
-            )
-        }
+        (SType::Option(_), Val::None) => Value::Null,
+        (SType::Option(t), Val::Some(w)) => json!({"some": val_to_json(names, t, w)}),
+        (SType::Set(t), Val::Set(es)) => Value::Array(es.iter().map(|e| val_to_json(names, t, e)).collect()),
+        (SType::Map(k, x), Val::Map(ks, vs)) => Value::Array(
+            ks.iter()
+                .zip(vs)
+                .map(|(kv, vv)| json!([val_to_json(names, k, kv), val_to_json(names, x, vv)]))
+                .collect(),
+        ),
+        (SType::List(t, _), Val::List(items)) => Value::Array(items.iter().map(|x| val_to_json(names, t, x)).collect()),
+        // 中核の decode は型に合う木だけを返す。
+        _ => Value::Null,
     }
 }
 
 /// 型に応じて、JSONの値をスロットの列（正規形）にする。型に合わない値は `Err`。
 pub fn value_from_json(enums: &[EnumNames], ty: &SType, v: &Value) -> Result<Vec<i64>, String> {
-    let mut out = Vec::new();
-    encode(enums, ty, v, &mut out)?;
-    Ok(out)
+    let val = val_from_json(enums, ty, v)?;
+    ty.encode(enums, &val)
+        .ok_or_else(|| format!("{v} を型の符号の列にできません"))
 }
 
-fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Result<(), String> {
-    match ty {
-        SType::Bool => out.push(
-            v.as_bool()
-                .map(i64::from)
-                .ok_or_else(|| format!("真偽値が必要です（{v}）"))?,
-        ),
+/// 型に応じて、JSONの値を値の木にする。形の誤りと、Setの要素とMapのキーの誤り（型に属さない、重複）は `Err`。
+fn val_from_json(enums: &[EnumNames], ty: &SType, v: &Value) -> Result<Val, String> {
+    Ok(match ty {
+        SType::Bool => Val::Bool(v.as_bool().ok_or_else(|| format!("真偽値が必要です（{v}）"))?),
         SType::Int(_, _) => match v.as_i64() {
-            Some(x) if v.is_i64() || v.is_u64() => out.push(x),
+            Some(x) if v.is_i64() || v.is_u64() => Val::Int(x),
             _ => return Err(format!("符号付き64ビット整数が必要です（{v}）")),
         },
         SType::Enum(id) => {
             let label = v.as_str().ok_or_else(|| format!("ラベルの文字列が必要です（{v}）"))?;
             let e = enums.get(*id).ok_or_else(|| "未定義の列挙型".to_string())?;
             match e.variants.iter().position(|x| x == label) {
-                Some(k) => out.push(k as i64),
+                Some(k) => Val::Enum(k as i64),
                 None => return Err(format!("列挙型 {:?} に未定義のラベル {label:?}", e.name)),
             }
         }
@@ -176,89 +130,87 @@ fn encode(enums: &[EnumNames], ty: &SType, v: &Value, out: &mut Vec<i64>) -> Res
             if items.len() != ts.len() {
                 return Err(format!("要素が {} 個必要です（{v}）", ts.len()));
             }
-            for (t, x) in ts.iter().zip(items) {
-                encode(enums, t, x, out)?;
-            }
+            Val::Tuple(
+                ts.iter()
+                    .zip(items)
+                    .map(|(t, x)| val_from_json(enums, t, x))
+                    .collect::<Result<_, _>>()?,
+            )
         }
         SType::Record(fs) => {
             let map = v.as_object().ok_or_else(|| format!("オブジェクトが必要です（{v}）"))?;
             if map.len() != fs.len() {
                 return Err(format!("フィールドが {} 個必要です（{v}）", fs.len()));
             }
+            let mut vs = Vec::new();
             for (name, t) in fs {
                 let x = map
                     .get(name)
                     .ok_or_else(|| format!("フィールド {name:?} がありません"))?;
-                encode(enums, t, x, out)?;
+                vs.push(val_from_json(enums, t, x)?);
             }
+            Val::Tuple(vs)
         }
         SType::Option(t) => {
             if v.is_null() {
-                out.push(0);
-                t.defaults(enums, out);
+                Val::None
             } else {
                 let inner = v
                     .as_object()
                     .filter(|m| m.len() == 1)
                     .and_then(|m| m.get("some"))
                     .ok_or_else(|| format!("null か {{\"some\": 値}} が必要です（{v}）"))?;
-                out.push(1);
-                encode(enums, t, inner, out)?;
+                Val::Some(Box::new(val_from_json(enums, t, inner)?))
             }
         }
         SType::Set(t) => {
             let items = v.as_array().ok_or_else(|| format!("配列が必要です（{v}）"))?;
-            let n = key_count(enums, t)?;
-            let mut bits = vec![0i64; n];
+            let mut seen = vec![false; key_count(enums, t)?];
+            let mut es = Vec::new();
             for x in items {
-                let r = key_rank(enums, t, x, n)?;
-                if bits[r] != 0 {
+                let e = val_from_json(enums, t, x)?;
+                let r = key_rank(enums, t, &e, x, seen.len())?;
+                if std::mem::replace(&mut seen[r], true) {
                     return Err(format!("要素 {x} が重複しています"));
                 }
-                bits[r] = 1;
+                es.push(e);
             }
-            out.extend(bits);
+            Val::Set(es)
         }
         SType::Map(k, val) => {
             let items = v
                 .as_array()
                 .ok_or_else(|| format!("[キー, 値] の配列が必要です（{v}）"))?;
-            let n = key_count(enums, k)?;
-            let mut entries: Vec<Option<Vec<i64>>> = vec![None; n];
+            let mut seen = vec![false; key_count(enums, k)?];
+            let (mut ks, mut vs) = (Vec::new(), Vec::new());
             for item in items {
                 let pair = item
                     .as_array()
                     .filter(|p| p.len() == 2)
                     .ok_or_else(|| format!("[キー, 値] が必要です（{item}）"))?;
-                let r = key_rank(enums, k, &pair[0], n)?;
-                if entries[r].is_some() {
+                let kv = val_from_json(enums, k, &pair[0])?;
+                let r = key_rank(enums, k, &kv, &pair[0], seen.len())?;
+                if std::mem::replace(&mut seen[r], true) {
                     return Err(format!("キー {} が重複しています", pair[0]));
                 }
-                let mut codes = Vec::new();
-                encode(enums, val, &pair[1], &mut codes)?;
-                entries[r] = Some(codes);
+                ks.push(kv);
+                vs.push(val_from_json(enums, val, &pair[1])?);
             }
-            let mut default = Vec::new();
-            val.defaults(enums, &mut default);
-            let flat =
-                encode_map_rows(&entries, &default).ok_or_else(|| "Mapの値スロット数が型と一致しません".to_string())?;
-            out.extend(flat);
+            Val::Map(ks, vs)
         }
         SType::List(t, max) => {
             let items = v.as_array().ok_or_else(|| format!("配列が必要です（{v}）"))?;
             if items.len() > *max {
                 return Err(format!("要素が {} 個あり、上限 {max} を超えます", items.len()));
             }
-            out.push(items.len() as i64);
-            for x in items {
-                encode(enums, t, x, out)?;
-            }
-            for _ in items.len()..*max {
-                t.defaults(enums, out);
-            }
+            Val::List(
+                items
+                    .iter()
+                    .map(|x| val_from_json(enums, t, x))
+                    .collect::<Result<_, _>>()?,
+            )
         }
-    }
-    Ok(())
+    })
 }
 
 /// キー型の値の数。読み込みはキー型でない要素の型のSetやMapを拒否するが、
@@ -269,10 +221,13 @@ fn key_count(enums: &[EnumNames], t: &SType) -> Result<usize, String> {
         .ok_or_else(|| "Setの要素とMapのキーの型がキー型ではありません".to_string())
 }
 
-fn key_rank(enums: &[EnumNames], t: &SType, x: &Value, n: usize) -> Result<usize, String> {
-    let mut codes = Vec::new();
-    encode(enums, t, x, &mut codes)?;
-    match t.rank(enums, &codes).and_then(|r| usize::try_from(r).ok()) {
+/// Setの要素とMapのキーの番号（誤りの報告のため。符号の列は `SType::encode` が作る）。
+fn key_rank(enums: &[EnumNames], t: &SType, e: &Val, x: &Value, n: usize) -> Result<usize, String> {
+    let rank = t
+        .encode(enums, e)
+        .and_then(|codes| t.rank(enums, &codes))
+        .and_then(|r| usize::try_from(r).ok());
+    match rank {
         Some(r) if r < n => Ok(r),
         _ => Err(format!("{x} は要素の型に属しません")),
     }
