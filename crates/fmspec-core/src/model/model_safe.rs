@@ -21,13 +21,15 @@ use crate::model::action_lower::{lemma_step, lemma_step_off, out_ok, out_rel, st
 #[cfg(verus_keep_ghost)]
 use crate::model::lower_spec::{action_low, contract_low, ctx_is, init_src, model_ok, prop_low};
 #[cfg(verus_keep_ghost)]
-use crate::model::srel::{arg_vals, canon_from, codes, consts_rel, lemma_canon_rel, lemma_code_in};
+use crate::model::srel::{arg_vals, canon_from, consts_rel, lemma_canon_rel, lemma_code_in};
 #[cfg(verus_keep_ghost)]
 use crate::model::srel::{lemma_rel_codes, rel};
 #[cfg(verus_keep_ghost)]
 use crate::slot::lower_ctx::{layout_at, layouts_at, Layout, LowerCtx};
 #[cfg(verus_keep_ghost)]
 use crate::slot::preserve::{env_rel, layout_ok, layouts_ok, lemma_members, prop_result};
+#[cfg(verus_keep_ghost)]
+use crate::value::encoding::codes;
 #[cfg(verus_keep_ghost)]
 use crate::value::encoding::{enc, enc_seq, member, sty, width, STy, SVal};
 #[cfg(verus_keep_ghost)]

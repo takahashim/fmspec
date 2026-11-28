@@ -17,7 +17,7 @@ use crate::model::lower_error::LowerError;
 #[cfg(verus_keep_ghost)]
 use crate::model::model_total::{sa_typed, styped};
 #[cfg(verus_keep_ghost)]
-use crate::model::srel::{arg_slots, c_apply, c_write, canon_at, canon_from, codes, dom_ok, fold_ok};
+use crate::model::srel::{arg_slots, c_apply, c_write, canon_at, canon_from, dom_ok, fold_ok};
 #[cfg(verus_keep_ghost)]
 use crate::model::srel::{lemma_c_apply_concat, lemma_c_apply_first, lemma_canon_eval, lemma_code_in};
 #[cfg(verus_keep_ghost)]
@@ -39,6 +39,8 @@ use crate::slot::slot_types::{in_slot, in_slots, lemma_slot_tys_len, lemma_slot_
 use crate::slot::slot_types::{lemma_slot_tys_seq_sub, slot_tys, slot_tys_seq};
 #[cfg(verus_keep_ghost)]
 use crate::slot::total::{cx_wf, layout_wf, sctx};
+#[cfg(verus_keep_ghost)]
+use crate::value::encoding::codes;
 #[cfg(verus_keep_ghost)]
 use crate::value::encoding::{enc, lemma_enc_len, lemma_width_pos, member, sty, stys, to_xty, SVal};
 #[cfg(verus_keep_ghost)]

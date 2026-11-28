@@ -109,8 +109,7 @@ pub fn value_to_json(names: &Names, ty: &SType, slots: &[i64]) -> Value {
             let mut out = Vec::new();
             for (r, bit) in slots.iter().enumerate() {
                 if *bit != 0 {
-                    let mut codes = Vec::new();
-                    t.unrank(enums, r as u64, &mut codes);
+                    let codes = t.unrank(enums, r as u64).unwrap_or_default();
                     out.push(value_to_json(names, t, &codes));
                 }
             }
@@ -121,8 +120,7 @@ pub fn value_to_json(names: &Names, ty: &SType, slots: &[i64]) -> Value {
             let mut out = Vec::new();
             for (r, entry) in slots.chunks(w).enumerate() {
                 if entry.first().copied().unwrap_or(0) != 0 {
-                    let mut codes = Vec::new();
-                    k.unrank(enums, r as u64, &mut codes);
+                    let codes = k.unrank(enums, r as u64).unwrap_or_default();
                     out.push(json!([
                         value_to_json(names, k, &codes),
                         value_to_json(names, v, &entry[1..])
