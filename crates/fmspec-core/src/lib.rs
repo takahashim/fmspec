@@ -22,6 +22,9 @@
 //! - [`maps`]：Mapのスロットの補題（行への区切り、行の置き換え、行のつなぎ直し）
 //! - [`map_lookup`]：Mapの参照の下ろし
 //! - [`lowering`]：IRの型付き構文木から中核の式への下ろし
+//! - [`lower_core`]、[`lower_struct`]、[`lower_quant`]、[`lower_set`]、[`lower_map`]、[`lower_list`]：
+//!   葉と演算子と条件式、Tuple と Record と Option、量化、Set、Map、List の下ろし（`lowering` の `low` が振り分ける）
+//! - [`state_set`]：状態の集合への所属（`in_cert`）と、整列した列の二分探索
 //! - [`preserve`]：下ろしが意味を保存することの仕様と補題
 //! - [`preserve_ops`]、[`preserve_tuple`]、[`preserve_list`]、[`preserve_set`]、[`preserve_map`]、[`preserve_quant`]：
 //!   演算子と `let` と条件式、Tuple と Record と Option、List、Set と大きさ、Map、量化の下ろしが意味を保存することの補題
@@ -64,7 +67,13 @@ pub mod ir_check;
 pub mod keys;
 pub mod limits;
 pub mod lists;
+pub mod lower_core;
 pub mod lower_ctx;
+pub mod lower_list;
+pub mod lower_map;
+pub mod lower_quant;
+pub mod lower_set;
+pub mod lower_struct;
 pub mod lower_types;
 pub mod lowering;
 pub mod map_encoding;
