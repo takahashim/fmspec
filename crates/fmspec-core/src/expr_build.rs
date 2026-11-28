@@ -11,6 +11,8 @@ use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_xs_at, lemma_xwidth_sum_prefix, lim, lim_xs};
 use crate::model::{BinOp, Expr, Value};
+#[cfg(verus_keep_ghost)]
+use crate::source::SetOp;
 use crate::stype_exec::{keys_or_zero_exec, xtype_width};
 use vstd::prelude::*;
 
@@ -604,6 +606,24 @@ pub open spec fn kind_expr(kind: u8, i: usize) -> Expr {
         Expr::Next(i)
     } else {
         Expr::Arg(i)
+    }
+}
+
+/// Setの演算の、要素ごとのスロットの式。
+pub open spec fn setop_s(op: SetOp, x: Expr, y: Expr) -> Expr {
+    match op {
+        SetOp::Union => or_s(x, y),
+        SetOp::Intersection => and_s(x, y),
+        SetOp::Difference => and_s(x, Expr::Not(Box::new(y))),
+        SetOp::Subset => implies_s(x, y),
+    }
+}
+
+pub open spec fn mark_s(on: bool, bit: Expr, r: Expr, k: i64) -> Expr {
+    if on {
+        or_s(bit, Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
+    } else {
+        and_s(bit, Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
     }
 }
 

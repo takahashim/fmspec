@@ -39,7 +39,7 @@ Verusで検証した定理と、仕様書§14.1の証明義務との対応を示
 | Evaluation Correctness | `eval` の結果は、意味論 `eval_spec` と一致する。除算と剰余は床除算で、絶対値の符号なし除算で計算した結果が意味論の `floor_div`、`floor_mod` と一致する | `eval.rs` |
 | Transition Soundness / Completeness | `step` の結果は `step_spec` と一致する。`enumerate` は、有効な遷移だけを、ドメイン内のすべての引数について漏れなく返すか、評価エラーになる引数を1つ返す | `step.rs` |
 | Lowering Preservation（§14.1の表の外） | `lemma_safe`：`lower_model` が返した中核のモデルが安全であることと、名前を解決したモデルが値の意味論で安全であることは同値である。式ごとの意味保存は `preserve.rs` と `preserve_*.rs` にある。詳しくは「信頼基盤」の節で述べる | `model_safe.rs` |
-| Lowering Totality（§14.1の表の外） | `lower_model` は、まず `check_model` でモデルの式の型と大きさの条件（`model_typed`）を確かめる。事後条件：失敗するなら、利用者の誤り（値の評価の失敗、初期状態の数、式が大きすぎること）か、`model_typed` が偽のときの型の誤り（状態変数と引数の型の `State`、`Args` と、それ以外の `Type`）である。式ごとには、`lower_prop` と `lower_stored` は、文脈が整形式で（`cx_wf`）、式に型が付き（`type_of`）、部分式の型が大きさの条件を満たす（`lim_ok`）なら、束縛の深さの上限（`Fail::Depth`）でしか失敗せず、置く値は型の幅だけのスロットになる | `model_lower.rs`、`lowering.rs`、`total.rs`、`model_total.rs` |
+| Lowering Totality（§14.1の表の外） | `lower_model` は、まず `check_model` でモデルの式の型と大きさの条件（`model_typed`）を確かめる。事後条件：失敗するなら、利用者の誤り（値の評価の失敗、初期状態の数、式が大きすぎること）か、`model_typed` が偽のときの型の誤り（状態変数と引数の型の `State`、`Args` と、それ以外の `Type`）である。式ごとには、`lower_prop` と `lower_stored` は、文脈が整形式で（`cx_wf`）、式に型が付き（`ir_type_of`）、部分式の型が大きさの条件を満たす（`lim_ok`）なら、束縛の深さの上限（`Fail::Depth`）でしか失敗せず、置く値は型の幅だけのスロットになる | `model_lower.rs`、`lowering.rs`、`total.rs`、`model_total.rs` |
 | Lowering Well-formedness（§14.1の表の外） | `lower_model` が `Ok(m)` を返し、名前を解決したモデルが `sm_wf`（どの列挙型にもラベルがあり、同じ状態変数に重ねて代入しない）を満たすなら、`m` は整形式（`wf`）である。式の型は、下ろしの各関数の事後条件「各スロットの式は、式の型のスロットの中核の型を持つ」（`ty_post`）から示す。束縛の列の各式の型は `Block` の ghost の型の列で追う | `model_wf.rs`、`lower_types.rs`、`lowering.rs` と `lower_*.rs`、`smodel.rs` |
 | IR Correspondence（§14.1の表の外） | `lower_checked` がモデルを下ろしたなら、IRのJSONと、`fmspec-ir` が組み立てた名前を解決したモデルと名前の表は、関係 `ir_rel` で対応する。`ir_rel` は、IRの各構文が名前を解決したモデルのどの構造になるかを直接書いた定義で、IRの意味の定義である。`fmspec-ir` はIRを必ず `lower_checked` で下ろす | `ir.rs`、`ir_check.rs` |
 | State Equality | 状態は符号化列そのもので、等価性は列の一致である。`lemma_decode_injective`：型に属する符号は値と一対一に対応する | `step.rs` |
@@ -232,7 +232,7 @@ Listの要素をたどる量化では、位置は添字で、スロットの式�
 型付きの式の木には、複合型の値の上で評価する意味論を仕様として与えてある（`source.rs`）。
 下ろしの正しさは、この意味論との一致として述べる。
 下ろしの関数は、型が合わない入力に `Fail::Type` を、局所変数の束縛の深さが上限に達したときに `Fail::Depth` を返す。
-型付けの規則 `type_of`（`infer.rs`）と大きさの条件 `lim_ok`（`total.rs`）を満たす式では、`Fail::Type` を返さないことを証明した（全域性）。
+型付けの規則 `ir_type_of`（`infer.rs`）と大きさの条件 `lim_ok`（`total.rs`）を満たす式では、`Fail::Type` を返さないことを証明した（全域性）。
 `lower_model` は、下ろしの前に検証済みの `check_model`（`model_total.rs`）でモデル全体の式がこの条件を満たすことを確かめ、満たさなければ `LowerError::Type` を返す。
 `check_model` は `model_typed` と一致することを証明してあるので、`LowerError::Type` 以外の内部の誤り（`Fault::Lower`、`Guard`、`Update` など）は起きない。
 `fmspec-ir` は、`LowerError::Type` を「`fmspec-ir` と中核の型検査が食い違います」という内部エラーとして、`Depth` を式が大きすぎるという誤りとして報告する。
@@ -294,7 +294,7 @@ Listの要素をたどる量化では、位置は添字で、スロットの式�
 式の部分は、オペランドの配列を持つ演算子のキーとオペランドの並びの表 `op_form` と、それ以外の構文（リテラル、参照、`let`、量化、Record、`nth`、`field`、`none`、Set・Map・List のリテラル）の規則 `form_rel` からなり、`docs/ir.md` の「式」の節の表と1行ずつ突き合わせられる。
 たとえば、`{"local": 名前}` は内側から探して最初に見つかった束縛の番号に、`{"choice": i}` は公開引数の数に `i` を足した引数の番号に、動的ドメイン（`in`）を持つ引数は guard の前に置く `contains` の検査になる。
 名前の表（列挙型、ラベル、定数、状態変数、操作、引数、不変条件、遷移契約、Recordのフィールドの名前）も、JSONの名前と対応させ、参照に使う名前に重複がないことを確かめる。
-式の型から決まる注釈（`contains` の Set と List の区別、要素の型など）はJSONに書かれないので、`ir_rel` は制約しない。注釈は中核の型付け `type_of` が検査する。
+式の型から決まる注釈（`contains` の Set と List の区別、要素の型など）はJSONに書かれないので、`ir_rel` は制約しない。注釈は中核の型付け `ir_type_of` が検査する。
 したがって、名前の解決や型付きの式の木の組み立ての誤りは、`ir_rel` に反する結果を作るなら、誤った判定にならず内部エラーになる。
 
 モデル全体の比較テストは残している。

@@ -1110,5 +1110,33 @@ pub proof fn lemma_wf_stypes(ts: Seq<STy>, enums: Seq<i64>)
     }
 }
 
+pub proof fn lemma_wf_xtypes_at(ts: Seq<XTy>, enums: Seq<i64>, i: int)
+    requires
+        wf_xtypes(ts, enums),
+        0 <= i < ts.len(),
+    ensures
+        wf_xtype(ts[i], enums),
+    decreases ts.len(),
+{
+    if i < ts.len() - 1 {
+        assert(ts.drop_last()[i] == ts[i]);
+        lemma_wf_xtypes_at(ts.drop_last(), enums, i);
+    }
+}
+
+pub proof fn lemma_wf_xtypes_intro(ts: Seq<XTy>, enums: Seq<i64>)
+    requires
+        forall|i: int| 0 <= i < ts.len() ==> wf_xtype(#[trigger] ts[i], enums),
+    ensures
+        wf_xtypes(ts, enums),
+    decreases ts.len(),
+{
+    if ts.len() > 0 {
+        assert forall|i: int| 0 <= i < ts.len() - 1 implies wf_xtype(#[trigger] ts.drop_last()[i], enums) by {
+            assert(ts.drop_last()[i] == ts[i]);
+        }
+        lemma_wf_xtypes_intro(ts.drop_last(), enums);
+    }
+}
 
 } // verus!

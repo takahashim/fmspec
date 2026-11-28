@@ -9,7 +9,7 @@ use crate::eval::{binop_spec, eval_l, Env, ErrKind};
 #[cfg(verus_keep_ghost)]
 use crate::expr_build::tree_s;
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, and_s, bool_lit, implies_s, int_lit, or_s, pure_below, Join};
+use crate::expr_build::{all_pure, and_s, bool_lit, int_lit, mark_s, pure_below, setop_s, Join};
 #[cfg(verus_keep_ghost)]
 use crate::keys::{lemma_rank_in_domain, rank};
 #[cfg(verus_keep_ghost)]
@@ -684,16 +684,6 @@ pub proof fn lemma_is_empty(e: TExpr, a: TExpr, cx: LowerCtx, sc: Seq<Bound>, b0
     }
 }
 
-/// Setの演算の、要素ごとのスロットの式。
-pub open spec fn setop_s(op: SetOp, x: Expr, y: Expr) -> Expr {
-    match op {
-        SetOp::Union => or_s(x, y),
-        SetOp::Intersection => and_s(x, y),
-        SetOp::Difference => and_s(x, Expr::Not(Box::new(y))),
-        SetOp::Subset => implies_s(x, y),
-    }
-}
-
 pub open spec fn setop_b(op: SetOp, a: bool, b: bool) -> bool {
     match op {
         SetOp::Union => a || b,
@@ -917,14 +907,6 @@ pub proof fn lemma_setbin_at(
                 }
             }
         }
-    }
-}
-
-pub open spec fn mark_s(on: bool, bit: Expr, r: Expr, k: i64) -> Expr {
-    if on {
-        or_s(bit, Expr::Bin(BinOp::Eq, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
-    } else {
-        and_s(bit, Expr::Bin(BinOp::Ne, Box::new(r), Box::new(Expr::Const(Value::Int(k)))))
     }
 }
 

@@ -31,7 +31,7 @@ use crate::expr_build::{all_pure, bool_lit, int_lit, kind_expr, pure_below, tree
 use crate::expr_build::{ci, eq};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::type_of;
+use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
 use crate::keys::rank;
 #[cfg(verus_keep_ghost)]
@@ -396,7 +396,7 @@ pub(crate) fn sub_scalar(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mu
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok(x) ==> frag(*e) ==> lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), xty(*want), seq![x]),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*want))
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*want))
             && scalar_x(xty(*want)) ==> deep(r) && (r matches Ok(x) ==> pure_below(x, final(blk).depth_s())),
         tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && tok(*cx, old(sc)@, *old(blk)) ==> binds_typed(
             final(blk).outer@,
@@ -422,8 +422,8 @@ fn scalar_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usize, outer:
     ensures
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok((t, x)) ==> frag(*e) ==> closed_lowers(*e, *cx, old(sc)@, depth as nat, xty(t), x),
-        tpre(*e, *cx, old(sc)@, depth as nat) && scalar_x(type_of(*e, sctx(*cx), bound_tys(old(sc)@))->0) ==> deep(r) && (
-        r matches Ok((t, _)) ==> Some(xty(t)) == type_of(*e, sctx(*cx), bound_tys(old(sc)@))),
+        tpre(*e, *cx, old(sc)@, depth as nat) && scalar_x(ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@))->0) ==> deep(r) && (
+        r matches Ok((t, _)) ==> Some(xty(t)) == ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@))),
         tpre(*e, *cx, old(sc)@, depth as nat) && tok_in(*cx, old(sc)@, outer@, depth as nat) ==> (r matches Ok((t, x))
             ==> has_ty(x, lenv(*cx), outer@, xetys(xty(t), cx.enums@)[0])),
     decreases e, 6nat,
@@ -470,7 +470,7 @@ pub(crate) fn bool_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: usiz
     ensures
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok(x) ==> frag(*e) ==> closed_lowers(*e, *cx, old(sc)@, depth as nat, XTy::Bool, x),
-        tpre(*e, *cx, old(sc)@, depth as nat) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(XTy::Bool) ==> deep(r),
+        tpre(*e, *cx, old(sc)@, depth as nat) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(XTy::Bool) ==> deep(r),
         tpre(*e, *cx, old(sc)@, depth as nat) && tok_in(*cx, old(sc)@, outer@, depth as nat) ==> (r matches Ok(x) ==> has_ty(
             x,
             lenv(*cx),
@@ -494,13 +494,13 @@ pub(crate) fn element(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok(xs) ==> frag(*e) ==> elem_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), xs@),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) ==> deep(r) && (r matches Ok(xs) ==> xs@.len() == width(sty(*st), cx.enums@) && all_pure(
             xs@,
             final(blk).depth_s(),
         )),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && wf_stype(sty(*st), cx.enums@) && small(sty(*st)) && tok(*cx, old(sc)@, *old(blk)) ==> binds_typed(final(blk).outer@, final(blk).binds@, lenv(*cx)) && (r matches Ok(xs) ==> typed(
             xs@,
@@ -511,7 +511,7 @@ pub(crate) fn element(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
     decreases e, 4nat,
 {
     let ghost b0 = *blk;
-    let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+    let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
         to_xty(sty(*st)),
     );
     let ghost tq = pre && wf_stype(sty(*st), cx.enums@) && small(sty(*st)) && tok(*cx, old(sc)@, *old(blk));
@@ -568,10 +568,10 @@ pub(crate) fn element_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok(x) ==> frag(*e) ==> elem_rank_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), x),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && keys(sty(*st), cx.enums@) is Some ==> deep(r) && (r matches Ok(x) ==> pure_below(x, final(blk).depth_s())),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && wf_stype(sty(*st), cx.enums@) && small(sty(*st)) && tok(*cx, old(sc)@, *old(blk)) ==> binds_typed(final(blk).outer@, final(blk).binds@, lenv(*cx)) && (r matches Ok(x) ==> has_ty(
             x,
@@ -588,10 +588,10 @@ pub(crate) fn element_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
         return Err(Fail::Type);
     }
     let ghost b0 = *blk;
-    let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+    let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
         to_xty(sty(*st)),
     ) && keys(sty(*st), cx.enums@) is Some;
-    let ghost tq = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+    let ghost tq = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
         to_xty(sty(*st)),
     ) && wf_stype(sty(*st), cx.enums@) && small(sty(*st)) && tok(*cx, old(sc)@, *old(blk));
     let ghost tv = lenv(*cx);
@@ -656,10 +656,10 @@ pub(crate) fn lookup_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         extends(*old(blk), *final(blk)),
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok(x) ==> frag(*e) ==> rank_lowers(*e, *cx, old(sc)@, *old(blk), *final(blk), sty(*st), x),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && keys(sty(*st), cx.enums@) is Some ==> deep(r) && (r matches Ok(x) ==> pure_below(x, final(blk).depth_s())),
-        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+        tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
             to_xty(sty(*st)),
         ) && wf_stype(sty(*st), cx.enums@) && small(sty(*st)) && tok(*cx, old(sc)@, *old(blk)) ==> binds_typed(final(blk).outer@, final(blk).binds@, lenv(*cx)) && (r matches Ok(x) ==> has_ty(
             x,
@@ -676,10 +676,10 @@ pub(crate) fn lookup_rank(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
         return Err(Fail::Type);
     }
     let ghost b0 = *blk;
-    let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+    let ghost pre = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
         to_xty(sty(*st)),
     ) && keys(sty(*st), cx.enums@) is Some;
-    let ghost tq = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
+    let ghost tq = tpre(*e, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(*e, sctx(*cx), bound_tys(old(sc)@)) == Some(
         to_xty(sty(*st)),
     ) && wf_stype(sty(*st), cx.enums@) && small(sty(*st)) && tok(*cx, old(sc)@, *old(blk));
     let ghost tv = lenv(*cx);
@@ -1060,9 +1060,9 @@ fn low_access(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut Block) ->
 /// 環境が対応するとき、下ろした式の値は、値の上の意味論の値と一致する（失敗するなら同じ失敗）。
 pub fn lower_prop(e: &TExpr, cx: &LowerCtx) -> (r: Result<Expr, Fail>)
     ensures
-        cx_wf(*cx) && type_of(*e, sctx(*cx), Seq::empty()) == Some(XTy::Bool) && lim_ok(*e, sctx(*cx), Seq::empty())
+        cx_wf(*cx) && ir_type_of(*e, sctx(*cx), Seq::empty()) == Some(XTy::Bool) && lim_ok(*e, sctx(*cx), Seq::empty())
             ==> deep(r),
-        cx_wf(*cx) && type_of(*e, sctx(*cx), Seq::empty()) == Some(XTy::Bool) && lim_ok(*e, sctx(*cx), Seq::empty())
+        cx_wf(*cx) && ir_type_of(*e, sctx(*cx), Seq::empty()) == Some(XTy::Bool) && lim_ok(*e, sctx(*cx), Seq::empty())
             && cx_tok(*cx) ==> (r matches Ok(c) ==> has_ty(c, lenv(*cx), Seq::empty(), ETy::Bool)),
         r matches Ok(c) ==> forall|env: Env, se: SEnv|
             #[trigger] env_rel(*cx, env, se) ==> prop_result(
@@ -1102,12 +1102,12 @@ pub fn lower_prop(e: &TExpr, cx: &LowerCtx) -> (r: Result<Expr, Fail>)
 /// 失敗するなら、各スロットは同じ失敗になる。
 pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: Result<Vec<Expr>, Fail>)
     ensures
-        cx_wf(*cx) && type_of(*e, sctx(*cx), Seq::empty()) == Some(to_xty(sty(*st))) && lim_ok(
+        cx_wf(*cx) && ir_type_of(*e, sctx(*cx), Seq::empty()) == Some(to_xty(sty(*st))) && lim_ok(
             *e,
             sctx(*cx),
             Seq::empty(),
         ) && ok_s(sty(*st), cx.enums@) ==> deep(r) && (r matches Ok(out) ==> out@.len() == width(sty(*st), cx.enums@)),
-        cx_wf(*cx) && type_of(*e, sctx(*cx), Seq::empty()) == Some(to_xty(sty(*st))) && lim_ok(
+        cx_wf(*cx) && ir_type_of(*e, sctx(*cx), Seq::empty()) == Some(to_xty(sty(*st))) && lim_ok(
             *e,
             sctx(*cx),
             Seq::empty(),
@@ -1135,7 +1135,7 @@ pub fn lower_stored(e: &TExpr, cx: &LowerCtx, st: &SType, depth: usize) -> (r: R
     }
     let mut blk = new_block(depth, Ghost(Seq::empty()))?;
     let ghost b0 = blk;
-    let ghost tp = cx_wf(*cx) && type_of(*e, sctx(*cx), Seq::empty()) == Some(to_xty(sty(*st))) && lim_ok(
+    let ghost tp = cx_wf(*cx) && ir_type_of(*e, sctx(*cx), Seq::empty()) == Some(to_xty(sty(*st))) && lim_ok(
         *e,
         sctx(*cx),
         Seq::empty(),

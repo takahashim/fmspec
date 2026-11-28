@@ -3,11 +3,13 @@
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{keys, keys_or_zero, keys_product, lemma_stys, lemma_stys_ext, lemma_to_xtys};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{lemma_wf_stypes, lemma_wf_stypes_at, lemma_xtys, lemma_xtys_ext, sty, STy};
+use crate::encoding::{lemma_wf_stypes, lemma_wf_stypes_at, lemma_wf_xtypes_at};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{stys, to_xty, to_xtys, wf_stype, wf_stypes, wf_xtype, wf_xtypes, width};
+use crate::encoding::{lemma_wf_xtypes_intro, lemma_xtys, lemma_xtys_ext, sty, stys, to_xty, STy};
 #[cfg(verus_keep_ghost)]
-use crate::encoding::{width_sum, xty, xtys, xwidth, xwidth_sum, XTy};
+use crate::encoding::{to_xtys, wf_stype, wf_stypes, wf_xtype, wf_xtypes, width, width_sum, XTy};
+#[cfg(verus_keep_ghost)]
+use crate::encoding::{xty, xtys, xwidth, xwidth_sum};
 use crate::encoding::{SType, XType, MAX_KEYS};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_ss_at, lemma_lim_xs_at, lemma_width_sum_prefix};
@@ -860,35 +862,6 @@ pub(crate) fn xtype_width_sum(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>
         assert(xtys(ts@).take(ts@.len() as int) =~= xtys(ts@));
     }
     Some(acc)
-}
-
-pub proof fn lemma_wf_xtypes_at(ts: Seq<XTy>, enums: Seq<i64>, i: int)
-    requires
-        wf_xtypes(ts, enums),
-        0 <= i < ts.len(),
-    ensures
-        wf_xtype(ts[i], enums),
-    decreases ts.len(),
-{
-    if i < ts.len() - 1 {
-        assert(ts.drop_last()[i] == ts[i]);
-        lemma_wf_xtypes_at(ts.drop_last(), enums, i);
-    }
-}
-
-pub proof fn lemma_wf_xtypes_intro(ts: Seq<XTy>, enums: Seq<i64>)
-    requires
-        forall|i: int| 0 <= i < ts.len() ==> wf_xtype(#[trigger] ts[i], enums),
-    ensures
-        wf_xtypes(ts, enums),
-    decreases ts.len(),
-{
-    if ts.len() > 0 {
-        assert forall|i: int| 0 <= i < ts.len() - 1 implies wf_xtype(#[trigger] ts.drop_last()[i], enums) by {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-        lemma_wf_xtypes_intro(ts.drop_last(), enums);
-    }
 }
 
 } // verus!

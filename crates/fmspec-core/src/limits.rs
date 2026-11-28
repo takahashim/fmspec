@@ -317,4 +317,34 @@ pub open spec fn fits_all_s(xs: Seq<XTy>, ts: Seq<STy>) -> bool
     }
 }
 
+pub proof fn lemma_lim_ss_intro(ts: Seq<STy>, enums: Seq<i64>)
+    requires
+        forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums),
+    ensures
+        lim_ss(ts, enums),
+    decreases ts.len(),
+{
+    if ts.len() > 0 {
+        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_s(#[trigger] ts.drop_last()[i], enums) by {
+            assert(ts.drop_last()[i] == ts[i]);
+        }
+        lemma_lim_ss_intro(ts.drop_last(), enums);
+    }
+}
+
+pub proof fn lemma_lim_xs_intro(ts: Seq<XTy>, enums: Seq<i64>)
+    requires
+        forall|i: int| 0 <= i < ts.len() ==> lim_x(#[trigger] ts[i], enums),
+    ensures
+        lim_xs(ts, enums),
+    decreases ts.len(),
+{
+    if ts.len() > 0 {
+        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_x(#[trigger] ts.drop_last()[i], enums) by {
+            assert(ts.drop_last()[i] == ts[i]);
+        }
+        lemma_lim_xs_intro(ts.drop_last(), enums);
+    }
+}
+
 } // verus!

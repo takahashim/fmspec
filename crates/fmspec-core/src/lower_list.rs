@@ -12,7 +12,7 @@ use crate::expr_build::{all_pure, bool_lit, lits, pure_below, Join};
 use crate::expr_build::{and, bin, ci, defaults};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::{lemma_all_typed_iff, type_of};
+use crate::infer::{ir_type_of, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lim_x, small};
 use crate::lists::list_parts;
@@ -215,7 +215,7 @@ pub(crate) fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
                     sc0 == old(sc)@,
                     c == sctx(*cx),
                     bt == bound_tys(sc0),
-                    pre ==> forall|j: int| 0 <= j < es@.len() ==> type_of(#[trigger] es@[j], c, bt) == Some(to_xty(sty(*t)))
+                    pre ==> forall|j: int| 0 <= j < es@.len() ==> ir_type_of(#[trigger] es@[j], c, bt) == Some(to_xty(sty(*t)))
                         && lim_ok(es@[j], c, bt),
                     pre ==> out@.len() == 1 + i * width(st, cx.enums@) && all_pure(out@, blk.depth_s()),
                     tp == (pre && tok(*cx, sc0, b0)),
@@ -232,7 +232,7 @@ pub(crate) fn low_list_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &
                 proof {
                     if pre {
                         lemma_sc_wf_mono(sc0, b0.depth_s(), b1.depth_s(), cx.enums@);
-                        assert(type_of(es@[i as int], c, bt) == Some(to_xty(sty(*t))) && lim_ok(es@[i as int], c, bt));
+                        assert(ir_type_of(es@[i as int], c, bt) == Some(to_xty(sty(*t))) && lim_ok(es@[i as int], c, bt));
                     }
                 }
                 let x = element(&es[i], cx, sc, blk, t)?;

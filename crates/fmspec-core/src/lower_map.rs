@@ -11,7 +11,7 @@ use crate::encoding::{SType, XType};
 use crate::expr_build::{all_pure, pure_below};
 use crate::expr_build::{and, bin, cb, ci, defaults};
 #[cfg(verus_keep_ghost)]
-use crate::infer::type_of;
+use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
 use crate::limits::lemma_lim_small;
 #[cfg(verus_keep_ghost)]
@@ -268,7 +268,7 @@ pub(crate) fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                 if pre {
                     lemma_items_ok_intro(items@, c, bt, kt, vt);
                     assert(here_ok(*e, c, bt));
-                    assert(type_of(*e, c, bt) == Some(XTy::Map(Box::new(kt), Box::new(vt))));
+                    assert(ir_type_of(*e, c, bt) == Some(XTy::Map(Box::new(kt), Box::new(vt))));
                     lemma_ok_map(kt, vt, enums@);
                     assert(ok_s_o(STy::Map(Box::new(kt), Box::new(vt)), enums@)) by {
                         reveal(ok_s_o);
@@ -336,8 +336,8 @@ pub(crate) fn low_map_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                         lemma_items_ok_at(items@, c, bt, kt, vt, i as int);
                         assert(tpre(item.key, *cx, sc@, blk.depth_s()));
                         assert(tpre(item.value, *cx, sc@, blk.depth_s()));
-                        assert(type_of(item.key, sctx(*cx), bound_tys(sc@)) == Some(to_xty(kt)));
-                        assert(type_of(item.value, sctx(*cx), bound_tys(sc@)) == Some(to_xty(vt)));
+                        assert(ir_type_of(item.key, sctx(*cx), bound_tys(sc@)) == Some(to_xty(kt)));
+                        assert(ir_type_of(item.value, sctx(*cx), bound_tys(sc@)) == Some(to_xty(vt)));
                         assert(slots@.len() == width(STy::Map(Box::new(kt), Box::new(vt)), cx.enums@));
                         assert(all_pure(slots@, blk.depth_s()));
                         lemma_put_pre(item.key, item.value, *cx, sc@, blk.depth_s(), kt, vt, slots@);

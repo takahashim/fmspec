@@ -17,7 +17,7 @@
 //!
 //! 受理の条件（未知のキー、空でない配列など）は定めない。拒否すべきIRを拒否するのは `fmspec-ir` の仕事で、
 //! ここでは受理したIRの意味を定める。式の型から決まる注釈（`contains` の Set と List の区別、要素の型など）は
-//! JSONに書かれないので制約しない。注釈は中核の型付け（[`crate::infer::type_of`]）が検査する。
+//! JSONに書かれないので制約しない。注釈は中核の型付け（[`crate::infer::ir_type_of`]）が検査する。
 
 #[cfg(verus_keep_ghost)]
 use crate::encoding::{stys, width_sum, SType};

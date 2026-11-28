@@ -17,9 +17,9 @@ use crate::source::{Item, Over, TExpr};
 use crate::stype_exec::wf_xtype_exec;
 use crate::stype_exec::{keys_exec, keys_or_zero_exec, stype_eq, to_xtype, wf_stype_exec};
 #[cfg(verus_keep_ghost)]
-use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_seq_at, lim_ok, lim_ok_items};
+use crate::total::{here_ok, lemma_lim_ok_items_at, lemma_lim_ok_items_intro, lemma_lim_ok_seq_at};
 #[cfg(verus_keep_ghost)]
-use crate::total::{lim_ok_seq, quant_bound};
+use crate::total::{lemma_lim_ok_seq_intro, lim_ok, lim_ok_items, lim_ok_seq, quant_bound};
 use vstd::prelude::*;
 
 verus! {
@@ -178,36 +178,6 @@ fn cap_s_sum(_parent: &SType, ts: &Vec<SType>, enums: &Vec<i64>) -> (r: u128)
         assert(stys(ts@).take(ts@.len() as int) =~= stys(ts@));
     }
     acc
-}
-
-pub proof fn lemma_lim_ss_intro(ts: Seq<STy>, enums: Seq<i64>)
-    requires
-        forall|i: int| 0 <= i < ts.len() ==> lim_s(#[trigger] ts[i], enums),
-    ensures
-        lim_ss(ts, enums),
-    decreases ts.len(),
-{
-    if ts.len() > 0 {
-        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_s(#[trigger] ts.drop_last()[i], enums) by {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-        lemma_lim_ss_intro(ts.drop_last(), enums);
-    }
-}
-
-pub proof fn lemma_lim_xs_intro(ts: Seq<XTy>, enums: Seq<i64>)
-    requires
-        forall|i: int| 0 <= i < ts.len() ==> lim_x(#[trigger] ts[i], enums),
-    ensures
-        lim_xs(ts, enums),
-    decreases ts.len(),
-{
-    if ts.len() > 0 {
-        assert forall|i: int| 0 <= i < ts.len() - 1 implies lim_x(#[trigger] ts.drop_last()[i], enums) by {
-            assert(ts.drop_last()[i] == ts[i]);
-        }
-        lemma_lim_xs_intro(ts.drop_last(), enums);
-    }
 }
 
 /// 格納の型が大きさの条件を満たすか。
@@ -416,37 +386,6 @@ fn lim_xs_exec(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) -> (r: bool)
 }
 
 // ---- 式の条件 ----
-
-pub proof fn lemma_lim_ok_seq_intro(es: Seq<TExpr>, c: crate::infer::SCtx, lt: Seq<XTy>)
-    requires
-        forall|i: int| 0 <= i < es.len() ==> lim_ok(#[trigger] es[i], c, lt),
-    ensures
-        lim_ok_seq(es, c, lt),
-    decreases es.len(),
-{
-    if es.len() > 0 {
-        assert forall|i: int| 0 <= i < es.len() - 1 implies lim_ok(#[trigger] es.drop_last()[i], c, lt) by {
-            assert(es.drop_last()[i] == es[i]);
-        }
-        lemma_lim_ok_seq_intro(es.drop_last(), c, lt);
-    }
-}
-
-pub proof fn lemma_lim_ok_items_intro(items: Seq<Item>, c: crate::infer::SCtx, lt: Seq<XTy>)
-    requires
-        forall|i: int| 0 <= i < items.len() ==> lim_ok((#[trigger] items[i]).key, c, lt) && lim_ok(items[i].value, c, lt),
-    ensures
-        lim_ok_items(items, c, lt),
-    decreases items.len(),
-{
-    if items.len() > 0 {
-        assert forall|i: int| 0 <= i < items.len() - 1 implies lim_ok((#[trigger] items.drop_last()[i]).key, c, lt)
-            && lim_ok(items.drop_last()[i].value, c, lt) by {
-            assert(items.drop_last()[i] == items[i]);
-        }
-        lemma_lim_ok_items_intro(items.drop_last(), c, lt);
-    }
-}
 
 /// 量化でたどる値の型（[`quant_bound`] と一致する）。
 fn quant_bound_exec(over: &Over, s: &Scope, lt: &mut Vec<XType>) -> (r: Option<XType>)

@@ -12,7 +12,7 @@ use crate::expr_build::{all_pure, pure_below, split_ok, xoff};
 use crate::expr_build::{cb, defaults, split, sub_exprs};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::{lemma_types_of_iff, type_of, types_of};
+use crate::infer::{ir_type_of, lemma_types_of_iff, types_of};
 #[cfg(verus_keep_ghost)]
 use crate::lower_ctx::extends;
 use crate::lower_ctx::{Block, Bound, Fail, LowerCtx};
@@ -128,7 +128,7 @@ pub(crate) fn low_tuple(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                     sc0 == old(sc)@,
                     c == sctx(*cx),
                     bt == bound_tys(sc0),
-                    pre ==> forall|j: int| 0 <= j < es@.len() ==> type_of(#[trigger] es@[j], c, bt) is Some && lim_ok(
+                    pre ==> forall|j: int| 0 <= j < es@.len() ==> ir_type_of(#[trigger] es@[j], c, bt) is Some && lim_ok(
                         es@[j],
                         c,
                         bt,
@@ -149,7 +149,7 @@ pub(crate) fn low_tuple(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                 proof {
                     if pre {
                         lemma_sc_wf_mono(sc0, b0.depth_s(), b1.depth_s(), cx.enums@);
-                        assert(type_of(es@[i as int], c, bt) is Some && lim_ok(es@[i as int], c, bt));
+                        assert(ir_type_of(es@[i as int], c, bt) is Some && lim_ok(es@[i as int], c, bt));
                     }
                 }
                 let (t, s) = low(&es[i], cx, sc, blk)?;
@@ -426,7 +426,7 @@ pub(crate) fn low_none(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             proof {
                 if tp {
                     let st = sty(*t);
-                    assert(type_of(*e, c, bt) == Some(XTy::Option(Box::new(to_xty(st)))));
+                    assert(ir_type_of(*e, c, bt) == Some(XTy::Option(Box::new(to_xty(st)))));
                     assert(here_ok(*e, c, bt));
                     assert(crate::encoding::wf_stype(st, enums@));
                     lemma_lim_x_small(st, enums@);

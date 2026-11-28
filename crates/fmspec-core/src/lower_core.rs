@@ -16,7 +16,7 @@ use crate::expr_build::{all_pure, bool_lit, ite_s, kind_expr, lits, pure_below};
 use crate::expr_build::{bin, cb, defaults, extend, ite, tree, Join};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::{lemma_all_typed_bool, lemma_all_typed_iff, type_of};
+use crate::infer::{ir_type_of, lemma_all_typed_bool, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lemma_lim_xs_at, lim_xs};
 #[cfg(verus_keep_ghost)]
@@ -78,7 +78,7 @@ pub(crate) fn closed_in(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, depth: us
     ensures
         r is Ok ==> final(sc)@ == old(sc)@,
         r matches Ok((t, xs)) ==> frag(*e) ==> closed_slots(*e, *cx, old(sc)@, depth as nat, xty(t), xs@),
-        tpre(*e, *cx, old(sc)@, depth as nat) ==> deep(r) && (r matches Ok((t, xs)) ==> Some(xty(t)) == type_of(
+        tpre(*e, *cx, old(sc)@, depth as nat) ==> deep(r) && (r matches Ok((t, xs)) ==> Some(xty(t)) == ir_type_of(
             *e,
             sctx(*cx),
             bound_tys(old(sc)@),
@@ -808,7 +808,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
     proof {
         vstd::std_specs::vec::axiom_vec_index_decreases(*es, 0);
         if pre {
-            assert(type_of(es@[0], c, bt) == Some(XTy::Bool));
+            assert(ir_type_of(es@[0], c, bt) == Some(XTy::Bool));
             assert(lim_ok(es@[0], c, bt));
         }
     }
@@ -847,7 +847,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
             c == sctx(*cx),
             bt == bound_tys(sc0),
             pre ==> sc_wf(sc0, d as nat, cx.enums@) && cx_wf(*cx),
-            pre ==> forall|j: int| 0 <= j < es@.len() ==> type_of(#[trigger] es@[j], c, bt) == Some(XTy::Bool) && lim_ok(
+            pre ==> forall|j: int| 0 <= j < es@.len() ==> ir_type_of(#[trigger] es@[j], c, bt) == Some(XTy::Bool) && lim_ok(
                 es@[j],
                 c,
                 bt,
@@ -862,7 +862,7 @@ pub(crate) fn low_fold(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut 
         proof {
             vstd::std_specs::vec::axiom_vec_index_decreases(*es, i as int);
             if pre {
-                assert(type_of(es@[i as int], c, bt) == Some(XTy::Bool));
+                assert(ir_type_of(es@[i as int], c, bt) == Some(XTy::Bool));
                 assert(lim_ok(es@[i as int], c, bt));
                 assert(sc_wf(sc@, d as nat, cx.enums@));
                 assert(tpre(es@[i as int], *cx, sc@, d as nat));
@@ -1001,19 +1001,19 @@ pub(crate) fn low_ite_slots(
                 0 <= i < w ==> #[trigger] closed_slots(*b, *cx, old(sc)@, (d + i) as nat, xty(*tx), fb@[i])
             &&& forall|i: int| 0 <= i < w ==> i < (#[trigger] fa@[i]).len() && i < fb@[i].len()
         },
-        tpre(*a, *cx, old(sc)@, old(blk).depth_s()) && tpre(*b, *cx, old(sc)@, old(blk).depth_s()) && type_of(
+        tpre(*a, *cx, old(sc)@, old(blk).depth_s()) && tpre(*b, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(
             *a,
             sctx(*cx),
             bound_tys(old(sc)@),
-        ) == Some(xty(*tx)) && type_of(*b, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*tx)) && w == xwidth(
+        ) == Some(xty(*tx)) && ir_type_of(*b, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*tx)) && w == xwidth(
             xty(*tx),
             cx.enums@,
         ) ==> deep(r),
-        tpre(*a, *cx, old(sc)@, old(blk).depth_s()) && tpre(*b, *cx, old(sc)@, old(blk).depth_s()) && type_of(
+        tpre(*a, *cx, old(sc)@, old(blk).depth_s()) && tpre(*b, *cx, old(sc)@, old(blk).depth_s()) && ir_type_of(
             *a,
             sctx(*cx),
             bound_tys(old(sc)@),
-        ) == Some(xty(*tx)) && type_of(*b, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*tx)) && w == xwidth(
+        ) == Some(xty(*tx)) && ir_type_of(*b, sctx(*cx), bound_tys(old(sc)@)) == Some(xty(*tx)) && w == xwidth(
             xty(*tx),
             cx.enums@,
         ) && ok_x(xty(*tx), cx.enums@) && tok(*cx, old(sc)@, *old(blk)) && has_ty(*c, lenv(*cx), blt(*old(blk), *cx), ETy::Bool)
@@ -1024,8 +1024,8 @@ pub(crate) fn low_ite_slots(
     let ghost b2 = *blk;
     let ghost sc0 = sc@;
     let d = depth(blk);
-    let ghost pre = tpre(*a, *cx, sc0, d as nat) && tpre(*b, *cx, sc0, d as nat) && type_of(*a, sctx(*cx), bound_tys(sc0))
-        == Some(xty(*tx)) && type_of(*b, sctx(*cx), bound_tys(sc0)) == Some(xty(*tx)) && w == xwidth(xty(*tx), cx.enums@);
+    let ghost pre = tpre(*a, *cx, sc0, d as nat) && tpre(*b, *cx, sc0, d as nat) && ir_type_of(*a, sctx(*cx), bound_tys(sc0))
+        == Some(xty(*tx)) && ir_type_of(*b, sctx(*cx), bound_tys(sc0)) == Some(xty(*tx)) && w == xwidth(xty(*tx), cx.enums@);
     let ghost tv = lenv(*cx);
     let ghost ys = xetys(xty(*tx), cx.enums@);
     let ghost tq = pre && ok_x(xty(*tx), cx.enums@) && tok(*cx, sc0, b2) && has_ty(*c, tv, blt(b2, *cx), ETy::Bool)
@@ -1114,8 +1114,8 @@ pub(crate) fn low_ite_slots(
             tv == lenv(*cx),
             ys == xetys(xty(*tx), cx.enums@),
             outer == blt(b2, *cx) + ys.take(w - 1),
-            pre == (tpre(*a, *cx, sc0, d as nat) && tpre(*b, *cx, sc0, d as nat) && type_of(*a, sctx(*cx), bound_tys(sc0))
-                == Some(xty(*tx)) && type_of(*b, sctx(*cx), bound_tys(sc0)) == Some(xty(*tx)) && w == xwidth(xty(*tx), cx.enums@)),
+            pre == (tpre(*a, *cx, sc0, d as nat) && tpre(*b, *cx, sc0, d as nat) && ir_type_of(*a, sctx(*cx), bound_tys(sc0))
+                == Some(xty(*tx)) && ir_type_of(*b, sctx(*cx), bound_tys(sc0)) == Some(xty(*tx)) && w == xwidth(xty(*tx), cx.enums@)),
             tq == (pre && ok_x(xty(*tx), cx.enums@) && tok(*cx, sc0, b2) && has_ty(*c, tv, blt(b2, *cx), ETy::Bool)
                 && pure_below(*c, d as nat)),
             tq ==> ys.len() == w && blt(b2, *cx).len() == d && typed(xa@, ys, tv, outer) && typed(yb@, ys, tv, outer)
@@ -1361,7 +1361,7 @@ pub(crate) fn low_ite(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut B
         assert(decreases_to!(*e => **b));
         if pre {
             assert(tpre(**a, *cx, scs, d as nat) && tpre(**b, *cx, scs, d as nat));
-            assert(type_of(**a, sctx(*cx), bound_tys(scs)) == Some(xty(tx)));
+            assert(ir_type_of(**a, sctx(*cx), bound_tys(scs)) == Some(xty(tx)));
             assert(w == xwidth(xty(tx), cx.enums@));
         }
         if tp {
@@ -1547,7 +1547,7 @@ pub(crate) fn xdefaults_seq(_parent: &XType, ts: &Vec<XType>, enums: &Vec<i64>) 
             assert(xt.take(i + 1).drop_last() =~= xt.take(i as int));
             assert(xt.take(i + 1).last() == xty(ts@[i as int]));
             if ok {
-                crate::stype_exec::lemma_wf_xtypes_at(xt, enums@, i as int);
+                crate::encoding::lemma_wf_xtypes_at(xt, enums@, i as int);
                 lemma_lim_xs_at(xt, enums@, i as int);
                 assert(ok_x(xty(ts@[i as int]), enums@));
                 assert forall|tv: TyEnv, lt: Seq<ETy>| tv.enums == enums@ implies #[trigger] typed(

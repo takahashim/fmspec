@@ -5,10 +5,10 @@ use crate::encoding::XType;
 use crate::encoding::{keys, keys_or_zero, sty, to_xty, wf_stype, wf_xtype, xty, STy, XTy};
 use crate::expr_build::{all_of, and, bin, cb, ci, eq, implies, or};
 #[cfg(verus_keep_ghost)]
-use crate::expr_build::{all_pure, bool_lit, pure_below, Join};
+use crate::expr_build::{all_pure, bool_lit, mark_s, pure_below, setop_s, Join};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::{lemma_all_typed_iff, type_of};
+use crate::infer::{ir_type_of, lemma_all_typed_iff};
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, small};
 #[cfg(verus_keep_ghost)]
@@ -29,7 +29,7 @@ use crate::preserve::{frag, lemma_extends_trans, lemma_frag_seq, lemma_tree_pure
 #[cfg(verus_keep_ghost)]
 use crate::preserve_set::{lemma_insert, lemma_remove, lemma_set_contains, lemma_setbin};
 #[cfg(verus_keep_ghost)]
-use crate::preserve_set::{lemma_setlit_base, lemma_setlit_step, mark_s, setlit_ok, setop_s};
+use crate::preserve_set::{lemma_setlit_base, lemma_setlit_step, setlit_ok};
 use crate::quant::pick_slot;
 #[cfg(verus_keep_ghost)]
 use crate::slots::lemma_extends_refl;
@@ -152,7 +152,7 @@ pub(crate) fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                     c == sctx(*cx),
                     bt == bound_tys(sc0),
                     pre ==> keys(sty(*t), enums@) is Some && n == keys_or_zero(sty(*t), enums@),
-                    pre ==> forall|j: int| 0 <= j < es@.len() ==> type_of(#[trigger] es@[j], c, bt) == Some(to_xty(sty(*t)))
+                    pre ==> forall|j: int| 0 <= j < es@.len() ==> ir_type_of(#[trigger] es@[j], c, bt) == Some(to_xty(sty(*t)))
                         && lim_ok(es@[j], c, bt),
                     pre ==> all_pure(bits@, blk.depth_s()),
                     tp == (pre && tok(*cx, sc0, b0)),
@@ -169,7 +169,7 @@ pub(crate) fn low_set_lit(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &m
                 proof {
                     if pre {
                         lemma_sc_wf_mono(sc0, b0.depth_s(), b1.depth_s(), cx.enums@);
-                        assert(type_of(es@[i as int], c, bt) == Some(to_xty(sty(*t))) && lim_ok(es@[i as int], c, bt));
+                        assert(ir_type_of(es@[i as int], c, bt) == Some(to_xty(sty(*t))) && lim_ok(es@[i as int], c, bt));
                     }
                 }
                 let r = element_rank(&es[i], cx, sc, blk, t)?;

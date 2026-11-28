@@ -13,7 +13,7 @@ use crate::encoding::{SType, SVal};
 #[cfg(verus_keep_ghost)]
 use crate::eval::ErrKind;
 #[cfg(verus_keep_ghost)]
-use crate::infer::{type_of, SCtx};
+use crate::infer::{ir_type_of, SCtx};
 #[cfg(verus_keep_ghost)]
 use crate::limits::lemma_width_sum_prefix;
 #[cfg(verus_keep_ghost)]
@@ -371,7 +371,7 @@ pub open spec fn s_safe(sm: SModel, cv: Seq<SVal>, c: Conditions) -> bool {
 
 /// 局所変数のない文脈で、式が型 `x` を持ち、大きさの条件を満たす。
 pub open spec fn styped(e: TExpr, c: SCtx, x: XTy) -> bool {
-    type_of(e, c, Seq::empty()) == Some(x) && lim_ok(e, c, Seq::empty())
+    ir_type_of(e, c, Seq::empty()) == Some(x) && lim_ok(e, c, Seq::empty())
 }
 
 /// 型の列の位置の終わりは、幅の和以下である。

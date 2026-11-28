@@ -14,7 +14,7 @@ use crate::expr_build::{all_pure, bool_lit, lits, pure_below};
 use crate::expr_build::{bin, cb, defaults, is_bool_lit};
 use crate::expr_copy::copy_expr;
 #[cfg(verus_keep_ghost)]
-use crate::infer::type_of;
+use crate::infer::ir_type_of;
 #[cfg(verus_keep_ghost)]
 use crate::limits::{lemma_lim_small, lim_s, small};
 #[cfg(verus_keep_ghost)]
@@ -811,7 +811,7 @@ pub(crate) fn low_quant(e: &TExpr, cx: &LowerCtx, sc: &mut Vec<Bound>, blk: &mut
                 }
             }
             assert(lim_ok(*e, c, bt));
-            assert(type_of(**body, c, bt.push(to_xty(sty(st)))) == Some(XTy::Bool));
+            assert(ir_type_of(**body, c, bt.push(to_xty(sty(st)))) == Some(XTy::Bool));
             assert(lim_ok(**body, c, bt.push(to_xty(sty(st)))));
         }
         if tp {
