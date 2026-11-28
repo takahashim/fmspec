@@ -17,7 +17,7 @@ use crate::canonical;
 use crate::json::{array, object, required, schema, string, Res};
 use crate::model::{checked_model, parse_value, LoadError, MapSource, Model};
 use crate::IR_VERSION;
-use fmspec_core::model::Expr;
+use fmspec_core::kernel::model::Expr;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 

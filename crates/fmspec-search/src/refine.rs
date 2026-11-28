@@ -8,14 +8,15 @@ use crate::bfs::{BfsOptions, Stats};
 use crate::check::Internal;
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::evidence::{Certificate, Claim, Limit, TraceStep};
-use fmspec_core::model::Expr;
-use fmspec_core::refine::{
-    decide_refinement, find_move_of, map_state_of, Mapped, Move, RefClaim, RefEvidence, RefVerdict, RefVerdictOutcome,
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::evidence::{Certificate, Claim, Limit, TraceStep};
+use fmspec_core::kernel::evidence::{RefClaim, RefEvidence};
+use fmspec_core::kernel::model::Expr;
+use fmspec_core::kernel::refine::{
+    decide_refinement, find_move_of, map_state_of, Mapped, Move, RefVerdict, RefVerdictOutcome,
 };
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Enumerated;
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Enumerated;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -74,7 +75,6 @@ fn search(
     f: &Vec<Expr>,
     opts: &BfsOptions,
 ) -> (Result<RefEvidence, Inconsistency>, Stats) {
-    let bm = b.raw();
     let mut stats = Stats::default();
     let mut nodes: Vec<Node> = Vec::new();
     // 状態から、節点の添字と、写した抽象モデルの状態へ。
@@ -122,7 +122,7 @@ fn search(
         let depth = nodes[cur].depth;
         let at_limit = opts.max_depth.is_some_and(|max| depth >= max);
         let x = seen[&state].1.clone();
-        for ac in 0..bm.actions.len() {
+        for ac in 0..b.n_actions() {
             if !cb.actions.get(ac).copied().unwrap_or(false) {
                 continue;
             }
@@ -137,7 +137,7 @@ fn search(
             };
             for t in transitions {
                 stats.transitions += 1;
-                let with_step = |nodes: &[Node], t: &fmspec_core::step::Transition| {
+                let with_step = |nodes: &[Node], t: &fmspec_core::kernel::step::Transition| {
                     let (start, mut steps) = path(nodes, cur);
                     steps.push(TraceStep {
                         action: ac,
@@ -261,7 +261,7 @@ mod tests {
     use crate::bfs::BfsOptions;
     use crate::check::Internal;
     use crate::inconsistency::tests::counter;
-    use fmspec_core::refine::RefVerdictKind;
+    use fmspec_core::kernel::refine::RefVerdictKind;
     use fmspec_ir::default_conditions;
 
     #[test]

@@ -6,13 +6,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use fmspec_core::checked::{validate, CheckedModel};
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Claim, Evidence, Limit, TraceStep};
-use fmspec_core::gate::{decide, VerdictKind};
-use fmspec_core::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Site;
+use fmspec_core::kernel::checked::{validate, CheckedModel};
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Claim, Evidence, Limit, TraceStep};
+use fmspec_core::kernel::gate::{decide, VerdictKind};
+use fmspec_core::kernel::model::{Action, BinOp, Contract, Expr, RawModel, Type, Update, Value};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Site;
 use fmspec_search::{
     check, explore, sample, shrink, simulate, test_paths, BfsOptions, Outcome, ShrinkOptions, ShrinkStop, SimOptions,
     Status,

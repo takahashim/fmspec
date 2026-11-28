@@ -1,14 +1,14 @@
 //! IR検証と判定ゲートの頑健性。不正なモデルや不正な証拠を直接渡しても、panicせずに
 //! `InvalidModel` または拒否を返す（仕様書 §17.1）。
 
-use fmspec_core::checked::{validate, CheckedModel};
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
-use fmspec_core::gate::{decide, decide_raw, CertCheck, VerdictKind, VerdictOutcome};
-use fmspec_core::model::{Action, BinOp, Contract, Expr, Output, RawModel, Type, Update, Value};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::{Enumerated, Site, StepR};
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::kernel::checked::{validate, CheckedModel};
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
+use fmspec_core::kernel::gate::{decide, decide_raw, CertCheck, VerdictKind, VerdictOutcome};
+use fmspec_core::kernel::model::{Action, BinOp, Contract, Expr, Output, RawModel, Type, Update, Value};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::{Enumerated, Site, StepR};
+use fmspec_core::kernel::typing::InvalidModel;
 
 fn int(x: i64) -> Expr {
     Expr::Const(Value::Int(x))

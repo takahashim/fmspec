@@ -1,9 +1,9 @@
-//! 中核の変換検証（`fmspec_core::ir_check`）に渡す、JSONの木と名前の表。
+//! 中核の変換検証（`fmspec_core::ir::ir_check`）に渡す、JSONの木と名前の表。
 //!
 //! `serde_json::Value` を中核の [`Json`] に機械的に写す。ここは信頼基盤に含まれるので、
 //! 名前の解決や意味の判断を含めない。
 
-use fmspec_core::ir::{IrNames, Json, Member};
+use fmspec_core::ir::ir_json::{IrNames, Json, Member};
 use serde_json::Value;
 
 fn chars(s: &str) -> Vec<char> {
@@ -67,9 +67,9 @@ pub(crate) fn ir_names(p: &NameParts) -> IrNames {
 mod tests {
     use super::to_json;
     use crate::model::build;
-    use fmspec_core::ir_check::check_ir;
-    use fmspec_core::model::{BinOp, Value as CV};
-    use fmspec_core::source::TExpr;
+    use fmspec_core::ir::ir_check::check_ir;
+    use fmspec_core::kernel::model::{BinOp, Value as CV};
+    use fmspec_core::value::source::TExpr;
     use serde_json::{json, Value};
 
     /// 状態変数を2つ持ち、局所変数、引数、内部選択、列挙型、Recordを使うモデル。

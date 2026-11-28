@@ -30,7 +30,7 @@ fmspecの判定のうち、何を機械証明で保証し、何をテストで�
 ## 証明済みの性質
 
 Verusで検証した定理と、仕様書§14.1の証明義務との対応を示す。
-ファイルは `crates/fmspec-core/src/` にある。
+ファイルは `crates/fmspec-core/src/` の層ごとのフォルダ（`kernel`、`value`、`slot`、`preserve`、`lower`、`model`、`ir`）にある。表ではファイル名だけを示す。
 
 | 証明義務 | 定理 | ファイル |
 |---|---|---|

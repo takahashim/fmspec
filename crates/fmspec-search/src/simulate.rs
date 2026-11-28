@@ -9,10 +9,10 @@
 use crate::claim::{contract_claim, deadlock_claim, invariant_claim, selected};
 use crate::inconsistency::{successors, Inconsistency};
 use crate::stop::stopped;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::evidence::{Claim, Evidence, TraceStep};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::{Enumerated, Transition};
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::evidence::{Claim, Evidence, TraceStep};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::{Enumerated, Transition};
 use std::time::Instant;
 
 /// 乱数のアルゴリズムの名前。結果に記録する。
@@ -83,7 +83,7 @@ fn run<F>(model: &CheckedModel, cond: &Conditions, opts: &SimOptions, successors
 where
     F: Fn(usize, &Vec<i64>) -> Result<Enumerated, Inconsistency>,
 {
-    let n_actions = model.raw().actions.len();
+    let n_actions = model.n_actions();
     let mut rng = SplitMix64::new(opts.seed);
     let mut stats = SimStats::default();
     let found = |evidence: Evidence, stats: SimStats| SimResult {

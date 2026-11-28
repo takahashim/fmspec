@@ -3,7 +3,7 @@
 //! 打ち切りの判断は検証の対象外である。打ち切った探索や検査は `Unavailable` を判定ゲートに渡すか、
 //! 判定ゲートの検査を `Inconclusive` で終えるので、判断がどう誤っても `Verified` や `Violated` の意味は変わらない。
 
-use fmspec_core::evidence::Limit;
+use fmspec_core::kernel::evidence::Limit;
 use std::time::Instant;
 
 /// 中断要求か時間の上限に達していれば、その理由。両方なら中断要求を優先する。
@@ -21,7 +21,7 @@ pub(crate) fn stopped(interrupt: Option<&dyn Fn() -> bool>, deadline: Option<Ins
 #[cfg(test)]
 mod tests {
     use super::stopped;
-    use fmspec_core::evidence::Limit;
+    use fmspec_core::kernel::evidence::Limit;
     use std::time::{Duration, Instant};
 
     #[test]

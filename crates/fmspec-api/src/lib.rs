@@ -13,9 +13,9 @@ mod refine;
 mod report;
 mod session;
 
-use fmspec_core::evidence::Evidence;
-use fmspec_core::gate::decide;
-use fmspec_core::gate::VerdictKind;
+use fmspec_core::kernel::evidence::Evidence;
+use fmspec_core::kernel::gate::decide;
+use fmspec_core::kernel::gate::VerdictKind;
 use fmspec_ir::{read_certificate, read_trace, LoadError};
 use fmspec_search::{
     check as search_check, check_sym, judge, sample, shrink as search_shrink, ShrinkOptions, SimOptions,

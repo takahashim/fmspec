@@ -2,10 +2,10 @@
 
 use crate::model::{invalid, LoadError, Names};
 use crate::resolve::Constant;
-use fmspec_core::action_lower::{Fault, LowerError};
-use fmspec_core::eval::ErrKind;
-use fmspec_core::model_lower::MAX_INITIAL_CANDIDATES;
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::typing::InvalidModel;
+use fmspec_core::model::lower_error::{Fault, LowerError};
+use fmspec_core::model::model_init::MAX_INITIAL_CANDIDATES;
 
 /// 中核の下ろしの失敗を、読み込みの誤りにする。
 /// 型の誤りと未定義の参照は名前解決で報告するので、残るのは値の評価の失敗と、型の不正である。

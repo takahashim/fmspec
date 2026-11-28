@@ -7,10 +7,10 @@ mod refine;
 
 pub(crate) use refine::{describe_refinement, refine_report};
 
-use fmspec_core::evidence::{Claim, Evidence, Limit, RefReject, Reject};
-use fmspec_core::gate::{Verdict, VerdictKind};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::kernel::evidence::{Claim, Evidence, Limit, RefReject, Reject};
+use fmspec_core::kernel::gate::{Verdict, VerdictKind};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::typing::InvalidModel;
 use fmspec_ir::{
     certificate_to_json, claim_to_json, conditions_to_json, state_to_json, trace_to_json, Model, Source, Trace,
     TraceError, ENGINE_VERSION, IR_VERSION,
@@ -432,7 +432,7 @@ mod tests {
 
     use super::{check_report, inconsistency_report, limit_name, simulation_report, CheckOutputs};
     use crate::human::human;
-    use fmspec_core::evidence::{Certificate, Evidence, Limit};
+    use fmspec_core::kernel::evidence::{Certificate, Evidence, Limit};
     use fmspec_ir::{default_conditions, load, Model, ENGINE_VERSION};
     use fmspec_search::{
         check_evidence, Inconsistency, Internal, Outcome, Sampled, SimOptions, SimStats, Stats, Status,

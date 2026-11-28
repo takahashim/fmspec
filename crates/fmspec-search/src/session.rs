@@ -14,17 +14,17 @@
 //! その内部選択を**注入する選択**と呼び、公開引数と同じく入力の一部として扱う。
 //! 入力を選ぶときも、候補を更新するときも、注入した値と一致する遷移だけを考える（仕様書 §12.2）。
 //!
-//! 候補集合の更新と、全候補で有効な入力の計算は、検証済みの中核（`fmspec_core::mbt`）が行う。
+//! 候補集合の更新と、全候補で有効な入力の計算は、検証済みの中核（`fmspec_core::kernel::mbt`）が行う。
 //! ここでは、入力の無作為な選択と、不適合の診断（モデルが許す結果の列挙）だけを行う。
 
 use crate::graph;
 use crate::simulate::SplitMix64;
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::eval::ErrKind;
-use fmspec_core::mbt::{self, Begun, ObserveOutcome};
-pub use fmspec_core::mbt::{Seen, SeenOutput};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::{Enumerated, Site};
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::mbt::{self, Begun, ObserveOutcome};
+pub use fmspec_core::kernel::mbt::{Seen, SeenOutput};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::{Enumerated, Site};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 

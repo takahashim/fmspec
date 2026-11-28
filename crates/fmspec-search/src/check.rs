@@ -4,11 +4,11 @@ use crate::bfs::{bfs, BfsOptions, SearchResult, Stats};
 use crate::gate::{judge, GateOptions};
 use crate::inconsistency::Inconsistency;
 use crate::simulate::{simulate, SimOptions, SimStats};
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::evidence::{Evidence, Limit, Reject};
-use fmspec_core::gate::{Verdict, VerdictOutcome};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::evidence::{Evidence, Limit, Reject};
+use fmspec_core::kernel::gate::{Verdict, VerdictOutcome};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::typing::InvalidModel;
 use std::time::{Duration, Instant};
 
 /// 検査結果の分類。
@@ -169,8 +169,8 @@ mod tests {
     use crate::gate::GateOptions;
     use crate::inconsistency::tests::counter;
     use crate::inconsistency::Inconsistency;
-    use fmspec_core::evidence::{Certificate, Evidence};
-    use fmspec_core::gate::VerdictKind;
+    use fmspec_core::kernel::evidence::{Certificate, Evidence};
+    use fmspec_core::kernel::gate::VerdictKind;
     use fmspec_ir::default_conditions;
 
     #[test]

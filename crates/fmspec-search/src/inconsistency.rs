@@ -5,8 +5,8 @@
 //! 探索器は不整合を見つけたら探索をやめ、証拠の代わりに不整合を返す。
 //! 検査の経路（`check`、`sample`）は、それを中断や資源上限と区別して `Status::InternalError` にする。
 
-use fmspec_core::checked::CheckedModel;
-use fmspec_core::step::Enumerated;
+use fmspec_core::kernel::checked::CheckedModel;
+use fmspec_core::kernel::step::Enumerated;
 
 /// 探索器の内部の不整合。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub(crate) mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::{successors, Inconsistency};
-    use fmspec_core::step::Enumerated;
+    use fmspec_core::kernel::step::Enumerated;
     use fmspec_ir::{load, Model};
     use serde_json::json;
 

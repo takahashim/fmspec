@@ -7,10 +7,10 @@ use crate::value::{
     value_from_json, value_to_json,
 };
 use crate::{CERTIFICATE_VERSION, ENGINE_VERSION, TRACE_VERSION};
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, TraceStep};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Site;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim, TraceStep};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Site;
 use serde_json::{json, Map, Value};
 use std::fmt;
 
@@ -234,7 +234,7 @@ pub struct Trace {
 }
 
 /// 評価エラーのJSON。範囲外更新には、値と、対象の型を付ける。
-pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::model::Type>) -> Value {
+pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::kernel::model::Type>) -> Value {
     match kind {
         ErrKind::Overflow => json!({"kind": "overflow"}),
         ErrKind::TypeMismatch => json!({"kind": "type_mismatch"}),
@@ -253,12 +253,12 @@ pub fn error_to_json(model: &Model, kind: &ErrKind, ty: Option<&fmspec_core::mod
 
 /// `Expr::Fail` の番号と、その名前。番号はIRの下ろし方が決める。
 const FAILURES: [(i64, &str); 6] = [
-    (fmspec_core::source::FAIL_NONE, "none"),
-    (fmspec_core::source::FAIL_MISSING_KEY, "missing_key"),
-    (fmspec_core::source::FAIL_INDEX, "index_out_of_range"),
-    (fmspec_core::source::FAIL_FULL, "full"),
-    (fmspec_core::source::FAIL_EMPTY, "empty"),
-    (fmspec_core::source::FAIL_NOT_IN_DOMAIN, "not_in_domain"),
+    (fmspec_core::value::source::FAIL_NONE, "none"),
+    (fmspec_core::value::source::FAIL_MISSING_KEY, "missing_key"),
+    (fmspec_core::value::source::FAIL_INDEX, "index_out_of_range"),
+    (fmspec_core::value::source::FAIL_FULL, "full"),
+    (fmspec_core::value::source::FAIL_EMPTY, "empty"),
+    (fmspec_core::value::source::FAIL_NOT_IN_DOMAIN, "not_in_domain"),
 ];
 
 fn failure_name(code: i64) -> Option<&'static str> {

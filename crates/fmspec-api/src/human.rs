@@ -352,8 +352,10 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::error_text;
-    use fmspec_core::eval::ErrKind;
-    use fmspec_core::source::{FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_MISSING_KEY, FAIL_NONE, FAIL_NOT_IN_DOMAIN};
+    use fmspec_core::kernel::eval::ErrKind;
+    use fmspec_core::value::source::{
+        FAIL_EMPTY, FAIL_FULL, FAIL_INDEX, FAIL_MISSING_KEY, FAIL_NONE, FAIL_NOT_IN_DOMAIN,
+    };
     use fmspec_ir::{error_to_json, load};
     use serde_json::json;
 

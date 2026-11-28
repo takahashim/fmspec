@@ -8,7 +8,7 @@
 
 use crate::inject::{inject_slots, input_json, parse_inject, parse_input};
 use crate::options::{conditions, count, indices, options_only, size};
-use fmspec_core::evidence::Claim;
+use fmspec_core::kernel::evidence::Claim;
 use fmspec_ir::{
     claim_to_json, output_to_json, output_value_from_json, state_to_json, value_from_json, value_to_json, Model,
 };

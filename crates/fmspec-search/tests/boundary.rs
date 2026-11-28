@@ -5,12 +5,12 @@
 mod common;
 
 use common::*;
-use fmspec_core::eval::ErrKind;
-use fmspec_core::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
-use fmspec_core::gate::{decide, decide_raw, VerdictKind};
-use fmspec_core::semantics::Conditions;
-use fmspec_core::step::Site;
-use fmspec_core::typing::InvalidModel;
+use fmspec_core::kernel::eval::ErrKind;
+use fmspec_core::kernel::evidence::{Certificate, Claim, Evidence, Limit, Reject, TraceStep};
+use fmspec_core::kernel::gate::{decide, decide_raw, VerdictKind};
+use fmspec_core::kernel::semantics::Conditions;
+use fmspec_core::kernel::step::Site;
+use fmspec_core::kernel::typing::InvalidModel;
 use fmspec_ir::{parse, Model};
 use fmspec_search::{check_evidence, Internal, Outcome, Stats, Status};
 use serde_json::{json, Value};
